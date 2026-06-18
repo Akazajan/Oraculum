@@ -7,9 +7,9 @@ import Newsletter from "@/components/ui/Newsletter";
 import Footer from "@/components/ui/Footer";
 
 export const metadata = {
-  title: "ManageHub - Smart Hub & Workspace Management",
+  title: "Oraculum - Smart Hub & Workspace Management",
   description:
-    "Simplify how you manage workspaces, teams, and resources. ManageHub brings everything together in one place.",
+    "Simplify how you manage workspaces, teams, and resources. Oraculum brings everything together in one place.",
 };
 
 export default function Home() {

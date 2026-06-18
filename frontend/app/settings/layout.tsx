@@ -3,7 +3,7 @@ import { buildMetadata } from "@/lib/seo";
 export const metadata = buildMetadata({
   title: "Settings",
   description:
-    "Manage your ManageHub account settings, security preferences, notifications, and appearance.",
+    "Manage your Oraculum account settings, security preferences, notifications, and appearance.",
   noindex: true,
 });
 

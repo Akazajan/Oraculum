@@ -1,4 +1,4 @@
-//! Upgrade-related error types for the ManageHub contract.
+//! Upgrade-related error types for the Oraculum contract.
 //!
 //! A dedicated `UpgradeError` enum is used because the main `Error` enum is
 //! already at the 50-variant XDR limit imposed by `#[contracterror]`.

@@ -1,9 +1,9 @@
 #![no_std]
 
-//! Common types for ManageHub contracts.
+//! Common types for Oraculum contracts.
 //!
 //! This crate provides shared enums and structs to ensure consistency
-//! across all ManageHub smart contracts.
+//! across all Oraculum smart contracts.
 
 mod types;
 

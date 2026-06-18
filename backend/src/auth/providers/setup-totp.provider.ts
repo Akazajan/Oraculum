@@ -25,7 +25,7 @@ export class SetupTotpProvider {
     await this.usersRepository.save(user);
 
     const otpauth = generateURI({
-      issuer: 'ManageHub',
+      issuer: 'Oraculum',
       label: user.email,
       secret,
     });

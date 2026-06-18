@@ -1,5 +1,5 @@
 #![no_std]
-//! # ManageHub Contract
+//! # Oraculum Contract
 //!
 //! ## Multisig Integration for Critical Operations
 //!

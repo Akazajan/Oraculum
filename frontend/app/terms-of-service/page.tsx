@@ -92,7 +92,7 @@ const TermsOfServicePage = () => {
                   Terms of Service
                 </h1>
                 <p className="text-sm text-gray-600 mt-1">
-                  ManageHub Platform Agreement
+                  Oraculum Platform Agreement
                 </p>
               </div>
             </div>
@@ -178,7 +178,7 @@ const TermsOfServicePage = () => {
                       </p>
                       <p className="text-sm text-gray-700 mt-1">
                         Please read these Terms of Service carefully before
-                        using ManageHub. By accessing or using our services, you
+                        using Oraculum. By accessing or using our services, you
                         agree to be bound by these terms.
                       </p>
                     </div>
@@ -186,8 +186,8 @@ const TermsOfServicePage = () => {
                 </div>
 
                 <p className="text-gray-700 leading-relaxed">
-                  Welcome to ManageHub. These Terms of Service govern your use
-                  of our workspace management platform, including all features,
+                  Welcome to Oraculum. These Terms of Service govern your use of
+                  our workspace management platform, including all features,
                   services, and technologies we provide. By creating an account
                   or using our services, you acknowledge that you have read,
                   understood, and agree to be bound by these terms.
@@ -202,9 +202,9 @@ const TermsOfServicePage = () => {
                 </h2>
                 <div className="prose prose-gray max-w-none space-y-4 text-gray-700">
                   <p>
-                    By accessing or using ManageHub, you confirm that you are at
+                    By accessing or using Oraculum, you confirm that you are at
                     least 18 years old and have the legal capacity to enter into
-                    these Terms of Service. If you are using ManageHub on behalf
+                    these Terms of Service. If you are using Oraculum on behalf
                     of an organization, you represent and warrant that you have
                     the authority to bind that organization to these terms.
                   </p>
@@ -225,7 +225,7 @@ const TermsOfServicePage = () => {
                 </h2>
                 <div className="prose prose-gray max-w-none space-y-4 text-gray-700">
                   <p>
-                    ManageHub provides a comprehensive workspace management
+                    Oraculum provides a comprehensive workspace management
                     platform that includes but is not limited to:
                   </p>
                   <ul className="list-disc pl-6 space-y-2">
@@ -258,7 +258,7 @@ const TermsOfServicePage = () => {
                 </h2>
                 <div className="prose prose-gray max-w-none space-y-4 text-gray-700">
                   <p>
-                    To access certain features of ManageHub, you must create an
+                    To access certain features of Oraculum, you must create an
                     account. When creating an account, you agree to:
                   </p>
                   <ul className="list-disc pl-6 space-y-2">
@@ -281,14 +281,14 @@ const TermsOfServicePage = () => {
                   </ul>
                   <p>
                     You are solely responsible for maintaining the
-                    confidentiality of your account credentials. ManageHub will
+                    confidentiality of your account credentials. Oraculum will
                     not be liable for any loss or damage arising from your
                     failure to comply with these security obligations.
                   </p>
                   <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 mt-4">
                     <p className="text-sm text-amber-900 font-medium">
                       Security Notice: Never share your password with anyone.
-                      ManageHub staff will never ask for your password.
+                      Oraculum staff will never ask for your password.
                     </p>
                   </div>
                 </div>
@@ -302,7 +302,7 @@ const TermsOfServicePage = () => {
                 </h2>
                 <div className="prose prose-gray max-w-none space-y-4 text-gray-700">
                   <p>
-                    ManageHub offers various subscription plans and payment
+                    Oraculum offers various subscription plans and payment
                     models. By subscribing to our services, you agree to:
                   </p>
                   <ul className="list-disc pl-6 space-y-2">
@@ -348,7 +348,7 @@ const TermsOfServicePage = () => {
                 </h2>
                 <div className="prose prose-gray max-w-none space-y-4 text-gray-700">
                   <p>
-                    You agree to use ManageHub only for lawful purposes and in
+                    You agree to use Oraculum only for lawful purposes and in
                     accordance with these Terms. You agree not to:
                   </p>
                   <ul className="list-disc pl-6 space-y-2">
@@ -357,8 +357,8 @@ const TermsOfServicePage = () => {
                       law or regulation
                     </li>
                     <li>
-                      Infringe upon the intellectual property rights of
-                      ManageHub or third parties
+                      Infringe upon the intellectual property rights of Oraculum
+                      or third parties
                     </li>
                     <li>
                       Transmit any malicious code, viruses, or harmful software
@@ -467,7 +467,7 @@ const TermsOfServicePage = () => {
                 </h2>
                 <div className="prose prose-gray max-w-none space-y-4 text-gray-700">
                   <p>
-                    <strong>Disclaimer:</strong> ManageHub is provided "as is"
+                    <strong>Disclaimer:</strong> Oraculum is provided "as is"
                     and "as available" without warranties of any kind, either
                     express or implied, including but not limited to warranties
                     of merchantability, fitness for a particular purpose, or
@@ -475,7 +475,7 @@ const TermsOfServicePage = () => {
                   </p>
                   <p>
                     <strong>Limitation:</strong> To the maximum extent permitted
-                    by law, ManageHub and its affiliates, officers, directors,
+                    by law, Oraculum and its affiliates, officers, directors,
                     employees, and agents shall not be liable for any indirect,
                     incidental, special, consequential, or punitive damages,
                     including but not limited to:
@@ -488,7 +488,7 @@ const TermsOfServicePage = () => {
                   </ul>
                   <p>
                     Our total liability to you for any claims arising from your
-                    use of ManageHub shall not exceed the amount you paid us in
+                    use of Oraculum shall not exceed the amount you paid us in
                     the 12 months preceding the claim.
                   </p>
                   <div className="bg-gray-50 border border-gray-200 rounded-lg p-4 mt-4">
@@ -523,7 +523,7 @@ const TermsOfServicePage = () => {
                     </li>
                   </ul>
                   <p>
-                    Your continued use of ManageHub after changes become
+                    Your continued use of Oraculum after changes become
                     effective constitutes acceptance of the modified terms. If
                     you do not agree with the changes, you must stop using our
                     services and terminate your account.
@@ -555,10 +555,10 @@ const TermsOfServicePage = () => {
                             Email
                           </p>
                           <a
-                            href="mailto:legal@managehub.com"
+                            href="mailto:legal@Oraculum.com"
                             className="text-sm text-gray-700 hover:text-gray-900"
                           >
-                            legal@managehub.com
+                            legal@Oraculum.com
                           </a>
                         </div>
                       </div>
@@ -569,7 +569,7 @@ const TermsOfServicePage = () => {
                             Address
                           </p>
                           <p className="text-sm text-gray-600">
-                            ManageHub Inc., Abuja, FCT, Nigeria
+                            Oraculum Inc., Abuja, FCT, Nigeria
                           </p>
                         </div>
                       </div>
@@ -592,7 +592,7 @@ const TermsOfServicePage = () => {
                   </p>
                   <p>
                     <strong>Dispute Resolution:</strong> Any disputes arising
-                    from these Terms or your use of ManageHub shall be resolved
+                    from these Terms or your use of Oraculum shall be resolved
                     through binding arbitration in accordance with Nigerian law,
                     except where prohibited by law.
                   </p>
@@ -604,7 +604,7 @@ const TermsOfServicePage = () => {
                   <p>
                     <strong>Entire Agreement:</strong> These Terms, along with
                     our Privacy Policy, constitute the entire agreement between
-                    you and ManageHub regarding the use of our services.
+                    you and Oraculum regarding the use of our services.
                   </p>
                 </div>
               </div>
@@ -619,7 +619,7 @@ const TermsOfServicePage = () => {
                     Agreement Acknowledgment
                   </h3>
                   <p className="text-sm text-gray-700 mb-4">
-                    By using ManageHub, you acknowledge that you have read,
+                    By using Oraculum, you acknowledge that you have read,
                     understood, and agree to be bound by these Terms of Service
                     and our Privacy Policy.
                   </p>
@@ -648,7 +648,7 @@ const TermsOfServicePage = () => {
       <div className="bg-white border-t border-gray-200 mt-12">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
           <div className="text-center text-sm text-gray-500">
-            <p>© 2026 ManageHub. All rights reserved.</p>
+            <p>© 2026 Oraculum. All rights reserved.</p>
             <div className="mt-3 space-x-4">
               <Link href="/privacy-policy" className="hover:text-gray-700">
                 Privacy Policy

@@ -25,7 +25,7 @@ const PrivacyPolicyPage = () => {
     {
       question: "Do you sell my data to third parties?",
       answer:
-        "No, never. We don't sell your personal information to anyone. Your data is yours, and we only use it to make ManageHub work better for you.",
+        "No, never. We don't sell your personal information to anyone. Your data is yours, and we only use it to make Oraculum work better for you.",
     },
     {
       question: "Can I delete my account and data?",
@@ -111,7 +111,7 @@ const PrivacyPolicyPage = () => {
                   The Short Version
                 </h2>
                 <p className="text-gray-700 leading-relaxed mb-4">
-                  We collect information to run ManageHub and make it useful for
+                  We collect information to run Oraculum and make it useful for
                   you. This includes your name, email, and workspace activity.
                 </p>
                 <p className="text-gray-700 leading-relaxed">
@@ -157,7 +157,7 @@ const PrivacyPolicyPage = () => {
 
                 <div>
                   <h3 className="text-xl font-semibold text-gray-900 mb-3">
-                    When you use ManageHub, we collect:
+                    When you use Oraculum, we collect:
                   </h3>
                   <div className="bg-[#faf9f7] rounded-lg p-6 space-y-2">
                     <p className="text-gray-700">
@@ -174,7 +174,6 @@ const PrivacyPolicyPage = () => {
                     </p>
                   </div>
                 </div>
-
               </div>
             </section>
 
@@ -242,8 +241,7 @@ const PrivacyPolicyPage = () => {
 
               <p className="text-gray-700 leading-relaxed mb-6">
                 We keep your data private, but sometimes we need to share
-                limited information with trusted partners to make ManageHub
-                work:
+                limited information with trusted partners to make Oraculum work:
               </p>
 
               <div className="space-y-4">
@@ -485,11 +483,11 @@ const PrivacyPolicyPage = () => {
             your data, we're here to help. Real humans, real answers.
           </p>
           <a
-            href="mailto:privacy@managehub.com"
+            href="mailto:privacy@Oraculum.com"
             className="inline-flex items-center gap-2 bg-white text-gray-700 px-6 py-3 rounded-lg font-semibold hover:bg-gray-100 transition-colors"
           >
             <Mail className="h-5 w-5" />
-            privacy@managehub.com
+            privacy@Oraculum.com
           </a>
         </div>
       </div>
@@ -498,7 +496,7 @@ const PrivacyPolicyPage = () => {
       <div className="bg-white border-t border-gray-200">
         <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
           <div className="text-center text-sm text-gray-500">
-            <p>© 2026 ManageHub. All rights reserved.</p>
+            <p>© 2026 Oraculum. All rights reserved.</p>
             <div className="mt-3 space-x-4">
               <a href="/privacy-policy" className="hover:text-gray-700">
                 Privacy Policy

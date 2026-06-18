@@ -123,7 +123,7 @@ export function RegisterPage({ onRegister, isLoading }: RegisterPageProps) {
             Create Your Account
           </h1>
           <p className="text-gray-600 text-sm sm:text-base">
-            Join ManageHub and transform your workspace experience
+            Join Oraculum and transform your workspace experience
           </p>
         </div>
 
@@ -230,7 +230,7 @@ export function RegisterPage({ onRegister, isLoading }: RegisterPageProps) {
       {/* Footer */}
       <footer className="mt-8 sm:mt-16 text-center px-4">
         <p className="text-xs sm:text-sm text-gray-500 mb-3 sm:mb-4">
-          © 2026 ManageHub. All rights reserved.
+          © 2026 Oraculum. All rights reserved.
         </p>
         <div className="flex flex-col space-y-2 sm:flex-row sm:justify-center sm:space-y-0 sm:space-x-6">
           <button className="text-xs sm:text-sm text-gray-500 hover:text-gray-700 focus:outline-none focus:underline transition-colors">

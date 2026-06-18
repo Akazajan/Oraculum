@@ -6,13 +6,7 @@ import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useLogin } from "@/hooks/use-login";
-import {
-  Eye,
-  EyeOff,
-  Mail,
-  Lock,
-  Building2,
-} from "lucide-react";
+import { Eye, EyeOff, Mail, Lock, Building2 } from "lucide-react";
 
 const loginSchema = z.object({
   email: z.email("Enter a valid email address"),
@@ -31,10 +25,7 @@ interface LoginFormProps {
   isLoading: boolean;
 }
 
-export default function LoginForm({
-  onEmailLogin,
-  isLoading,
-}: LoginFormProps) {
+export default function LoginForm({ onEmailLogin, isLoading }: LoginFormProps) {
   const { login, loading } = useLogin();
   const [showPassword, setShowPassword] = useState(false);
 
@@ -189,7 +180,7 @@ export default function LoginForm({
 
         {/* Footer */}
         <div className="text-center text-xs text-gray-500">
-          <p>© 2026 ManageHub. All rights reserved.</p>
+          <p>© 2026 Oraculum. All rights reserved.</p>
           <div className="mt-2 space-x-4">
             <a href="#" className="hover:text-gray-700">
               Privacy Policy

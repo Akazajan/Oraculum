@@ -1,6 +1,6 @@
 # Membership Token Contract
 
-A feature rich ERC20 compatible membership token smart contract for the ManageHub ecosystem built on Soroban (Stellar) with integrated Role Based Access Control (RBAC).
+A feature rich ERC20 compatible membership token smart contract for the Oraculum ecosystem built on Soroban (Stellar) with integrated Role Based Access Control (RBAC).
 
 ## Table of Contents
 
@@ -18,7 +18,7 @@ A feature rich ERC20 compatible membership token smart contract for the ManageHu
 
 ## Overview
 
-The Membership Token contract provides a comprehensive token system for the ManageHub ecosystem with built-in access control integration. It follows ERC20 standards while leveraging Soroban's cross-contract capabilities to enforce role-based permissions for critical operations.
+The Membership Token contract provides a comprehensive token system for the Oraculum ecosystem with built-in access control integration. It follows ERC20 standards while leveraging Soroban's cross-contract capabilities to enforce role-based permissions for critical operations.
 
 ### Key Benefits
 
@@ -51,7 +51,7 @@ The Membership Token contract provides a comprehensive token system for the Mana
 
 ```rust
 pub struct TokenInfo {
-    pub name: String,        // Token name (e.g., "ManageHub Membership Token")
+    pub name: String,        // Token name (e.g., "Oraculum Membership Token")
     pub symbol: String,      // Token symbol (e.g., "MHT")
     pub decimals: u32,       // Decimal places (e.g., 18)
     pub total_supply: i128,  // Total tokens in circulation
@@ -147,7 +147,7 @@ Initializes the token contract with metadata and links to Access Control contrac
 
 **Parameters:**
 
-- `name`: Token name (e.g., "ManageHub Membership Token")
+- `name`: Token name (e.g., "Oraculum Membership Token")
 - `symbol`: Token symbol (e.g., "MHT")
 - `decimals`: Number of decimal places
 - `access_control_contract`: Address of the Access Control contract
@@ -306,7 +306,7 @@ let admin = Address::generate(&env);
 access_client.initialize(&admin);
 
 // 3. Initialize Token with Access Control link
-let token_name = String::from_str(&env, "ManageHub Membership Token");
+let token_name = String::from_str(&env, "Oraculum Membership Token");
 let token_symbol = String::from_str(&env, "MHT");
 token_client.initialize(&token_name, &token_symbol, &18, &access_control_id);
 ```
@@ -476,7 +476,7 @@ let token_id = deploy_contract(env, MembershipToken)?;
 let token_client = MembershipTokenClient::new(env, &token_id);
 
 token_client.initialize(
-    &String::from_str(env, "ManageHub Membership Token"),
+    &String::from_str(env, "Oraculum Membership Token"),
     &String::from_str(env, "MHT"),
     &18,
     &access_control_id
@@ -545,9 +545,9 @@ env.events().publish((symbol_short!("approve"), owner, spender, amount), ());
 
 ## Integration with Other Contracts
 
-### ManageHub Ecosystem Integration
+### Oraculum Ecosystem Integration
 
-The Membership Token contract is designed to integrate seamlessly with other ManageHub contracts:
+The Membership Token contract is designed to integrate seamlessly with other Oraculum contracts:
 
 #### 1. **Access Control Integration**
 
@@ -611,7 +611,7 @@ cargo clippy
 
 For questions, issues, or contributions:
 
-- **Repository**: [ManageHub Contracts](repository-url)
+- **Repository**: [Oraculum Contracts](repository-url)
 - **Documentation**: [Soroban Docs](https://soroban.stellar.org/)
 - **Community**: [Stellar Discord](https://discord.gg/stellar)
 

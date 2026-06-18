@@ -16,8 +16,8 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: {
-    default: "ManageHub - Smart Hub & Workspace Management",
-    template: "%s | ManageHub",
+    default: "Oraculum - Smart Hub & Workspace Management",
+    template: "%s | Oraculum",
   },
   description:
     "Smart Hub & Workspace Management System for modern teams. Streamline operations, manage resources, and boost productivity with our comprehensive management platform.",
@@ -30,16 +30,16 @@ export const metadata: Metadata = {
     "collaboration tools",
     "project management",
   ],
-  authors: [{ name: "ManageHub Team" }],
-  creator: "ManageHub",
-  publisher: "ManageHub",
+  authors: [{ name: "Oraculum Team" }],
+  creator: "Oraculum",
+  publisher: "Oraculum",
   formatDetection: {
     email: false,
     address: false,
     telephone: false,
   },
   metadataBase: new URL(
-    process.env.NEXT_PUBLIC_APP_URL || "https://managehub.app",
+    process.env.NEXT_PUBLIC_APP_URL || "https://Oraculum.app",
   ),
   alternates: {
     canonical: "/",
@@ -48,27 +48,27 @@ export const metadata: Metadata = {
     type: "website",
     locale: "en_US",
     url: "/",
-    title: "ManageHub - Smart Hub & Workspace Management",
+    title: "Oraculum - Smart Hub & Workspace Management",
     description:
       "Smart Hub & Workspace Management System for modern teams. Streamline operations, manage resources, and boost productivity with our comprehensive management platform.",
-    siteName: "ManageHub",
+    siteName: "Oraculum",
     images: [
       {
         url: "/og-image.png",
         width: 1200,
         height: 630,
-        alt: "ManageHub - Smart Hub & Workspace Management",
+        alt: "Oraculum - Smart Hub & Workspace Management",
       },
     ],
   },
   twitter: {
     card: "summary_large_image",
-    title: "ManageHub - Smart Hub & Workspace Management",
+    title: "Oraculum - Smart Hub & Workspace Management",
     description:
       "Smart Hub & Workspace Management System for modern teams. Streamline operations, manage resources, and boost productivity.",
     images: ["/og-image.png"],
-    creator: "@managehubs",
-    site: "@managehubs",
+    creator: "@Oraculums",
+    site: "@Oraculums",
   },
   robots: {
     index: true,

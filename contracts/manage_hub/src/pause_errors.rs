@@ -1,4 +1,4 @@
-//! Pause-related error types for the ManageHub contract.
+//! Pause-related error types for the Oraculum contract.
 //!
 //! A dedicated `PauseError` enum (separate from the main `Error` enum) is used
 //! because `#[contracterror]` enforces a hard 50-variant XDR limit and the main

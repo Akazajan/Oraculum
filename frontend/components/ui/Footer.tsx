@@ -15,7 +15,7 @@ const Footer = () => {
                 <Building2 className="h-5 w-5 text-white" />
               </span>
               <span className="text-lg font-semibold text-white tracking-tight">
-                ManageHub
+                Oraculum
               </span>
             </div>
             <p className="text-sm text-gray-500 leading-relaxed">
@@ -92,7 +92,7 @@ const Footer = () => {
 
         <div className="pt-8 border-t border-gray-800">
           <p className="text-gray-600 text-sm">
-            &copy; {currentYear} ManageHub. All rights reserved.
+            &copy; {currentYear} Oraculum. All rights reserved.
           </p>
         </div>
       </div>

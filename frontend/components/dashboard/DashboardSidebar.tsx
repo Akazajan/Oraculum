@@ -63,7 +63,7 @@ export default function DashboardSidebar() {
             <Building2 className="w-4 h-4 text-white" />
           </span>
           <span className="font-semibold text-gray-900 tracking-tight">
-            ManageHub
+            Oraculum
           </span>
         </Link>
       </div>

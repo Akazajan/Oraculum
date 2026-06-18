@@ -30,7 +30,7 @@ export class PdfInvoiceProvider {
     doc
       .fontSize(22)
       .font('Helvetica-Bold')
-      .text('ManageHub', 50, 50)
+      .text('Oraculum', 50, 50)
       .fontSize(10)
       .font('Helvetica')
       .text('Coworking Space Management', 50, 76)
@@ -122,6 +122,6 @@ export class PdfInvoiceProvider {
       .fontSize(9)
       .font('Helvetica')
       .fillColor('#999999')
-      .text('Thank you for choosing ManageHub.', { align: 'center' });
+      .text('Thank you for choosing Oraculum.', { align: 'center' });
   }
 }

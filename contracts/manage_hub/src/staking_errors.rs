@@ -1,4 +1,4 @@
-//! Staking-related error types for the ManageHub contract.
+//! Staking-related error types for the Oraculum contract.
 //!
 //! A dedicated `StakingError` enum is used because the main `Error` enum is
 //! already at the 50-variant XDR limit imposed by `#[contracterror]`.

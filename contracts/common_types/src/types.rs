@@ -1,7 +1,7 @@
-//! Common types used across ManageHub contracts.
+//! Common types used across Oraculum contracts.
 //!
 //! This module provides shared enums and structs to ensure consistency
-//! across all ManageHub smart contracts, including subscription management,
+//! across all Oraculum smart contracts, including subscription management,
 //! attendance tracking, and user role definitions.
 
 use soroban_sdk::{contracttype, Address, Map, String, Vec};
@@ -101,7 +101,7 @@ pub struct MetadataUpdate {
 // Existing Types
 // ============================================================================
 
-/// Subscription plan types available in ManageHub.
+/// Subscription plan types available in Oraculum.
 ///
 /// Defines the different billing frequencies for subscriptions.
 ///
@@ -137,7 +137,7 @@ pub enum AttendanceAction {
     ClockOut,
 }
 
-/// User role types in the ManageHub system.
+/// User role types in the Oraculum system.
 ///
 /// Defines the different permission levels and user types
 /// within the platform.
@@ -163,7 +163,7 @@ pub enum UserRole {
 /// Membership status types.
 ///
 /// Tracks the current state of a user's membership.
-/// Includes all status variants used across ManageHub contracts.
+/// Includes all status variants used across Oraculum contracts.
 ///
 /// # Variants
 /// * `Active` - Membership is currently active

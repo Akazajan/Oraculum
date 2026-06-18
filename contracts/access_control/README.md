@@ -1,6 +1,6 @@
-# Access Control System for ManageHub
+# Access Control System for Oraculum
 
-A comprehensive Role-Based Access Control (RBAC) system for the ManageHub project, built on Soroban smart contracts.
+A comprehensive Role-Based Access Control (RBAC) system for the Oraculum project, built on Soroban smart contracts.
 
 ## Overview
 
@@ -43,7 +43,7 @@ This access control system provides secure user permission management through hi
 ```
 Admin (Level 2)
   ├── Can assign/remove roles for all users
-  ├── Can manage system configuration  
+  ├── Can manage system configuration
   ├── Can pause/unpause the system
   └── Can transfer admin privileges
 
@@ -107,15 +107,15 @@ impl MyContract {
     pub fn admin_function(env: Env, caller: Address) -> Result<(), Error> {
         // Require admin access
         AccessControl::require_access(&env, caller, UserRole::Admin)?;
-        
+
         // Your admin logic here
         Ok(())
     }
-    
+
     pub fn member_function(env: Env, caller: Address) -> Result<(), Error> {
         // Require member or higher access
         AccessControl::require_access(&env, caller, UserRole::Member)?;
-        
+
         // Your member logic here
         Ok(())
     }
@@ -134,6 +134,7 @@ The system includes comprehensive tests covering:
 - Edge cases and security scenarios
 
 Run tests with:
+
 ```bash
 cargo test -p access_control
 ```
@@ -143,6 +144,7 @@ cargo test -p access_control
 ### Dependencies
 
 Add to your `Cargo.toml`:
+
 ```toml
 [dependencies]
 access_control = { path = "../access-control" }
@@ -166,16 +168,16 @@ soroban-sdk = { workspace = true }
 
 ## API Reference
 
-| Function | Description | Access Level |
-|----------|-------------|--------------|
-| `initialize()` | Initialize the system | Public (once) |
-| `set_role()` | Assign role to user | Admin only |
-| `get_role()` | Get user's current role | Public |
-| `check_access()` | Check user access level | Public |
-| `require_access()` | Enforce access or error | Public |
-| `is_admin()` | Check admin privileges | Public |
-| `remove_role()` | Remove user's role | Admin only |
-| `pause()` / `unpause()` | Emergency controls | Admin only |
+| Function                | Description             | Access Level  |
+| ----------------------- | ----------------------- | ------------- |
+| `initialize()`          | Initialize the system   | Public (once) |
+| `set_role()`            | Assign role to user     | Admin only    |
+| `get_role()`            | Get user's current role | Public        |
+| `check_access()`        | Check user access level | Public        |
+| `require_access()`      | Enforce access or error | Public        |
+| `is_admin()`            | Check admin privileges  | Public        |
+| `remove_role()`         | Remove user's role      | Admin only    |
+| `pause()` / `unpause()` | Emergency controls      | Admin only    |
 
 ## Error Handling
 
@@ -192,11 +194,11 @@ match AccessControl::set_role(env, admin, user, role) {
 
 ## Acceptance Criteria Met
 
- **Roles assigned and checked** - Complete role management system
- **Access enforced** - Comprehensive access control validation  
+**Roles assigned and checked** - Complete role management system
+**Access enforced** - Comprehensive access control validation  
  **Tests pass** - All 34 tests passing with 100% success rate
- **Integrates with types/errors** - Clean modular architecture
- **Admin restrictions** - All role operations restricted to admins
- **DataKey enum implemented** - Proper storage organization
- **Core functions implemented** - set_role, get_role, check_access
- **Included in lib.rs** - Proper contract integration
+**Integrates with types/errors** - Clean modular architecture
+**Admin restrictions** - All role operations restricted to admins
+**DataKey enum implemented** - Proper storage organization
+**Core functions implemented** - set_role, get_role, check_access
+**Included in lib.rs** - Proper contract integration

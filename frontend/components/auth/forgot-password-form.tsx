@@ -640,10 +640,10 @@ export function ForgotPasswordForm() {
                   If you&apos;re having trouble accessing your account, contact
                   our support team at{" "}
                   <a
-                    href="mailto:support@managehub.com"
+                    href="mailto:support@Oraculum.com"
                     className="font-medium underline hover:text-gray-700"
                   >
-                    support@managehub.com
+                    support@Oraculum.com
                   </a>
                 </p>
               </div>
@@ -668,7 +668,7 @@ export function ForgotPasswordForm() {
 
         {/* Footer */}
         <div className="text-center text-xs text-gray-500">
-          <p>&copy; 2026 ManageHub. All rights reserved.</p>
+          <p>&copy; 2026 Oraculum. All rights reserved.</p>
           <div className="mt-2 space-x-4">
             <a href="#" className="hover:text-gray-700">
               Privacy Policy

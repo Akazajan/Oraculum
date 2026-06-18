@@ -1,4 +1,4 @@
-//! Token upgrade mechanism for ManageHub.
+//! Token upgrade mechanism for Oraculum.
 //!
 //! This module implements:
 //! - `set_upgrade_config`     — admin configures upgrade behaviour

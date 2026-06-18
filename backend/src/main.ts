@@ -27,8 +27,8 @@ async function bootstrap() {
     origin:
       process.env.NODE_ENV === 'production'
         ? [
-            'https://managehub.vercel.app',
-            'https://www.managehub.vercel.app',
+            'https://Oraculum.vercel.app',
+            'https://www.Oraculum.vercel.app',
             'http://localhost:3000',
             'http://localhost:3001',
             'http://localhost:3002',
@@ -40,8 +40,8 @@ async function bootstrap() {
 
   // SWAGGER SETUP
   const config = new DocumentBuilder()
-    .setTitle('ManageHub API')
-    .setDescription('API documentation for ManageHub backend')
+    .setTitle('Oraculum API')
+    .setDescription('API documentation for Oraculum backend')
     .setVersion('1.0')
     .addBearerAuth()
     .build();

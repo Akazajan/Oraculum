@@ -3,7 +3,7 @@ import { buildMetadata } from "@/lib/seo";
 export const metadata = buildMetadata({
   title: "Profile",
   description:
-    "View and edit your ManageHub profile, update your personal information, and manage your account.",
+    "View and edit your Oraculum profile, update your personal information, and manage your account.",
   noindex: true,
 });
 

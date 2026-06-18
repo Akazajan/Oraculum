@@ -22,7 +22,7 @@ export function Navbar({ items = NAV_ITEMS }: { items?: NavItem[] }) {
             <Building2 className="w-5 h-5" color="#ffffff" />
           </span>
           <span className="font-semibold text-gray-900 text-lg tracking-tight">
-            ManageHub
+            Oraculum
           </span>
         </Link>
 

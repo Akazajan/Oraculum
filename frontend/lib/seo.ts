@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import type { Metadata } from "next";
 
 interface BuildMetadataInput {
   title?: string;
@@ -12,7 +12,7 @@ interface BuildMetadataInput {
     width?: number;
     height?: number;
   };
-  type?: 'website' | 'article' | 'profile';
+  type?: "website" | "article" | "profile";
   publishedTime?: string;
   modifiedTime?: string;
   themeColor?: string;
@@ -23,10 +23,18 @@ interface BuildMetadataInput {
  */
 export function createSEODefaults() {
   return {
-    title: "ManageHub",
+    title: "Oraculum",
     description: "Smart Hub & Workspace Management System",
-    keywords: ["workspace", "management", "productivity", "hub", "organization", "collaboration", "efficiency"],
-    siteName: "ManageHub",
+    keywords: [
+      "workspace",
+      "management",
+      "productivity",
+      "hub",
+      "organization",
+      "collaboration",
+      "efficiency",
+    ],
+    siteName: "Oraculum",
     locale: "en_US",
     type: "website" as const,
   };
@@ -34,13 +42,13 @@ export function createSEODefaults() {
 
 /**
  * Builds a Next.js Metadata object with SEO optimizations
- * 
+ *
  * @param input - Configuration object for metadata generation
  * @returns Metadata object compatible with Next.js App Router
  */
 export function buildMetadata(input: BuildMetadataInput = {}): Metadata {
   const defaults = createSEODefaults();
-  
+
   const {
     title,
     description = defaults.description,
@@ -51,23 +59,23 @@ export function buildMetadata(input: BuildMetadataInput = {}): Metadata {
     type = defaults.type,
     publishedTime,
     modifiedTime,
-    themeColor = '#000000',
+    themeColor = "#000000",
   } = input;
 
   // Build the metadata object
   const metadata: Metadata = {
     // Title configuration - let the layout handle the template
     title,
-    
+
     // Description
     description,
-    
+
     // Keywords
     keywords,
-    
+
     // Theme color
     themeColor,
-    
+
     // Robots configuration
     robots: {
       index: !noindex,
@@ -75,12 +83,12 @@ export function buildMetadata(input: BuildMetadataInput = {}): Metadata {
       googleBot: {
         index: !noindex,
         follow: !noindex,
-        'max-video-preview': -1,
-        'max-image-preview': 'large',
-        'max-snippet': -1,
+        "max-video-preview": -1,
+        "max-image-preview": "large",
+        "max-snippet": -1,
       },
     },
-    
+
     // Open Graph
     openGraph: {
       type,
@@ -89,33 +97,37 @@ export function buildMetadata(input: BuildMetadataInput = {}): Metadata {
       siteName: defaults.siteName,
       locale: defaults.locale,
       ...(image && {
-        images: [{
-          url: image.url,
-          alt: image.alt || title || defaults.title,
-          width: image.width || 1200,
-          height: image.height || 630,
-        }]
+        images: [
+          {
+            url: image.url,
+            alt: image.alt || title || defaults.title,
+            width: image.width || 1200,
+            height: image.height || 630,
+          },
+        ],
       }),
       ...(publishedTime && { publishedTime }),
       ...(modifiedTime && { modifiedTime }),
     },
-    
+
     // Twitter Card
     twitter: {
-      card: 'summary_large_image',
+      card: "summary_large_image",
       title: title || defaults.title,
       description,
       ...(image && {
-        images: [{
-          url: image.url,
-          alt: image.alt || title || defaults.title,
-        }]
-      })
+        images: [
+          {
+            url: image.url,
+            alt: image.alt || title || defaults.title,
+          },
+        ],
+      }),
     },
-    
+
     // Viewport
     viewport: {
-      width: 'device-width',
+      width: "device-width",
       initialScale: 1,
       maximumScale: 1,
     },
@@ -124,7 +136,7 @@ export function buildMetadata(input: BuildMetadataInput = {}): Metadata {
   // Add canonical URL if provided
   if (canonical) {
     metadata.alternates = {
-      canonical
+      canonical,
     };
   }
 
@@ -133,7 +145,7 @@ export function buildMetadata(input: BuildMetadataInput = {}): Metadata {
 
 /**
  * Utility function to create page-specific metadata
- * 
+ *
  * @param title - Page title
  * @param description - Page description
  * @param options - Additional options
@@ -142,18 +154,18 @@ export function buildMetadata(input: BuildMetadataInput = {}): Metadata {
 export function createPageMetadata(
   title: string,
   description?: string,
-  options: Omit<BuildMetadataInput, 'title' | 'description'> = {}
+  options: Omit<BuildMetadataInput, "title" | "description"> = {},
 ): Metadata {
   return buildMetadata({
     title,
     description,
-    ...options
+    ...options,
   });
 }
 
 /**
  * Utility function for article/blog post metadata
- * 
+ *
  * @param title - Article title
  * @param description - Article description
  * @param options - Additional options
@@ -162,12 +174,12 @@ export function createPageMetadata(
 export function createArticleMetadata(
   title: string,
   description?: string,
-  options: Omit<BuildMetadataInput, 'title' | 'description' | 'type'> = {}
+  options: Omit<BuildMetadataInput, "title" | "description" | "type"> = {},
 ): Metadata {
   return buildMetadata({
     title,
     description,
-    type: 'article',
-    ...options
+    type: "article",
+    ...options,
   });
 }

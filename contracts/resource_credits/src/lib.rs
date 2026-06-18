@@ -1,6 +1,6 @@
 #![no_std]
 // The env.events().publish() API is deprecated in favour of #[contractevent],
-// but kept here for consistency with the rest of the ManageHub contracts.
+// but kept here for consistency with the rest of the Oraculum contracts.
 #![allow(deprecated)]
 
 mod errors;

@@ -158,7 +158,7 @@ const ResetPasswordPage: React.FC = () => {
           </div>
 
           <footer className="text-center mt-8 text-sm text-gray-600">
-            <p className="mb-2">© 2026 ManageHub. All rights reserved.</p>
+            <p className="mb-2">© 2026 Oraculum. All rights reserved.</p>
             <div className="flex justify-center gap-4">
               <a
                 href="/privacy-policy"
@@ -371,7 +371,7 @@ const ResetPasswordPage: React.FC = () => {
 
         {/* Footer */}
         <footer className="text-center mt-8 text-sm text-gray-600">
-          <p className="mb-2">© 2026 ManageHub. All rights reserved.</p>
+          <p className="mb-2">© 2026 Oraculum. All rights reserved.</p>
           <div className="flex justify-center gap-4">
             <a
               href="/privacy-policy"

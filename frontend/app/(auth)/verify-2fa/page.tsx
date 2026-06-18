@@ -47,7 +47,7 @@ function Verify2FAForm() {
 
       if (mode === "backup" && response.backupCodesRemaining !== undefined) {
         toast.success(
-          `Signed in. ${response.backupCodesRemaining} backup codes remaining.`
+          `Signed in. ${response.backupCodesRemaining} backup codes remaining.`,
         );
       } else {
         toast.success("Signed in successfully");
@@ -101,7 +101,7 @@ function Verify2FAForm() {
                   setCode(
                     mode === "totp"
                       ? e.target.value.replace(/\D/g, "")
-                      : e.target.value
+                      : e.target.value,
                   )
                 }
                 placeholder={mode === "totp" ? "000000" : "e.g. a1b2c3d4e5"}
@@ -158,7 +158,7 @@ function Verify2FAForm() {
         </div>
 
         <p className="text-center text-xs text-gray-400">
-          &copy; 2026 ManageHub. All rights reserved.
+          &copy; 2026 Oraculum. All rights reserved.
         </p>
       </div>
     </div>

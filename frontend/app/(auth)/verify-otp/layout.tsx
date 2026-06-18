@@ -3,7 +3,7 @@ import { buildMetadata } from "@/lib/seo";
 export const metadata = buildMetadata({
   title: "Verify Email",
   description:
-    "Enter the verification code sent to your email to complete your ManageHub account setup.",
+    "Enter the verification code sent to your email to complete your Oraculum account setup.",
   noindex: true,
 });
 
