@@ -8,6 +8,8 @@ import { Reflector } from '@nestjs/core';
 import { UserRole } from '../../users/enums/userRoles.enum';
 import { ROLES_KEY } from '../decorators/roles.decorators';
 
+//role hierarchy mapping
+
 const ROLE_HIERARCHY: Record<UserRole, number> = {
   [UserRole.SUPER_ADMIN]: 4,
   [UserRole.ADMIN]: 3,
