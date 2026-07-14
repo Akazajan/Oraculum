@@ -42,6 +42,7 @@ export class AuthService {
     private readonly manageTotpProvider: ManageTotpProvider,
   ) {}
 
+  //create user
   async createUser(createUserDto: CreateUserDto) {
     const existingUser = await this.userRepository.findOne({
       where: { email: createUserDto.email },
