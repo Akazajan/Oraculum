@@ -13,6 +13,7 @@ export interface PaginatedBookings {
   totalPages: number;
 }
 
+//provider to find bookings based on query parameters and user role
 @Injectable()
 export class FindBookingsProvider {
   constructor(
