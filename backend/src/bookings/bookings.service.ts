@@ -22,6 +22,7 @@ export class BookingsService {
     private readonly pricingService: PricingService,
   ) {}
 
+  //create booking id
   create(dto: CreateBookingDto, userId: string) {
     return this.createBookingProvider.create(dto, userId);
   }

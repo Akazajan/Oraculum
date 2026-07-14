@@ -8,6 +8,7 @@
 mod types;
 
 // Re-export all types
+// Re-export all types
 pub use types::{
     validate_attribute, validate_metadata, AttendanceAction, AttendanceFrequency, DateRange,
     DayPattern, MembershipStatus, MetadataUpdate, MetadataValue, PeakHourData, SubscriptionPlan,

@@ -8,7 +8,7 @@ use crate::validation::BatchValidator;
 use soroban_sdk::{symbol_short, Env, Vec};
 
 pub struct BatchModule;
-
+/// Implementation of batch operations for the MembershipTokenContract.
 impl BatchModule {
     /// Mints multiple tokens in a single transaction.
     /// Requires admin authorization for each mint if issue_token requires it.

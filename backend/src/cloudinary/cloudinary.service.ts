@@ -37,6 +37,7 @@ export class CloudinaryService {
       uploadStream.end(file.buffer);
     });
   }
+  //delete image from cloudinary
 
   async deleteImage(publicId: string): Promise<any> {
     try {
