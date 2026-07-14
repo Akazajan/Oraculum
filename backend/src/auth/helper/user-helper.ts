@@ -13,6 +13,7 @@ export class UserHelper {
   public async hashPassword(password: string): Promise<string> {
     return bcrypt.hash(password, 10);
   }
+  //formate user response
 
   public formatUserResponse(user: User) {
     return {
