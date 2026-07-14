@@ -24,6 +24,7 @@ function NotificationIcon({ type }: { type: Notification["type"] }) {
   }
 }
 
+//time ago function to display time since notification was created
 function timeAgo(iso: string): string {
   const diff = Date.now() - new Date(iso).getTime();
   const mins = Math.floor(diff / 60_000);
