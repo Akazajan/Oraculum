@@ -11,6 +11,8 @@ type TwoFaPendingPayload = {
   exp?: number;
 };
 
+//jwt expiry type
+
 type JwtExpiry = `${number}${'s' | 'm' | 'h' | 'd'}` | number;
 
 @Injectable()
