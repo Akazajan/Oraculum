@@ -23,6 +23,7 @@ export class ContactService {
       ...dto,
       ipAddress: ipAddress || undefined,
     });
+    // Save the contact message to the database
 
     await this.contactRepo.save(contactMessage);
     this.logger.log(`Contact form submitted by ${dto.email}: ${dto.subject}`);
