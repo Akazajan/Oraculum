@@ -19,7 +19,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
-//plan types
+//plan typess 
 
 const PLAN_TYPES: { value: PlanType; label: string; desc: string }[] = [
   { value: "HOURLY", label: "Hourly", desc: "Pay per hour" },
