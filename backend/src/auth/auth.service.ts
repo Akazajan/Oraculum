@@ -3,13 +3,14 @@ import {
   ConflictException,
   Injectable,
   InternalServerErrorException,
+  Logger,
   NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
 import { CreateUserDto } from './dto/create-user.dto';
 import { LoginUserDto } from './dto/login-user.dto';
 import { User } from '../users/entities/user.entity';
-import { Repository } from 'typeorm';
+import { MoreThan, Repository } from 'typeorm';
 import { UserHelper } from './helper/user-helper';
 import { InjectRepository } from '@nestjs/typeorm';
 import { UserMessages } from './helper/user-messages';
@@ -21,6 +22,8 @@ import { SendPasswordResetOtpDto } from './dto/send-password-reset-otp.dto';
 import { ResendOtpDto } from './dto/resend-otp.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { EmailService } from '../email/email.service';
+import { ConfigService } from '@nestjs/config';
+import { RefreshTokenRepositoryOperations } from './providers/refreshToken.repository';
 import { SetupTotpProvider } from './providers/setup-totp.provider';
 import { VerifyTotpProvider } from './providers/verify-totp.provider';
 import { ManageTotpProvider } from './providers/manage-totp.provider';
@@ -29,14 +32,20 @@ import { VerifyTotpDto } from './dto/verify-totp.dto';
 import { UseBackupCodeDto } from './dto/use-backup-code.dto';
 import { Disable2faDto } from './dto/disable-2fa.dto';
 
+const DEFAULT_PASSWORD_RESET_OTP_MINUTES = 10;
+
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
+
   constructor(
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
     private readonly userHelper: UserHelper,
     private readonly jwtHelper: JwtHelper,
     private readonly emailService: EmailService,
+    private readonly configService: ConfigService,
+    private readonly refreshTokenRepositoryOperations: RefreshTokenRepositoryOperations,
     private readonly setupTotpProvider: SetupTotpProvider,
     private readonly verifyTotpProvider: VerifyTotpProvider,
     private readonly manageTotpProvider: ManageTotpProvider,
@@ -265,13 +274,27 @@ export class AuthService {
     });
 
     if (!user) {
-      throw new NotFoundException(UserMessages.USER_NOT_FOUND);
+      // We deliberately throw NotFoundException with a generic message so
+      // the response is identical to the "user exists" path: callers cannot
+      // distinguish between an existing and a non-existing account.
+      this.logger.warn(
+        `Password-reset OTP requested for unknown email: ${sendPasswordResetOtpDto.email}`,
+      );
+      throw new NotFoundException(UserMessages.OTP_SENT);
     }
 
+    const otpMinutes = parseInt(
+      this.configService.get<string>('PASSWORD_RESET_OTP_MINUTES') ||
+        String(DEFAULT_PASSWORD_RESET_OTP_MINUTES),
+      10,
+    );
     const otp = this.userHelper.generateVerificationCode();
 
+    // Always overwrite any existing (possibly leaked or already-used) code
+    // so the most recent email is the only one that works.
     user.passwordResetCode = otp;
-    user.passwordResetCodeExpiresAt = moment().add(10, 'minutes').toDate();
+    user.passwordResetCodeExpiresAt = moment().add(otpMinutes, 'minutes').toDate();
+    user.lastPasswordResetSentAt = new Date();
     await this.userRepository.save(user);
 
     await this.emailService.sendPasswordResetEmail(
@@ -293,20 +316,40 @@ export class AuthService {
         where: { email: resendOtpDto.email },
       });
       if (!user) {
-        throw new NotFoundException(UserMessages.USER_NOT_FOUND);
+        // Same generic NotFoundException as requestResetPasswordOtp so the
+        // frontend keeps a consistent error shape for unknown emails.
+        this.logger.warn(
+          `Password-reset OTP resend requested for unknown email: ${resendOtpDto.email}`,
+        );
+        throw new NotFoundException(UserMessages.OTP_SENT);
       }
 
+      const otpMinutes = parseInt(
+        this.configService.get<string>('PASSWORD_RESET_OTP_MINUTES') ||
+          String(DEFAULT_PASSWORD_RESET_OTP_MINUTES),
+        10,
+      );
       const otp = this.userHelper.generateVerificationCode();
 
       user.passwordResetCode = otp;
-      user.passwordResetCodeExpiresAt = moment().add(10, 'minutes').toDate();
+      user.passwordResetCodeExpiresAt = moment().add(otpMinutes, 'minutes').toDate();
+      user.lastPasswordResetSentAt = new Date();
       await this.userRepository.save(user);
 
-      // await this.emailService.sendPasswordResetEmail(
-      //   user.email,
-      //   otp,
-      //   user.fullName,
-      // );
+      // Best-effort delivery: failure here is logged but not surfaced, so
+      // an attacker cannot probe for the existence of an account by
+      // comparing success / failure responses.
+      await this.emailService
+        .sendPasswordResetEmail(
+          user.email,
+          otp,
+          `${user.firstname} ${user.lastname}`,
+        )
+        .catch((err) => {
+          this.logger.error(
+            `Failed to deliver password-reset OTP to ${user.email}: ${err?.message ?? err}`,
+          );
+        });
 
       return { message: UserMessages.OTP_SENT };
     } catch (error) {
@@ -377,21 +420,6 @@ export class AuthService {
   async resetPassword(resetPasswordDto: ResetPasswordDto) {
     const { otp, newPassword, confirmNewPassword } = resetPasswordDto;
 
-    const user = await this.userRepository.findOneBy({
-      passwordResetCode: otp,
-    });
-
-    if (!user) {
-      throw new NotFoundException(UserMessages.USER_NOT_FOUND);
-    }
-
-    if (
-      !user.passwordResetCodeExpiresAt ||
-      user.passwordResetCodeExpiresAt < new Date()
-    ) {
-      throw new UnauthorizedException(UserMessages.OTP_EXPIRED);
-    }
-
     if (!this.userHelper.isValidPassword(newPassword)) {
       throw new BadRequestException(UserMessages.IS_VALID_PASSWORD);
     }
@@ -399,11 +427,79 @@ export class AuthService {
     if (newPassword !== confirmNewPassword) {
       throw new BadRequestException(UserMessages.PASSWORDS_DO_NOT_MATCH);
     }
-    user.password = await this.userHelper.hashPassword(newPassword);
-    user.passwordResetCode = undefined;
-    user.passwordResetCodeExpiresAt = undefined;
 
-    await this.userRepository.save(user);
+    // Step 1: read-only lookup for actionable, specific error messages.
+    // Anyone with a valid, single-issued OTP that hasn't been consumed will
+    // match; everyone else gets a clean error without revealing why.
+    const owner = await this.userRepository.findOneBy({
+      passwordResetCode: otp,
+    });
+
+    if (!owner) {
+      // Use identical wording for both missing and already-consumed cases so
+      // attackers cannot probe which one applied via response text.
+      throw new UnauthorizedException(
+        'Invalid or expired reset code',
+      );
+    }
+    if (
+      !owner.passwordResetCodeExpiresAt ||
+      owner.passwordResetCodeExpiresAt < new Date()
+    ) {
+      throw new UnauthorizedException(UserMessages.OTP_EXPIRED);
+    }      // Step 2: atomically consume the OTP in a single SQL statement so that
+    // two concurrent reset requests race-safely produce one winner and one
+    // loser (which we surface as "already-used"). Note: we set the cleared
+    // columns to `null` (not `undefined`) so TypeORM emits explicit NULL
+    // assignments and a subsequent lookup by code cannot match.
+    const hashedPassword = await this.userHelper.hashPassword(newPassword);
+    const updateResult = await this.userRepository.update(
+      {
+        id: owner.id,
+        passwordResetCode: otp,
+        passwordResetCodeExpiresAt: MoreThan(new Date()),
+      },
+      {
+        password: hashedPassword,
+        passwordResetCode: null,
+        passwordResetCodeExpiresAt: null,
+      },
+    );
+
+    if (!updateResult.affected || updateResult.affected === 0) {
+      // Same intentional wording as the "not found" branch above so callers
+      // cannot distinguish between an invalid and an already-used code.
+      throw new UnauthorizedException(
+        'Invalid or expired reset code',
+      );
+    }
+
+    // Step 3: best-effort post-reset cleanup. The reset itself has already
+    // succeeded; failures here MUST NOT roll back the password change.
+    try {
+      await this.refreshTokenRepositoryOperations.revokeAllRefreshTokens(
+        owner.id,
+      );
+    } catch (err) {
+      this.logger.warn(
+        `Failed to revoke sessions after password reset for user ${owner.id}: ${
+          (err as Error)?.message ?? err
+        }`,
+      );
+    }
+    try {
+      const fullName = `${owner.firstname} ${owner.lastname}`.trim();
+      await this.emailService.sendPasswordResetSuccessEmail(
+        owner.email,
+        fullName || owner.email,
+      );
+    } catch (err) {
+      this.logger.warn(
+        `Failed to send password-reset success email to ${owner.email}: ${
+          (err as Error)?.message ?? err
+        }`,
+      );
+    }
 
     return {
       message: UserMessages.PASSWORDS_RESET_SUCCESSFUL,

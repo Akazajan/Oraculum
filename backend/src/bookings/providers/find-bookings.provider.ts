@@ -2,7 +2,10 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Booking } from '../entities/booking.entity';
-import { BookingQueryDto } from '../dto/booking-query.dto';
+import {
+  BookingQueryDto,
+  resolveStatusFilter,
+} from '../dto/booking-query.dto';
 import { UserRole } from '../../users/enums/userRoles.enum';
 
 export interface PaginatedBookings {
@@ -13,7 +16,7 @@ export interface PaginatedBookings {
   totalPages: number;
 }
 
-//provider to find bookings based on query parameters and user role
+// Provider to find bookings based on query parameters and user role
 @Injectable()
 export class FindBookingsProvider {
   constructor(
@@ -29,7 +32,6 @@ export class FindBookingsProvider {
     const {
       page = 1,
       limit = 20,
-      status,
       workspaceId,
       startDate,
       endDate,
@@ -61,18 +63,32 @@ export class FindBookingsProvider {
       qb.where('booking.userId = :userId', { userId: query.userId });
     }
 
-    if (status) qb.andWhere('booking.status = :status', { status });
+    // Single or multi status filter — drop invalid values so noisy filters
+    // don't cause empty lists when callers fat-finger an enum.
+    const statusFilter = resolveStatusFilter(query);
+    if (Array.isArray(statusFilter)) {
+      qb.andWhere('booking.status IN (:...statuses)', {
+        statuses: statusFilter,
+      });
+    } else if (statusFilter) {
+      qb.andWhere('booking.status = :status', { status: statusFilter });
+    }
+
     if (workspaceId)
       qb.andWhere('booking.workspaceId = :workspaceId', { workspaceId });
     if (startDate)
       qb.andWhere('booking.startDate >= :startDate', { startDate });
     if (endDate) qb.andWhere('booking.endDate <= :endDate', { endDate });
 
+    // Deterministic ordering so paginated results are stable across calls:
+    // createdAt DESC with id as a tiebreaker whenever multiple rows share
+    // the same createdAt timestamp.
     const total = await qb.getCount();
     const data = await qb
       .skip((page - 1) * limit)
       .take(limit)
       .orderBy('booking.createdAt', 'DESC')
+      .addOrderBy('booking.id', 'DESC')
       .getMany();
 
     return { data, total, page, limit, totalPages: Math.ceil(total / limit) };
