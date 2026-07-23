@@ -34,6 +34,7 @@ import { Public } from '../auth/decorators/public.decorator';
 import { GetCurrentUser } from '../auth/decorators/getCurrentUser.decorator';
 import { ApiErrorDto } from '../common/dto/api-error.dto';
 import { Workspace } from './entities/workspace.entity';
+import { Logger } from '@nestjs/common';
 
 @ApiTags('workspaces')
 @ApiBearerAuth('bearer')
@@ -45,6 +46,8 @@ import { Workspace } from './entities/workspace.entity';
 @ApiNotFoundResponse({ description: 'Workspace not found', type: ApiErrorDto })
 @Controller('workspaces')
 export class WorkspacesController {
+  private readonly logger = new Logger(WorkspacesController.name);
+
   constructor(private readonly workspacesService: WorkspacesService) {}
 
   @Post()
@@ -53,8 +56,12 @@ export class WorkspacesController {
   @ApiOperation({ summary: 'Create a new workspace (Admin only)' })
   @ApiOkResponse({ description: 'Workspace created', type: Workspace })
   @ApiBadRequestResponse({ description: 'Validation error', type: ApiErrorDto })
-  async create(@Body() dto: CreateWorkspaceDto) {
+  async create(
+    @Body() dto: CreateWorkspaceDto,
+    @GetCurrentUser('id') _actorId: string,
+  ) {
     const workspace = await this.workspacesService.create(dto);
+    this.logger.log(`Workspace ${workspace.id} created`);
     return { message: 'Workspace created successfully', data: workspace };
   }
 
@@ -62,7 +69,7 @@ export class WorkspacesController {
   @Public()
   @ApiOperation({ summary: 'List active workspaces' })
   async findAll(@Query() query: WorkspaceQueryDto) {
-    const result = await this.workspacesService.findAll(query);
+    const result = await this.workspacesService.findAll(query, false, false);
     return { message: 'Workspaces retrieved successfully', ...result };
   }
 
@@ -71,8 +78,26 @@ export class WorkspacesController {
   @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.STAFF)
   @ApiOperation({ summary: 'List all workspaces including inactive (Admin)' })
   async findAllAdmin(@Query() query: WorkspaceQueryDto) {
-    const result = await this.workspacesService.findAll(query, true);
+    const result = await this.workspacesService.findAll(query, true, false);
     return { message: 'Workspaces retrieved successfully', ...result };
+  }
+
+  @Get('admin/deleted')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN)
+  @ApiOperation({ summary: 'List soft-deleted workspaces (Admin)' })
+  async listDeleted(@Query() query: WorkspaceQueryDto) {
+    const result = await this.workspacesService.findAll(query, true, true);
+    // Filter to only deleted rows for clarity in the admin surface.
+    const filtered = result.data.filter((w) => !!w.deletedAt);
+    return {
+      message: 'Deleted workspaces retrieved successfully',
+      data: filtered,
+      total: filtered.length,
+      page: result.page,
+      limit: result.limit,
+      totalPages: result.totalPages,
+    };
   }
 
   @Get(':id')
@@ -116,10 +141,10 @@ export class WorkspacesController {
   @UseGuards(RolesGuard)
   @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN)
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Deactivate workspace (Admin only)' })
-  @ApiOkResponse({ description: 'Workspace deactivated' })
+  @ApiOperation({ summary: 'Soft-delete workspace (Admin only)' })
+  @ApiOkResponse({ description: 'Workspace soft-deleted' })
   async remove(@Param('id', ParseUUIDPipe) id: string) {
     await this.workspacesService.softDelete(id);
-    return { message: 'Workspace deactivated successfully' };
+    return { message: 'Workspace deleted successfully' };
   }
 }

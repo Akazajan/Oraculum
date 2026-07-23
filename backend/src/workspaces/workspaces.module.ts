@@ -9,10 +9,12 @@ import { FindWorkspaceByIdProvider } from './providers/find-workspace-by-id.prov
 import { UpdateWorkspaceProvider } from './providers/update-workspace.provider';
 import { DeleteWorkspaceProvider } from './providers/delete-workspace.provider';
 import { CheckWorkspaceAvailabilityProvider } from './providers/check-workspace-availability.provider';
+import { AdminWorkspacesController } from './admin-workspaces.controller';
+import { AuditModule } from '../audit/audit.module';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Workspace])],
-  controllers: [WorkspacesController],
+  imports: [TypeOrmModule.forFeature([Workspace]), AuditModule],
+  controllers: [WorkspacesController, AdminWorkspacesController],
   providers: [
     WorkspacesService,
     CreateWorkspaceProvider,

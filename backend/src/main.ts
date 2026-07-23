@@ -5,26 +5,32 @@ import {
   SwaggerModule,
   SwaggerCustomOptions,
 } from '@nestjs/swagger';
-import { ValidationPipe, ClassSerializerInterceptor } from '@nestjs/common';
+import { ClassSerializerInterceptor } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { HttpLogger } from './common/middlewares/httpLogger.middleware';
+import { CorrelationIdMiddleware } from './common/middlewares/correlation-id.middleware';
+import { CentralizedValidationPipe } from './common/pipes/validation.pipe';
+import { GlobalExceptionFilter } from './common/filters/global-exception.filter';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, { rawBody: true });
 
+  // Correlation-ID middleware MUST be registered before any logger or
+  // pipe so the AsyncLocalStorage context is opened for the rest of
+  // the request lifecycle (BE-08).
+  app.use(new CorrelationIdMiddleware().use);
   app.use(new HttpLogger().use);
 
-  // GLOBAL VALIDATION
-  app.useGlobalPipes(
-    new ValidationPipe({
-      transform: true,
-      whitelist: true,
-      forbidNonWhitelisted: true,
-    }),
-  );
+  // GLOBAL VALIDATION — replaced by the centralised pipe so every
+  // controller shares the same 400 error shape (BE-01).
+  app.useGlobalPipes(new CentralizedValidationPipe());
 
   // GLOBAL SERIALIZATION
   app.useGlobalInterceptors(new ClassSerializerInterceptor(app.get(Reflector)));
+
+  // GLOBAL EXCEPTION FILTER — emits the stable { statusCode, error,
+  // message, correlationId, timestamp, path } shape (BE-08).
+  app.useGlobalFilters(new GlobalExceptionFilter());
 
   // ENABLE CORS
   app.enableCors({
@@ -60,6 +66,9 @@ Most endpoints require a JWT bearer token. Obtain one via \`POST /api/auth/login
 
 ## Rate limiting (BE-07)
 Every endpoint is rate-limited. Authenticated requests are tracked per user; anonymous requests are tracked per IP. The default limits are 60 requests/minute (anonymous) and 100 requests/minute (authenticated). Look for the \`Retry-After\` header on 429 responses.
+
+## Correlation IDs (BE-08)
+Every request is assigned a correlation ID, returned in the \`x-correlation-id\` response header and embedded in every error body. Pass it back to support so they can locate the corresponding server log line.
 
 ## Pagination (BE-15)
 List endpoints accept \`page\` (default 1) and \`limit\` (default 20, max 100). The response always includes a \`meta\` object with \`currentPage\`, \`itemsPerPage\`, \`totalItems\`, \`totalPages\`, \`hasPreviousPage\`, and \`hasNextPage\`.`,

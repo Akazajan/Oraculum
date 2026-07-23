@@ -1,20 +1,26 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsEmail, IsNotEmpty, IsString, MaxLength } from 'class-validator';
+import {
+  IsEmail,
+  IsNotEmpty,
+  IsString,
+  Length,
+  MaxLength,
+} from 'class-validator';
+import { SanitizeString } from '../../common/transformers/sanitize-string.transformer';
 
+/** BE-01 — Verify-OTP DTO. */
 export class VerifyOtpDto {
   @ApiProperty({ example: 'jane.doe@example.com' })
-  @IsNotEmpty({ message: 'email is required' })
   @IsEmail({}, { message: 'Please provide a valid email' })
-  @IsString()
   @MaxLength(254)
+  @IsNotEmpty({ message: 'email is required' })
+  @SanitizeString()
   email: string;
 
-  @ApiProperty({
-    example: '482917',
-    description: '6-digit OTP delivered to email',
-  })
-  @IsNotEmpty({ message: 'otp is required' })
+  @ApiProperty({ example: '123456', minLength: 4, maxLength: 8 })
   @IsString()
-  @MaxLength(6)
+  @Length(4, 8, { message: 'otp must be 4–8 characters long' })
+  @IsNotEmpty({ message: 'otp is required' })
+  @SanitizeString()
   otp: string;
 }

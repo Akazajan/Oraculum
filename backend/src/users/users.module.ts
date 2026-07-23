@@ -21,14 +21,17 @@ import { GetMembersProvider } from './providers/get-members.provider';
 import { UpdateMemberStatusProvider } from './providers/update-member-status.provider';
 import { GetMemberStatsProvider } from './providers/get-member-stats.provider';
 import { MembersController } from './members.controller';
+import { AdminUsersController } from './admin-users.controller';
+import { AuditModule } from '../audit/audit.module';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([User]),
     forwardRef(() => AuthModule),
     CloudinaryModule,
+    AuditModule,
   ],
-  controllers: [UsersController, MembersController],
+  controllers: [UsersController, MembersController, AdminUsersController],
   providers: [
     UsersService,
     CreateUserProvider,

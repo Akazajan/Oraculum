@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, SelectQueryBuilder } from 'typeorm';
 import { Workspace } from '../entities/workspace.entity';
 import { WorkspaceQueryDto } from '../dto/workspace-query.dto';
 
@@ -12,6 +12,12 @@ export interface PaginatedWorkspaces {
   totalPages: number;
 }
 
+/**
+ * BE-14 — Public listing automatically excludes soft-deleted rows
+ * because the TypeORM repository respects `@DeleteDateColumn`.
+ * Admins can opt into tombstones with `findAll(q, { adminView: true,
+ * includeDeleted: true })` for restore workflows.
+ */
 @Injectable()
 export class FindAllWorkspacesProvider {
   constructor(
@@ -21,13 +27,22 @@ export class FindAllWorkspacesProvider {
 
   async findAll(
     query: WorkspaceQueryDto,
-    adminView = false,
+    options: {
+      adminView?: boolean;
+      includeDeleted?: boolean;
+    } = {},
   ): Promise<PaginatedWorkspaces> {
     const { page = 1, limit = 20, type, minSeats, maxRate, search } = query;
+    const { adminView = false, includeDeleted = false } = options;
 
-    const qb = this.workspacesRepository.createQueryBuilder('workspace');
+    const qb: SelectQueryBuilder<Workspace> = this.workspacesRepository
+      .createQueryBuilder('workspace');
 
-    if (!adminView) {
+    if (includeDeleted) {
+      qb.withDeleted();
+    }
+
+    if (!adminView || !includeDeleted) {
       qb.where('workspace.isActive = :isActive', { isActive: true });
     }
 
