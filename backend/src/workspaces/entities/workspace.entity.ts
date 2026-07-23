@@ -5,6 +5,7 @@ import {
   CreateDateColumn,
   UpdateDateColumn,
   OneToMany,
+  VersionColumn,
 } from 'typeorm';
 import { WorkspaceType } from '../enums/workspace-type.enum';
 
@@ -24,6 +25,12 @@ export class Workspace {
 
   @Column({ type: 'int', default: 1 })
   availableSeats: number;
+
+  // Optimistic concurrency token: TypeORM increments this on every save.
+  // Concurrent updates cause OptimisticLockVersionMismatchError so callers
+  // can retry or surface the conflict to users safely.
+  @VersionColumn()
+  version: number;
 
   // Stored in kobo (smallest currency unit). e.g. ₦5000/hr = 500000 kobo
   @Column({ type: 'bigint' })
