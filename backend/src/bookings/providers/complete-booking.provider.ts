@@ -8,6 +8,11 @@ import { Repository } from 'typeorm';
 import { Booking } from '../entities/booking.entity';
 import { BookingStatus } from '../enums/booking-status.enum';
 
+/**
+ * Marks a booking as COMPLETED. Only the Booking row is mutated so a
+ * single save is sufficient and no transaction wrapper is required
+ * (BE-12). Kept explicit for documentation and future-proofing.
+ */
 @Injectable()
 export class CompleteBookingProvider {
   constructor(

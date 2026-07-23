@@ -13,6 +13,10 @@ import {
   ApiOperation,
   ApiProduces,
   ApiTags,
+  ApiOkResponse,
+  ApiUnauthorizedResponse,
+  ApiForbiddenResponse,
+  ApiNotFoundResponse,
 } from '@nestjs/swagger';
 import { InvoicesService } from './invoices.service';
 import { InvoiceQueryDto } from './dto/invoice-query.dto';
@@ -20,9 +24,16 @@ import { GetCurrentUser } from '../auth/decorators/getCurrentUser.decorator';
 import { Roles } from '../auth/decorators/roles.decorators';
 import { RolesGuard } from '../auth/guard/roles.guard';
 import { UserRole } from '../users/enums/userRoles.enum';
+import { ApiErrorDto } from '../common/dto/api-error.dto';
 
-@ApiTags('Invoices')
-@ApiBearerAuth()
+@ApiTags('invoices')
+@ApiBearerAuth('bearer')
+@ApiUnauthorizedResponse({
+  description: 'JWT missing or invalid',
+  type: ApiErrorDto,
+})
+@ApiForbiddenResponse({ description: 'Insufficient role', type: ApiErrorDto })
+@ApiNotFoundResponse({ description: 'Invoice not found', type: ApiErrorDto })
 @UseGuards(RolesGuard)
 @Roles(UserRole.USER, UserRole.STAFF, UserRole.ADMIN, UserRole.SUPER_ADMIN)
 @Controller('invoices')
@@ -31,6 +42,7 @@ export class InvoicesController {
 
   @Get()
   @ApiOperation({ summary: 'List invoices (users see own; admins see all)' })
+  @ApiOkResponse({ description: 'Invoice list returned' })
   async findAll(
     @Query() query: InvoiceQueryDto,
     @GetCurrentUser('id') userId: string,
@@ -42,6 +54,7 @@ export class InvoicesController {
 
   @Get(':id')
   @ApiOperation({ summary: 'Get invoice by ID' })
+  @ApiOkResponse({ description: 'Invoice returned' })
   async findOne(
     @Param('id', ParseUUIDPipe) id: string,
     @GetCurrentUser('id') userId: string,
@@ -54,6 +67,7 @@ export class InvoicesController {
   @Get(':id/download')
   @ApiOperation({ summary: 'Download invoice as PDF' })
   @ApiProduces('application/pdf')
+  @ApiOkResponse({ description: 'Invoice PDF stream returned' })
   async download(
     @Param('id', ParseUUIDPipe) id: string,
     @GetCurrentUser('id') userId: string,

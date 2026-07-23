@@ -19,7 +19,9 @@ export class ListNewsletterSubscribersProvider {
     query: PaginationQueryDto,
   ): Promise<PaginatedResponse<NewsletterSubscriberAdminDto>> {
     const page = query.page ?? 1;
-    const perPage = query.perPage ?? 10;
+    // Backwards-compatible: older callers passed `perPage`, but the
+    // unified `PaginationDto` now uses `limit` (max 100).
+    const perPage = (query as unknown as { limit?: number }).limit ?? 10;
 
     const qb = this.repo.createQueryBuilder('s');
 

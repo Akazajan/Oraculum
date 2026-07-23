@@ -7,8 +7,9 @@ import { AuthModule } from './auth/auth.module';
 import { UsersModule } from './users/users.module';
 import { APP_GUARD } from '@nestjs/core';
 import { JwtAuthGuard } from './auth/guard/jwt.auth.guard';
-import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
+import { ThrottlerModule } from '@nestjs/throttler';
 import { BullModule } from '@nestjs/bull';
+import { AppThrottlerGuard } from './common/guards/app-throttler.guard';
 import { ScheduleModule } from '@nestjs/schedule';
 import { NewsletterModule } from './newsletter/newsletter.module';
 import { EmailModule } from './email/email.module';
@@ -27,25 +28,37 @@ import { WorkspaceTrackingModule } from './workspace-tracking/workspace-tracking
       isGlobal: true,
     }),
     ScheduleModule.forRoot(),
+    // Throttler tiers — BE-07 acceptance: harder limits on anonymous
+    // traffic, generous limits on authenticated traffic. The actual
+    // tracker key (user vs IP) is decided by AppThrottlerGuard so the
+    // same global config applies to everyone.
     ThrottlerModule.forRoot([
+      // Burst protection shared by every caller.
+      { name: 'short', ttl: 1_000, limit: 3 },
+      { name: 'medium', ttl: 10_000, limit: 20 },
+
+      // Per-minute limits. The "long" tier is shared by everyone.
+      { name: 'long', ttl: 60_000, limit: 100 },
+
+      // Authenticated users get a more generous cap (1.5x by default)
+      // thanks to env overrides via THROTTLE_AUTH_LIMIT_LONG.
       {
-        name: 'short',
-        ttl: 1000, // 1 second
-        limit: 3, // 3 requests per second
+        name: 'long-auth',
+        ttl: 60_000,
+        limit: Number(process.env.THROTTLE_AUTH_LIMIT_LONG ?? 150),
       },
-      {
-        name: 'medium',
-        ttl: 10000, // 10 seconds
-        limit: 20, // 20 requests per 10 seconds
-      },
-      {
-        name: 'long',
-        ttl: 60000, // 1 minute
-        limit: 100, // 100 requests per minute
-      },
+
+      // Per-route named throttlers — applied via @Throttle({ name: {...} })
       { name: 'newsletter', ttl: 60_000, limit: 10 },
       { name: 'contact', ttl: 60_000, limit: 5 },
       { name: 'feedback', ttl: 60_000, limit: 10 },
+
+      // Per-IP stricter limits for unauthenticated traffic (default tier).
+      {
+        name: 'default-anon',
+        ttl: 60_000,
+        limit: Number(process.env.THROTTLE_ANON_LIMIT_LONG ?? 60),
+      },
     ]),
     BullModule.forRootAsync({
       imports: [ConfigModule],
@@ -108,8 +121,10 @@ import { WorkspaceTrackingModule } from './workspace-tracking/workspace-tracking
       useClass: JwtAuthGuard,
     },
     {
+      // AppThrottlerGuard tracks by authenticated user id when
+      // available, else by request IP, and emits a standardized 429.
       provide: APP_GUARD,
-      useClass: ThrottlerGuard,
+      useClass: AppThrottlerGuard,
     },
   ],
 })

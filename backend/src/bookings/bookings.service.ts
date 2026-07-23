@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { EntityManager } from 'typeorm';
 import { CreateBookingDto } from './dto/create-booking.dto';
 import { BookingQueryDto } from './dto/booking-query.dto';
 import { CreateBookingProvider } from './providers/create-booking.provider';
@@ -27,8 +28,13 @@ export class BookingsService {
     return this.createBookingProvider.create(dto, userId);
   }
 
-  confirm(bookingId: string): Promise<Booking> {
-    return this.confirmBookingProvider.confirm(bookingId);
+  /**
+   * Confirm a booking, optionally reusing the caller's open transaction
+   * (BE-12) so the Paystack webhook doesn't accidentally nest a
+   * SAVEPOINT inside its own transaction.
+   */
+  confirm(bookingId: string, manager?: EntityManager): Promise<Booking> {
+    return this.confirmBookingProvider.confirm(bookingId, manager);
   }
 
   cancel(bookingId: string, userId: string, userRole: UserRole) {

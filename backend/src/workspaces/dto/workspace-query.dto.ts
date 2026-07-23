@@ -1,43 +1,37 @@
-import { IsEnum, IsInt, IsOptional, IsString, Min } from 'class-validator';
-import { Type } from 'class-transformer';
-import { WorkspaceType } from '../enums/workspace-type.enum';
 import { ApiPropertyOptional } from '@nestjs/swagger';
+import { Type } from 'class-transformer';
+import { IsEnum, IsInt, IsOptional, IsString, Min } from 'class-validator';
+import { WorkspaceType } from '../enums/workspace-type.enum';
+import { PaginationDto } from '../../common/dto/pagination.dto';
 
-export class WorkspaceQueryDto {
-  @ApiPropertyOptional({ default: 1 })
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  page?: number = 1;
-
-  @ApiPropertyOptional({ default: 20 })
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  limit?: number = 20;
-
+/**
+ * Query parameters for listing workspaces (BE-15 acceptance).
+ * Inherits `page` / `limit` from the unified `PaginationDto`.
+ */
+export class WorkspaceQueryDto extends PaginationDto {
   @ApiPropertyOptional({ enum: WorkspaceType })
   @IsOptional()
   @IsEnum(WorkspaceType)
   type?: WorkspaceType;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({ example: 5 })
   @IsOptional()
   @Type(() => Number)
   @IsInt()
   @Min(1)
   minSeats?: number;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({
+    example: 500000,
+    description: 'Maximum hourly rate (kobo)',
+  })
   @IsOptional()
   @Type(() => Number)
   @IsInt()
   @Min(1)
   maxRate?: number;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({ example: 'lagos' })
   @IsOptional()
   @IsString()
   search?: string;
