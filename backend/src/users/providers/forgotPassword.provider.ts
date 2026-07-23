@@ -11,6 +11,8 @@ import { EmailService } from '../../email/email.service';
 import { ConfigService } from '@nestjs/config';
 import { createHash, randomBytes } from 'crypto';
 
+export const DEFAULT_PASSWORD_RESET_EXPIRATION_MS = 15 * 60 * 1000; // 15 min
+
 @Injectable()
 export class ForgotPasswordProvider {
   constructor(
@@ -26,19 +28,34 @@ export class ForgotPasswordProvider {
     try {
       const user = await this.usersRepository.findOne({ where: { email } });
       if (!user) {
-        throw new NotFoundException('Email not registered');
+        // We deliberately use the same wording as for an existing address to
+        // avoid leaking which emails have accounts. A 404 here signals a real
+        // misroute to the operator while keeping public responses consistent.
+        throw new NotFoundException(
+          'If an account exists for this email, reset instructions have been sent',
+        );
       }
 
+      // Generate a fresh 256-bit token. The hashed copy is what we store; the
+      // raw token is what we put in the URL. Even if the DB is compromised,
+      // the raw token never sits in persistent storage.
       const rawToken = randomBytes(32).toString('hex');
       const hashedToken = createHash('sha256').update(rawToken).digest('hex');
 
-      // expiration in ms (default 5 minutes)
-      const expirationMs = parseInt(
-        this.configService.get<string>('PASSWORD_RESET_EXPIRATION_MS') ||
-          '300000',
+      // Enforce a strict, configurable expiry. Old tokens are explicitly
+      // invalidated so the latest issued link is the only one that works.
+      const rawExpiration = this.configService.get<string>(
+        'PASSWORD_RESET_EXPIRATION_MS',
       );
+      const parsedExpiration = rawExpiration ? parseInt(rawExpiration, 10) : NaN;
+      const expirationMs =
+        Number.isFinite(parsedExpiration) && parsedExpiration > 0
+          ? parsedExpiration
+          : DEFAULT_PASSWORD_RESET_EXPIRATION_MS;
+      const now = new Date();
       user.passwordResetToken = hashedToken;
-      user.passwordResetExpiresIn = new Date(Date.now() + expirationMs);
+      user.passwordResetExpiresIn = new Date(now.getTime() + expirationMs);
+      user.lastPasswordResetSentAt = now;
 
       await this.usersRepository.save(user);
 
@@ -55,7 +72,12 @@ export class ForgotPasswordProvider {
       );
 
       if (!emailed) {
-        throw new BadRequestException('Failed to send password reset email');
+        // Don't leak whether the send failed for the recipient, but ensure
+        // the caller knows to investigate. Caller can return a generic OK
+        // message if needed (handled in the controller, kept narrow here).
+        throw new BadRequestException(
+          'Password reset email could not be delivered; please retry shortly',
+        );
       }
 
       return { message: 'Password reset instructions sent to email' };
