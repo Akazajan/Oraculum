@@ -16,6 +16,11 @@ import {
   ApiBearerAuth,
   ApiOperation,
   ApiQuery,
+  ApiResponse,
+  ApiUnauthorizedResponse,
+  ApiBadRequestResponse,
+  ApiNotFoundResponse,
+  ApiOkResponse,
 } from '@nestjs/swagger';
 import { BookingsService } from './bookings.service';
 import { CreateBookingDto } from './dto/create-booking.dto';
@@ -25,15 +30,24 @@ import { Roles } from '../auth/decorators/roles.decorators';
 import { UserRole } from '../users/enums/userRoles.enum';
 import { GetCurrentUser } from '../auth/decorators/getCurrentUser.decorator';
 import { PlanType } from './enums/plan-type.enum';
+import { ApiErrorDto } from '../common/dto/api-error.dto';
+import { Booking } from './entities/booking.entity';
 
 @ApiTags('bookings')
-@ApiBearerAuth()
+@ApiBearerAuth('bearer')
+@ApiUnauthorizedResponse({
+  description: 'JWT missing or invalid',
+  type: ApiErrorDto,
+})
+@ApiBadRequestResponse({ description: 'Validation error', type: ApiErrorDto })
+@ApiNotFoundResponse({ description: 'Resource not found', type: ApiErrorDto })
 @Controller('bookings')
 export class BookingsController {
   constructor(private readonly bookingsService: BookingsService) {}
 
   @Post()
   @ApiOperation({ summary: 'Create a booking' })
+  @ApiOkResponse({ description: 'Booking created', type: Booking })
   async create(
     @Body() dto: CreateBookingDto,
     @GetCurrentUser('id') userId: string,
@@ -57,11 +71,12 @@ export class BookingsController {
 
   @Get('price-estimate')
   @ApiOperation({ summary: 'Get a price estimate for a booking plan' })
-  @ApiQuery({ name: 'workspaceId', required: true })
+  @ApiQuery({ name: 'hourlyRate', required: true, type: Number })
   @ApiQuery({ name: 'planType', enum: PlanType, required: true })
-  @ApiQuery({ name: 'seatCount', required: false })
-  @ApiQuery({ name: 'startDate', required: true })
-  @ApiQuery({ name: 'endDate', required: true })
+  @ApiQuery({ name: 'seatCount', required: false, type: Number })
+  @ApiQuery({ name: 'startDate', required: true, type: String })
+  @ApiQuery({ name: 'endDate', required: true, type: String })
+  @ApiResponse({ status: 200, description: 'Price estimate returned' })
   async getPriceEstimate(
     @Query('hourlyRate') hourlyRate: string,
     @Query('planType') planType: PlanType,
@@ -85,6 +100,7 @@ export class BookingsController {
 
   @Get(':id')
   @ApiOperation({ summary: 'Get booking by ID' })
+  @ApiOkResponse({ description: 'Booking retrieved', type: Booking })
   async findOne(
     @Param('id', ParseUUIDPipe) id: string,
     @GetCurrentUser('id') userId: string,
@@ -99,6 +115,7 @@ export class BookingsController {
   @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.STAFF)
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Confirm a booking (Admin/Staff)' })
+  @ApiOkResponse({ description: 'Booking confirmed', type: Booking })
   async confirm(@Param('id', ParseUUIDPipe) id: string) {
     const booking = await this.bookingsService.confirm(id);
     return { message: 'Booking confirmed successfully', data: booking };
@@ -107,6 +124,7 @@ export class BookingsController {
   @Patch(':id/cancel')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Cancel a booking' })
+  @ApiOkResponse({ description: 'Booking cancelled', type: Booking })
   async cancel(
     @Param('id', ParseUUIDPipe) id: string,
     @GetCurrentUser('id') userId: string,
@@ -121,6 +139,7 @@ export class BookingsController {
   @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.STAFF)
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Mark booking as completed (Admin/Staff)' })
+  @ApiOkResponse({ description: 'Booking completed', type: Booking })
   async complete(@Param('id', ParseUUIDPipe) id: string) {
     const booking = await this.bookingsService.complete(id);
     return { message: 'Booking completed successfully', data: booking };

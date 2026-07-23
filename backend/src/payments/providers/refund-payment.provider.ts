@@ -11,6 +11,13 @@ import { PaymentStatus } from '../enums/payment-status.enum';
 import { PaystackProvider } from './paystack.provider';
 import { UserRole } from '../../users/enums/userRoles.enum';
 
+/**
+ * Refunds a payment.
+ *
+ * Only the Payment row is mutated, so a single save is sufficient and
+ * the activity stays non-transactional (BE-12). Future work that adds
+ * a refund ledger row should wrap both writes in runInTransaction().
+ */
 @Injectable()
 export class RefundPaymentProvider {
   constructor(

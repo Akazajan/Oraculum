@@ -9,8 +9,18 @@ import {
 import { Transform, Type } from 'class-transformer';
 import { BookingStatus } from '../enums/booking-status.enum';
 import { ApiPropertyOptional } from '@nestjs/swagger';
+import { IsEnum, IsOptional, IsString, IsUUID } from 'class-validator';
+import { BookingStatus } from '../enums/booking-status.enum';
+import { PaginationDto } from '../../common/dto/pagination.dto';
 
 /**
+ * Query parameters for listing bookings (BE-15 acceptance).
+ * Inherits `page` / `limit` from the unified `PaginationDto` so
+ * defaults, validation, and the 100-item hard cap are identical
+ * to other list endpoints.
+ */
+export class BookingQueryDto extends PaginationDto {
+  @ApiPropertyOptional({ enum: BookingStatus })
  * Query parameters for booking list endpoints.
  *
  * Filtering:
@@ -47,6 +57,7 @@ export class BookingQueryDto {
   @IsEnum(BookingStatus)
   status?: BookingStatus;
 
+  @ApiPropertyOptional({ description: 'Filter by workspace UUID' })
   @ApiPropertyOptional({
     description:
       'Filter by multiple booking statuses (comma-separated, e.g. "pending,confirmed"). Overrides status when non-empty.',
@@ -70,17 +81,23 @@ export class BookingQueryDto {
   @IsUUID()
   workspaceId?: string;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({ description: 'Filter by user UUID (admin only)' })
   @IsOptional()
   @IsUUID()
   userId?: string;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({
+    example: '2026-04-01',
+    description: 'ISO date (Y/M/D)',
+  })
   @IsOptional()
   @IsString()
   startDate?: string;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({
+    example: '2026-04-30',
+    description: 'ISO date (Y/M/D)',
+  })
   @IsOptional()
   @IsString()
   endDate?: string;

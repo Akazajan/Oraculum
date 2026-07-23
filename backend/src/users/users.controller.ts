@@ -23,12 +23,24 @@ import {
   ApiConsumes,
   ApiBody,
   ApiBearerAuth,
+  ApiOkResponse,
+  ApiBadRequestResponse,
+  ApiNotFoundResponse,
+  ApiUnauthorizedResponse,
+  ApiForbiddenResponse,
 } from '@nestjs/swagger';
 
 import { UpdateUserDto } from './dto/updateUser.dto';
+import { ApiErrorDto } from '../common/dto/api-error.dto';
 
 @ApiTags('users')
-@ApiBearerAuth()
+@ApiBearerAuth('bearer')
+@ApiUnauthorizedResponse({
+  description: 'JWT missing or invalid',
+  type: ApiErrorDto,
+})
+@ApiForbiddenResponse({ description: 'Insufficient role', type: ApiErrorDto })
+@ApiNotFoundResponse({ description: 'User not found', type: ApiErrorDto })
 @Controller('users')
 export class UsersController {
   private readonly logger = new Logger(UsersController.name);
@@ -73,11 +85,19 @@ export class UsersController {
 
   @Post('reset-password')
   @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Reset a password using a reset token' })
+  @ApiOkResponse({ description: 'Password reset' })
+  @ApiBadRequestResponse({
+    description: 'Invalid token or password',
+    type: ApiErrorDto,
+  })
   async resetPassword(@Body() body: { token: string; newPassword: string }) {
     return this.usersService.resetPassword(body.token, body.newPassword);
   }
 
   @Get(':id')
+  @ApiOperation({ summary: 'Get a user by ID (public profile)' })
+  @ApiOkResponse({ description: 'User retrieved' })
   async findOne(@Param('id', ParseUUIDPipe) id: string) {
     const user = await this.usersService.findOnePublicById(id);
     return {
@@ -87,6 +107,7 @@ export class UsersController {
   }
   // GET /users
   @Get()
+  @ApiOperation({ summary: 'List all users' })
   async findAll() {
     const users = await this.usersService.findAllUsers();
     return { success: true, data: users };
@@ -94,6 +115,8 @@ export class UsersController {
 
   // PATCH /users/:id
   @Patch(':id')
+  @ApiOperation({ summary: 'Update a user' })
+  @ApiOkResponse({ description: 'User updated' })
   async update(
     @Param('id', new ParseUUIDPipe()) id: string,
     @Body() updateData: UpdateUserDto,
@@ -109,6 +132,7 @@ export class UsersController {
   // DELETE /users/:id
   @Delete(':id')
   @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({ summary: 'Delete a user' })
   async remove(@Param('id', new ParseUUIDPipe()) id: string) {
     await this.usersService.deleteUser(id);
     return;

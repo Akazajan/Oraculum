@@ -5,7 +5,7 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { DataSource, Repository } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
 import { Payment } from '../entities/payment.entity';
 import { PaymentStatus } from '../enums/payment-status.enum';
@@ -19,6 +19,7 @@ import { NotificationsService } from '../../notifications/notifications.service'
 import { NotificationType } from '../../notifications/enums/notification-type.enum';
 import { User } from '../../users/entities/user.entity';
 import { EmailService } from '../../email/email.service';
+import { runInTransaction } from '../../common/utils/run-in-transaction';
 
 const LONG_TERM_PLANS = new Set([
   PlanType.MONTHLY,
@@ -26,6 +27,12 @@ const LONG_TERM_PLANS = new Set([
   PlanType.YEARLY,
 ]);
 
+/**
+ * Processes Paystack webhooks. The critical state changes
+ * (Payment + Booking + on-chain escrow id) are wrapped in a
+ * single TypeORM transaction so a failure rolls all of them
+ * back (BE-12 acceptance).
+ */
 @Injectable()
 export class HandleWebhookProvider {
   private readonly logger = new Logger(HandleWebhookProvider.name);
@@ -44,6 +51,7 @@ export class HandleWebhookProvider {
     private readonly notificationsService: NotificationsService,
     private readonly emailService: EmailService,
     private readonly configService: ConfigService,
+    private readonly dataSource: DataSource,
   ) {}
 
   async handle(rawBody: Buffer, signature: string): Promise<void> {
@@ -86,45 +94,63 @@ export class HandleWebhookProvider {
     reference: string,
     data: Record<string, unknown>,
   ): Promise<void> {
-    const payment = await this.paymentsRepository.findOne({
-      where: { providerReference: reference },
+    const result = await runInTransaction(this.dataSource, async (manager) => {
+      const payment = await manager.findOne(Payment, {
+        where: { providerReference: reference },
+      });
+
+      if (!payment) {
+        this.logger.warn(
+          `charge.success: no payment found for reference ${reference}`,
+        );
+        return null;
+      }
+
+      if (payment.status === PaymentStatus.SUCCESS) {
+        this.logger.log(
+          `charge.success: payment ${payment.id} already succeeded — idempotent skip`,
+        );
+        return null;
+      }
+
+      payment.status = PaymentStatus.SUCCESS;
+      payment.paidAt = new Date();
+      payment.metadata = data;
+      await manager.save(payment);
+
+      // Confirm the booking inside our open transaction so the
+      // Payment + Booking + (later) Soroban escrow writes commit
+      // atomically. bookingsService.confirm accepts an optional
+      // EntityManager and reuses ours instead of starting a nested
+      // SAVEPOINT (BE-12).
+      const updatedBooking = await this.bookingsService.confirm(
+        payment.bookingId,
+        manager,
+      );
+
+      let escrowTxHash: string | null = null;
+      if (LONG_TERM_PLANS.has(updatedBooking.planType)) {
+        escrowTxHash = await this.recordSorobanEscrow(
+          manager,
+          payment,
+          updatedBooking,
+        );
+      }
+
+      return { payment, booking: updatedBooking, escrowTxHash };
     });
 
-    if (!payment) {
-      this.logger.warn(
-        `charge.success: no payment found for reference ${reference}`,
-      );
-      return;
-    }
+    if (!result) return;
 
-    if (payment.status === PaymentStatus.SUCCESS) {
-      this.logger.log(
-        `charge.success: payment ${payment.id} already succeeded — idempotent skip`,
-      );
-      return;
-    }
+    const { payment } = result;
 
-    payment.status = PaymentStatus.SUCCESS;
-    payment.paidAt = new Date();
-    payment.metadata = data;
-    await this.paymentsRepository.save(payment);
-
-    // Confirm the booking
-    const booking = await this.bookingsService.confirm(payment.bookingId);
-
-    // For long-term bookings, record on-chain escrow
-    if (LONG_TERM_PLANS.has(booking.planType)) {
-      await this.recordSorobanEscrow(payment, booking);
-    }
-
-    // Generate invoice asynchronously — do not block payment confirmation
+    // Best-effort side effects, run after the transaction committed.
     this.invoicesService.generateForPayment(payment.id).catch((err: Error) => {
       this.logger.error(
         `Failed to generate invoice for payment ${payment.id}: ${err.message}`,
       );
     });
 
-    // Send payment success email
     this.usersRepository
       .findOne({ where: { id: payment.userId } })
       .then((user) => {
@@ -148,7 +174,6 @@ export class HandleWebhookProvider {
       })
       .catch(() => void 0);
 
-    // Notify user
     this.notificationsService
       .create({
         userId: payment.userId,
@@ -160,30 +185,33 @@ export class HandleWebhookProvider {
       .catch(() => void 0);
 
     this.logger.log(
-      `charge.success: payment ${payment.id} succeeded, booking ${booking.id} confirmed`,
+      `charge.success: payment ${payment.id} succeeded, booking ${payment.bookingId} confirmed`,
     );
   }
 
   private async handleChargeFailed(reference: string): Promise<void> {
-    const payment = await this.paymentsRepository.findOne({
-      where: { providerReference: reference },
+    const payment = await runInTransaction(this.dataSource, async (manager) => {
+      const found = await manager.findOne(Payment, {
+        where: { providerReference: reference },
+      });
+
+      if (!found) {
+        this.logger.warn(
+          `charge.failed: no payment found for reference ${reference}`,
+        );
+        return null;
+      }
+
+      if (found.status !== PaymentStatus.PENDING) {
+        return null;
+      }
+
+      found.status = PaymentStatus.FAILED;
+      return manager.save(found);
     });
 
-    if (!payment) {
-      this.logger.warn(
-        `charge.failed: no payment found for reference ${reference}`,
-      );
-      return;
-    }
+    if (!payment) return;
 
-    if (payment.status !== PaymentStatus.PENDING) {
-      return;
-    }
-
-    payment.status = PaymentStatus.FAILED;
-    await this.paymentsRepository.save(payment);
-
-    // Send payment failed email
     this.usersRepository
       .findOne({ where: { id: payment.userId } })
       .then((user) => {
@@ -210,10 +238,16 @@ export class HandleWebhookProvider {
     this.logger.log(`charge.failed: payment ${payment.id} marked FAILED`);
   }
 
+  /**
+   * Write the Soroban escrow hash back onto the Booking row inside the
+   * same transaction so the booking + payment + escrow references
+   * land consistently.
+   */
   private async recordSorobanEscrow(
+    manager: import('typeorm').EntityManager,
     payment: Payment,
     booking: Booking,
-  ): Promise<void> {
+  ): Promise<string | null> {
     try {
       const beneficiary = this.configService.get<string>(
         'STELLAR_BENEFICIARY_ADDRESS',
@@ -231,18 +265,20 @@ export class HandleWebhookProvider {
         releaseAfterUnix,
       );
 
-      await this.bookingsRepository.update(booking.id, {
+      await manager.update(Booking, booking.id, {
         sorobanEscrowId: txHash,
       });
 
       this.logger.log(
         `Soroban escrow recorded for booking ${booking.id}: ${txHash}`,
       );
+      return txHash;
     } catch (err) {
-      // Non-critical — log but do not fail the payment confirmation
+      // Non-critical — log but do not fail the payment confirmation.
       this.logger.error(
         `Failed to record Soroban escrow for booking ${booking.id}: ${(err as Error).message}`,
       );
+      return null;
     }
   }
 }

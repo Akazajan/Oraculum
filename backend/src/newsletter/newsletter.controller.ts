@@ -7,6 +7,7 @@ import {
   Req,
   UseGuards,
 } from '@nestjs/common';
+import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Throttle, seconds } from '@nestjs/throttler';
 import { NewsletterService } from './newsletter.service';
 import {
@@ -22,6 +23,7 @@ import { Public } from '../auth/decorators/public.decorator';
 
 type AnyRequest = { ip?: string; headers?: Record<string, unknown> };
 
+@ApiTags('newsletter')
 @Controller('newsletter')
 export class NewsletterController {
   constructor(private readonly service: NewsletterService) {}
@@ -29,6 +31,7 @@ export class NewsletterController {
   @Public()
   @Throttle({ newsletter: { ttl: seconds(60), limit: 5 } })
   @Post('subscribe')
+  @ApiOperation({ summary: 'Subscribe an email to the newsletter' })
   async subscribe(@Body() dto: SubscribeNewsletterDto, @Req() req: AnyRequest) {
     const ip = this.getClientIp(req);
     const data = await this.service.subscribe(dto.email, ip);
@@ -43,6 +46,7 @@ export class NewsletterController {
   @Public()
   @Throttle({ newsletter: { ttl: seconds(60), limit: 20 } })
   @Post('confirm')
+  @ApiOperation({ summary: 'Confirm a pending newsletter subscription' })
   async confirm(@Body() dto: ConfirmNewsletterDto) {
     return this.service.confirm(dto.token);
   }
@@ -50,13 +54,16 @@ export class NewsletterController {
   @Public()
   @Throttle({ newsletter: { ttl: seconds(60), limit: 20 } })
   @Post('unsubscribe')
+  @ApiOperation({ summary: 'Unsubscribe using a token delivered by email' })
   async unsubscribe(@Body() dto: UnsubscribeNewsletterDto) {
     return this.service.unsubscribe(dto.token);
   }
 
   @UseGuards(RolesGuard)
   @Roles(UserRole.ADMIN)
+  @ApiBearerAuth('bearer')
   @Get('subscribers')
+  @ApiOperation({ summary: 'List subscribers (Admin only)' })
   async listSubscribers(@Query() query: PaginationQueryDto) {
     return this.service.listSubscribers(query);
   }

@@ -16,6 +16,9 @@ import {
   ApiOperation,
   ApiQuery,
   ApiTags,
+  ApiOkResponse,
+  ApiUnauthorizedResponse,
+  ApiForbiddenResponse,
 } from '@nestjs/swagger';
 import { WorkspaceTrackingService } from './workspace-tracking.service';
 import { CheckInDto } from './dto/check-in.dto';
@@ -24,9 +27,15 @@ import { GetCurrentUser } from '../auth/decorators/getCurrentUser.decorator';
 import { Roles } from '../auth/decorators/roles.decorators';
 import { RolesGuard } from '../auth/guard/roles.guard';
 import { UserRole } from '../users/enums/userRoles.enum';
+import { ApiErrorDto } from '../common/dto/api-error.dto';
 
-@ApiTags('Workspace Tracking')
-@ApiBearerAuth()
+@ApiTags('workspace-tracking')
+@ApiBearerAuth('bearer')
+@ApiUnauthorizedResponse({
+  description: 'JWT missing or invalid',
+  type: ApiErrorDto,
+})
+@ApiForbiddenResponse({ description: 'Insufficient role', type: ApiErrorDto })
 @UseGuards(RolesGuard)
 @Controller('workspace-tracking')
 export class WorkspaceTrackingController {
@@ -37,6 +46,7 @@ export class WorkspaceTrackingController {
   @Post('check-in')
   @Roles(UserRole.USER, UserRole.STAFF, UserRole.ADMIN, UserRole.SUPER_ADMIN)
   @ApiOperation({ summary: 'Check into a workspace' })
+  @ApiOkResponse({ description: 'Check-in recorded' })
   async checkIn(@Body() dto: CheckInDto, @GetCurrentUser('id') userId: string) {
     const data = await this.workspaceTrackingService.checkIn(dto, userId);
     return { message: 'Checked in successfully', data };
@@ -46,6 +56,7 @@ export class WorkspaceTrackingController {
   @Roles(UserRole.USER, UserRole.STAFF, UserRole.ADMIN, UserRole.SUPER_ADMIN)
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Check out of a workspace' })
+  @ApiOkResponse({ description: 'Check-out recorded' })
   async checkOut(
     @Param('logId', ParseUUIDPipe) logId: string,
     @GetCurrentUser('id') userId: string,
@@ -58,6 +69,7 @@ export class WorkspaceTrackingController {
   @Roles(UserRole.USER, UserRole.STAFF, UserRole.ADMIN, UserRole.SUPER_ADMIN)
   @ApiOperation({ summary: 'Get my current active check-in' })
   @ApiQuery({ name: 'workspaceId', required: false, type: String })
+  @ApiOkResponse({ description: 'Active check-in returned (may be null)' })
   async getActiveCheckIn(
     @GetCurrentUser('id') userId: string,
     @Query('workspaceId') workspaceId?: string,
@@ -73,6 +85,7 @@ export class WorkspaceTrackingController {
   @Roles(UserRole.STAFF, UserRole.ADMIN, UserRole.SUPER_ADMIN)
   @ApiOperation({ summary: 'Get current occupancy for all (or one) workspace' })
   @ApiQuery({ name: 'workspaceId', required: false, type: String })
+  @ApiOkResponse({ description: 'Occupancy returned' })
   async getCurrentOccupancy(@Query('workspaceId') workspaceId?: string) {
     const data =
       await this.workspaceTrackingService.getCurrentOccupancy(workspaceId);
@@ -82,6 +95,7 @@ export class WorkspaceTrackingController {
   @Get('utilization')
   @Roles(UserRole.STAFF, UserRole.ADMIN, UserRole.SUPER_ADMIN)
   @ApiOperation({ summary: 'Get utilization statistics' })
+  @ApiOkResponse({ description: 'Utilization returned' })
   async getUtilizationStats(@Query() query: OccupancyQueryDto) {
     const data = await this.workspaceTrackingService.getUtilizationStats(query);
     return { message: 'Utilization stats retrieved', data };
@@ -92,6 +106,7 @@ export class WorkspaceTrackingController {
   @ApiOperation({ summary: 'Get recent check-in logs' })
   @ApiQuery({ name: 'workspaceId', required: false, type: String })
   @ApiQuery({ name: 'limit', required: false, type: Number })
+  @ApiOkResponse({ description: 'Recent logs returned' })
   async getRecentLogs(
     @Query('workspaceId') workspaceId?: string,
     @Query('limit') limit?: string,

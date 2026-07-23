@@ -17,6 +17,11 @@ import {
   ApiBearerAuth,
   ApiOperation,
   ApiQuery,
+  ApiOkResponse,
+  ApiBadRequestResponse,
+  ApiNotFoundResponse,
+  ApiUnauthorizedResponse,
+  ApiForbiddenResponse,
 } from '@nestjs/swagger';
 import { WorkspacesService } from './workspaces.service';
 import { CreateWorkspaceDto } from './dto/create-workspace.dto';
@@ -27,9 +32,17 @@ import { Roles } from '../auth/decorators/roles.decorators';
 import { UserRole } from '../users/enums/userRoles.enum';
 import { Public } from '../auth/decorators/public.decorator';
 import { GetCurrentUser } from '../auth/decorators/getCurrentUser.decorator';
+import { ApiErrorDto } from '../common/dto/api-error.dto';
+import { Workspace } from './entities/workspace.entity';
 
 @ApiTags('workspaces')
-@ApiBearerAuth()
+@ApiBearerAuth('bearer')
+@ApiUnauthorizedResponse({
+  description: 'JWT missing or invalid',
+  type: ApiErrorDto,
+})
+@ApiForbiddenResponse({ description: 'Insufficient role', type: ApiErrorDto })
+@ApiNotFoundResponse({ description: 'Workspace not found', type: ApiErrorDto })
 @Controller('workspaces')
 export class WorkspacesController {
   constructor(private readonly workspacesService: WorkspacesService) {}
@@ -38,6 +51,8 @@ export class WorkspacesController {
   @UseGuards(RolesGuard)
   @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN)
   @ApiOperation({ summary: 'Create a new workspace (Admin only)' })
+  @ApiOkResponse({ description: 'Workspace created', type: Workspace })
+  @ApiBadRequestResponse({ description: 'Validation error', type: ApiErrorDto })
   async create(@Body() dto: CreateWorkspaceDto) {
     const workspace = await this.workspacesService.create(dto);
     return { message: 'Workspace created successfully', data: workspace };
@@ -45,7 +60,7 @@ export class WorkspacesController {
 
   @Get()
   @Public()
-  @ApiOperation({ summary: 'List all active workspaces' })
+  @ApiOperation({ summary: 'List active workspaces' })
   async findAll(@Query() query: WorkspaceQueryDto) {
     const result = await this.workspacesService.findAll(query);
     return { message: 'Workspaces retrieved successfully', ...result };
@@ -63,6 +78,7 @@ export class WorkspacesController {
   @Get(':id')
   @Public()
   @ApiOperation({ summary: 'Get workspace by ID' })
+  @ApiOkResponse({ description: 'Workspace retrieved', type: Workspace })
   async findOne(@Param('id', ParseUUIDPipe) id: string) {
     const workspace = await this.workspacesService.findById(id);
     return { message: 'Workspace retrieved successfully', data: workspace };
@@ -87,6 +103,7 @@ export class WorkspacesController {
   @UseGuards(RolesGuard)
   @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.STAFF)
   @ApiOperation({ summary: 'Update workspace (Admin/Staff)' })
+  @ApiOkResponse({ description: 'Workspace updated', type: Workspace })
   async update(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateWorkspaceDto,
@@ -100,6 +117,7 @@ export class WorkspacesController {
   @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN)
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Deactivate workspace (Admin only)' })
+  @ApiOkResponse({ description: 'Workspace deactivated' })
   async remove(@Param('id', ParseUUIDPipe) id: string) {
     await this.workspacesService.softDelete(id);
     return { message: 'Workspace deactivated successfully' };

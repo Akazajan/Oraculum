@@ -3,10 +3,26 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Payment } from '../entities/payment.entity';
 import { UserRole } from '../../users/enums/userRoles.enum';
+import { ApiPropertyOptional } from '@nestjs/swagger';
+import { IsOptional, IsUUID } from 'class-validator';
+import {
+  DEFAULT_LIMIT,
+  DEFAULT_PAGE,
+  PaginationDto,
+  paginatedResponse,
+} from '../../common/dto/pagination.dto';
 
-export class PaymentQuery {
-  page?: number;
-  limit?: number;
+/**
+ * Query parameters for listing payments (BE-15 acceptance).
+ *
+ * Extends the unified `PaginationDto` so defaults (page=1,
+ * limit=20, max=100) and validation messages are identical
+ * across every list endpoint.
+ */
+export class PaymentQuery extends PaginationDto {
+  @ApiPropertyOptional({ description: 'Filter by booking UUID' })
+  @IsOptional()
+  @IsUUID()
   bookingId?: string;
 }
 
@@ -21,9 +37,9 @@ export class FindPaymentsProvider {
     query: PaymentQuery,
     requestingUserId: string,
     requestingUserRole: UserRole,
-  ): Promise<{ data: Payment[]; total: number; page: number; limit: number }> {
-    const page = query.page ?? 1;
-    const limit = Math.min(query.limit ?? 20, 100);
+  ) {
+    const page = query.page ?? DEFAULT_PAGE;
+    const limit = query.limit ?? DEFAULT_LIMIT;
     const skip = (page - 1) * limit;
 
     const isAdmin =
@@ -46,7 +62,13 @@ export class FindPaymentsProvider {
     qb.orderBy('payment.createdAt', 'DESC').skip(skip).take(limit);
 
     const [data, total] = await qb.getManyAndCount();
-    return { data, total, page, limit };
+    return paginatedResponse(
+      'Payments retrieved successfully',
+      data,
+      total,
+      page,
+      limit,
+    );
   }
 
   async findById(
