@@ -26,6 +26,7 @@ import { GetMemberStatsProvider } from './get-member-stats.provider';
 import { MemberQueryDto } from '../dto/member-query.dto';
 import { MembershipStatus } from '../enums/membership-status.enum';
 import { computeProfileCompleteness } from '../utils/profile-completeness.util';
+import { AuditAction, AuditService } from '../../audit/audit.service';
 
 @Injectable()
 export class UsersService {
@@ -60,6 +61,7 @@ export class UsersService {
     private readonly getMembersProvider: GetMembersProvider,
     private readonly updateMemberStatusProvider: UpdateMemberStatusProvider,
     private readonly getMemberStatsProvider: GetMemberStatsProvider,
+    private readonly auditService: AuditService,
   ) {}
 
   // CREATE USER
@@ -75,14 +77,18 @@ export class UsersService {
     return await this.findAllUsersProvider.getUsers();
   }
 
+  async findAllUsersIncludingDeleted(): Promise<User[]> {
+    return await this.findAllUsersProvider.getUsers(true);
+  }
+
   // FIND ALL ADMINS
   async findAllAdmins(): Promise<User[]> {
     return await this.findAllAdminsProvider.getAdmins();
   }
 
   // FIND USER BY ID
-  async findUserById(id: string): Promise<User> {
-    return await this.findOneUserByIdProvider.getUser(id);
+  async findUserById(id: string, withDeleted = false): Promise<User> {
+    return await this.findOneUserByIdProvider.getUser(id, withDeleted);
   }
 
   // FIND ADMIN BY ID
@@ -111,12 +117,61 @@ export class UsersService {
 
   // UPDATE USER
   async updateUser(id: string, updateData: UpdateUserDto): Promise<User> {
-    return await this.updateUserProvider.updateUser(id, updateData);
+    const previous = await this.findUserById(id);
+    const updated = await this.updateUserProvider.updateUser(id, updateData);
+
+    // BE-03 — Emit a role-change audit row when only the `role` field
+    // changed. Captures both the old and new role so the trace is
+    // complete.
+    if (
+      updateData.role !== undefined &&
+      previous.role !== updated.role
+    ) {
+      await this.auditService.adminAction(
+        AuditAction.ROLE_CHANGED,
+        {}, // actor comes from the ALS context
+        'User',
+        updated.id,
+        {
+          from: previous.role,
+          to: updated.role,
+          email: updated.email,
+        },
+      );
+    } else if (Object.keys(updateData).length > 0) {
+      await this.auditService.adminAction(
+        AuditAction.USER_UPDATED,
+        {},
+        'User',
+        updated.id,
+        { email: updated.email, fields: Object.keys(updateData) },
+      );
+    }
+
+    return updated;
   }
 
   // DELETE USER
   async deleteUser(id: string): Promise<void> {
     return await this.deleteUserProvider.deleteUser(id);
+  }
+
+  // RESTORE USER
+  async restoreUser(id: string): Promise<User> {
+    const existing = await this.findUserById(id, true);
+    if (!existing.deletedAt) {
+      throw new NotFoundException(`User with ID ${id} is not deleted`);
+    }
+    await this.usersRepository.restore(id);
+    await this.usersRepository.update(id, { isActive: true });
+    await this.auditService.adminAction(
+      AuditAction.USER_RESTORED,
+      {},
+      'User',
+      id,
+      { email: existing.email },
+    );
+    return await this.findUserById(id);
   }
 
   // VALIDATE USER
@@ -131,12 +186,31 @@ export class UsersService {
     currentUserId: string,
     currentUserRole: UserRole,
   ): Promise<{ id: string; profilePicture: string }> {
-    return await this.uploadProfilePictureProvider.uploadProfilePicture(
-      targetUserId,
-      file,
-      currentUserId,
-      currentUserRole,
-    );
+    try {
+      const result = await this.uploadProfilePictureProvider.uploadProfilePicture(
+        targetUserId,
+        file,
+        currentUserId,
+        currentUserRole,
+      );
+      await this.auditService.adminAction(
+        AuditAction.PROFILE_PICTURE_UPDATED,
+        { id: currentUserId, role: currentUserRole },
+        'User',
+        targetUserId,
+      );
+      return result;
+    } catch (err) {
+      await this.auditService.log({
+        action: AuditAction.PROFILE_PICTURE_FAILED,
+        outcome: 'FAILURE',
+        actor: { id: currentUserId, role: currentUserRole },
+        resourceType: 'User',
+        resourceId: targetUserId,
+        metadata: { reason: (err as Error)?.message },
+      });
+      throw err;
+    }
   }
 
   // UPDATE PROFILE PICTURE (legacy save method if needed elsewhere)
@@ -177,12 +251,26 @@ export class UsersService {
   }
 
   // MEMBERS
-  async getMembers(query: MemberQueryDto) {
-    return this.getMembersProvider.getMembers(query);
+  async getMembers(query: MemberQueryDto, withDeleted = false) {
+    return this.getMembersProvider.getMembers(query, withDeleted);
   }
 
   async updateMemberStatus(memberId: string, status: MembershipStatus) {
-    return this.updateMemberStatusProvider.updateStatus(memberId, status);
+    const updated = await this.updateMemberStatusProvider.updateStatus(
+      memberId,
+      status,
+    );
+    await this.auditService.adminAction(
+      AuditAction.MEMBERSHIP_STATUS_CHANGED,
+      {},
+      'User',
+      memberId,
+      {
+        status,
+        email: updated.email,
+      },
+    );
+    return updated;
   }
 
   async getMemberStats() {

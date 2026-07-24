@@ -1,49 +1,45 @@
-// src/users/dto/updateUser.dto.ts
 import {
-  IsString,
   IsEmail,
   IsOptional,
-  MinLength,
+  IsString,
   MaxLength,
-  Matches,
+  MinLength,
 } from 'class-validator';
 import { UserRole } from '../enums/userRoles.enum';
+import { SanitizeString } from '../../common/transformers/sanitize-string.transformer';
+import { OptionalStrongPassword } from '../../common/decorators/strong-password.decorator';
 
+/** BE-01 — Users update DTO now uses the shared strong-password rule. */
 export class UpdateUserDto {
   @IsOptional()
   @IsString()
   @MinLength(1)
   @MaxLength(30)
+  @SanitizeString()
   firstname?: string;
 
   @IsOptional()
   @IsString()
   @MinLength(1)
   @MaxLength(30)
+  @SanitizeString()
   lastname?: string;
 
   @IsOptional()
   @IsString()
   @MinLength(1)
   @MaxLength(20)
+  @SanitizeString()
   username?: string;
 
   @IsOptional()
   @IsEmail()
   @MaxLength(50)
+  @SanitizeString()
   email?: string;
 
   @IsOptional()
-  @IsString()
-  @MinLength(8)
-  @MaxLength(80)
-  @Matches(
-    /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&\-_.])[A-Za-z\d@$!%*?&\-_.]+$/,
-    {
-      message:
-        'Password must contain at least one lowercase letter, one uppercase letter, one number, and one special character (@$!%*?&-_.).',
-    },
-  )
+  @OptionalStrongPassword()
   password?: string;
 
   @IsOptional()
@@ -51,6 +47,7 @@ export class UpdateUserDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(500)
   verificationToken?: string;
 
   @IsOptional()
@@ -58,6 +55,7 @@ export class UpdateUserDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(500)
   passwordResetToken?: string;
 
   @IsOptional()

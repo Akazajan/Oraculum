@@ -1,26 +1,24 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsNotEmpty, IsString, MinLength, MaxLength } from 'class-validator';
+import { IsNotEmpty, IsString, MaxLength } from 'class-validator';
+import { SanitizeString } from '../../common/transformers/sanitize-string.transformer';
+import { StrongPassword } from '../../common/decorators/strong-password.decorator';
 
+/** BE-01 — Reset-password DTO now uses the shared strong-password rule. */
 export class ResetPasswordDto {
-  @ApiProperty({
-    example: '482917',
-    description: 'OTP delivered via reset email',
-  })
-  @IsNotEmpty()
+  @ApiProperty({ example: '123456' })
   @IsString()
-  @MaxLength(6)
+  @MaxLength(8)
+  @IsNotEmpty({ message: 'otp is required' })
+  @SanitizeString()
   otp: string;
 
-  @ApiProperty({ example: 'N3wSup3r$ecret!', minLength: 8 })
-  @IsNotEmpty()
-  @IsString()
-  @MinLength(8, { message: 'New password must be at least 8 characters long' })
-  @MaxLength(80)
-  @IsString()
+  @ApiProperty({ example: 'Sup3r$ecret!' })
+  @IsNotEmpty({ message: 'newPassword is required' })
+  @StrongPassword()
   newPassword: string;
 
-  @ApiProperty({ example: 'N3wSup3r$ecret!' })
-  @IsNotEmpty()
-  @IsString()
+  @ApiProperty({ example: 'Sup3r$ecret!' })
+  @IsNotEmpty({ message: 'confirmNewPassword is required' })
+  @StrongPassword()
   confirmNewPassword: string;
 }

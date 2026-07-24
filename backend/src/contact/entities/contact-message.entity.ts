@@ -4,9 +4,18 @@ import {
   Column,
   CreateDateColumn,
   UpdateDateColumn,
+  DeleteDateColumn,
+  Index,
 } from 'typeorm';
 
+/**
+ * BE-14 — Contact messages are soft-deleted via TypeORM's
+ * `@DeleteDateColumn`. Default queries automatically exclude
+ * soft-deleted messages; the admin surface exposes an opt-in endpoint
+ * to inspect / restore them.
+ */
 @Entity('contact_messages')
+@Index(['deletedAt'])
 export class ContactMessage {
   @PrimaryGeneratedColumn('uuid')
   id: string;
@@ -40,4 +49,7 @@ export class ContactMessage {
 
   @UpdateDateColumn()
   updatedAt: Date;
+
+  @DeleteDateColumn()
+  deletedAt: Date | null;
 }

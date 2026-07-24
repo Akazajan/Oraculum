@@ -1,22 +1,20 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { MinLength, IsNotEmpty, IsEmail, MaxLength } from 'class-validator';
+import { IsEmail, IsNotEmpty, IsString, MaxLength } from 'class-validator';
+import { SanitizeString } from '../../common/transformers/sanitize-string.transformer';
 
+/** BE-01 — Login DTO now sanitises free-text inputs. */
 export class LoginUserDto {
-  @ApiProperty({
-    example: 'jane.doe@example.com',
-    description: 'Registered user email',
-  })
+  @ApiProperty({ example: 'jane.doe@example.com' })
   @IsEmail({}, { message: 'Please provide a valid email' })
   @MaxLength(254)
+  @IsNotEmpty({ message: 'email is required' })
+  @SanitizeString()
   email: string;
 
-  @ApiProperty({
-    example: 'Sup3r$ecret!',
-    minLength: 8,
-    description: 'Plain-text password (sent to the API over HTTPS only)',
-  })
-  @IsNotEmpty({ message: 'password can not be empty' })
-  @MinLength(8, { message: 'password must be at least 8 character long' })
+  @ApiProperty({ example: 'Sup3r$ecret!' })
+  @IsString()
   @MaxLength(80)
+  @IsNotEmpty({ message: 'password is required' })
+  @SanitizeString()
   password: string;
 }

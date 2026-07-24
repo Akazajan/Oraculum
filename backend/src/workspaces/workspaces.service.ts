@@ -25,12 +25,22 @@ export class WorkspacesService {
     return this.createWorkspaceProvider.create(dto);
   }
 
-  findAll(query: WorkspaceQueryDto, adminView = false) {
-    return this.findAllWorkspacesProvider.findAll(query, adminView);
+  findAll(
+    query: WorkspaceQueryDto,
+    adminView = false,
+    includeDeleted = false,
+  ) {
+    return this.findAllWorkspacesProvider.findAll(query, {
+      adminView,
+      includeDeleted,
+    });
   }
 
-  findById(id: string): Promise<Workspace> {
-    return this.findWorkspaceByIdProvider.findById(id);
+  findById(
+    id: string,
+    options: { withDeleted?: boolean } = {},
+  ): Promise<Workspace> {
+    return this.findWorkspaceByIdProvider.findById(id, options);
   }
 
   update(id: string, dto: UpdateWorkspaceDto) {
@@ -39,6 +49,10 @@ export class WorkspacesService {
 
   softDelete(id: string) {
     return this.deleteWorkspaceProvider.softDelete(id);
+  }
+
+  restore(id: string) {
+    return this.deleteWorkspaceProvider.restore(id);
   }
 
   checkAvailability(workspaceId: string, requestedSeats?: number) {

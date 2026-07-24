@@ -9,46 +9,23 @@ import {
 import { Transform, Type } from 'class-transformer';
 import { BookingStatus } from '../enums/booking-status.enum';
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsEnum, IsOptional, IsString, IsUUID } from 'class-validator';
-import { BookingStatus } from '../enums/booking-status.enum';
 import { PaginationDto } from '../../common/dto/pagination.dto';
 
 /**
- * Query parameters for listing bookings (BE-15 acceptance).
- * Inherits `page` / `limit` from the unified `PaginationDto` so
- * defaults, validation, and the 100-item hard cap are identical
- * to other list endpoints.
- */
-export class BookingQueryDto extends PaginationDto {
-  @ApiPropertyOptional({ enum: BookingStatus })
  * Query parameters for booking list endpoints.
  *
  * Filtering:
  * - `status`: single status value (e.g. ?status=pending)
  * - `statuses`: comma-separated list (e.g. ?statuses=pending,confirmed)
  *
- * When both are supplied, both filters are applied (intersection, i.e. the
- * `statuses` field takes precedence when it contains more than one value).
+ * When both are supplied, `statuses` takes precedence when it contains
+ * more than one value.
  *
  * Pagination:
  * - `page`: 1-indexed page number, default 1
  * - `limit`: page size, default 20
  */
-export class BookingQueryDto {
-  @ApiPropertyOptional({ default: 1 })
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  page?: number = 1;
-
-  @ApiPropertyOptional({ default: 20 })
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  limit?: number = 20;
-
+export class BookingQueryDto extends PaginationDto {
   @ApiPropertyOptional({
     enum: BookingStatus,
     description: 'Filter by a single booking status',
@@ -57,7 +34,6 @@ export class BookingQueryDto {
   @IsEnum(BookingStatus)
   status?: BookingStatus;
 
-  @ApiPropertyOptional({ description: 'Filter by workspace UUID' })
   @ApiPropertyOptional({
     description:
       'Filter by multiple booking statuses (comma-separated, e.g. "pending,confirmed"). Overrides status when non-empty.',
@@ -76,7 +52,7 @@ export class BookingQueryDto {
   )
   statuses?: string;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({ description: 'Filter by workspace UUID' })
   @IsOptional()
   @IsUUID()
   workspaceId?: string;

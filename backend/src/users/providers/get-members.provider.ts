@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, SelectQueryBuilder } from 'typeorm';
 import { User } from '../entities/user.entity';
 import { MemberQueryDto } from '../dto/member-query.dto';
 
@@ -12,6 +12,16 @@ export interface PaginatedMembers {
   totalPages: number;
 }
 
+/**
+ * BE-14 — Members list automatically excludes soft-deleted users
+ * because the TypeORM `User` repository uses `@DeleteDateColumn`.
+ * The legacy `user.isDeleted = :isDeleted` filter is no longer
+ * required; the column is preserved for backward compatibility but
+ * not written by service code.
+ *
+ * Admins can opt into viewing tombstones by passing `withDeleted:
+ * true` (the dedicated admin endpoint uses that mode).
+ */
 @Injectable()
 export class GetMembersProvider {
   constructor(
@@ -19,10 +29,13 @@ export class GetMembersProvider {
     private readonly usersRepository: Repository<User>,
   ) {}
 
-  async getMembers(query: MemberQueryDto): Promise<PaginatedMembers> {
+  async getMembers(
+    query: MemberQueryDto,
+    withDeleted = false,
+  ): Promise<PaginatedMembers> {
     const { page = 1, limit = 20, status, search } = query;
 
-    const qb = this.usersRepository
+    const qb: SelectQueryBuilder<User> = this.usersRepository
       .createQueryBuilder('user')
       .select([
         'user.id',
@@ -39,9 +52,24 @@ export class GetMembersProvider {
         'user.isVerified',
         'user.isActive',
         'user.isSuspended',
+        'user.deletedAt',
         'user.createdAt',
-      ])
-      .where('user.isDeleted = :isDeleted', { isDeleted: false });
+      ]);
+
+    // TypeORM's QueryBuilder.withDeleted() toggles the soft-delete
+    // filter. The argument-style call is not part of this version of
+    // the API, so we conditionally invoke it.
+    if (withDeleted) {
+      qb.withDeleted();
+    }
+
+    qb.where('user.isDeleted = :isDeleted', { isDeleted: false });
+
+    if (withDeleted) {
+      // When surfacing tombstones, only show rows whose deletedAt is
+      // actually set so the list is meaningful.
+      qb.andWhere('user.deletedAt IS NOT NULL');
+    }
 
     if (status) {
       qb.andWhere('user.membershipStatus = :status', { status });

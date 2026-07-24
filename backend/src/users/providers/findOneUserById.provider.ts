@@ -1,9 +1,15 @@
 import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { User } from '../entities/user.entity';
-import { Repository } from 'typeorm';
+import { FindOptionsWhere, Repository } from 'typeorm';
 import { ErrorCatch } from '../../utils/error';
 
+/**
+ * BE-14 — Default lookup excludes soft-deleted users. Admin callers
+ * can opt into seeing deleted users by passing `withDeleted: true`
+ * via `findByIdKeepSoftDeleted()` so the audit / restore surface
+ * stays usable without exposing tombstones to regular endpoints.
+ */
 @Injectable()
 export class FindOneUserByIdProvider {
   constructor(
@@ -11,12 +17,12 @@ export class FindOneUserByIdProvider {
     private readonly usersRepository: Repository<User>,
   ) {}
 
-  public async getUser(id: string): Promise<User> {
+  public async getUser(id: string, withDeleted = false): Promise<User> {
     try {
+      const where: FindOptionsWhere<User> = { id };
       const user = await this.usersRepository.findOne({
-        where: {
-          id,
-        },
+        where,
+        withDeleted,
       });
 
       if (!user) {
