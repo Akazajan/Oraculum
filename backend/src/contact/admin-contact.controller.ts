@@ -8,7 +8,12 @@ import {
   HttpCode,
   HttpStatus,
   UseGuards,
+  UploadedFile,
+  Post,
+  UseInterceptors,
+  Body,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import {
   ApiBearerAuth,
   ApiForbiddenResponse,
@@ -57,6 +62,18 @@ export class AdminContactController {
   async listDeleted() {
     const items = await this.contactService.listDeleted();
     return { message: 'Deleted messages retrieved', data: items };
+  }
+
+  @Post('import')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Import contact records from CSV or structured files' })
+  @ApiConsumes('multipart/form-data')
+  @UseInterceptors(FileInterceptor('file'))
+  async importContacts(
+    @UploadedFile() file: Express.Multer.File,
+    @Body() body?: { source?: string },
+  ) {
+    return this.contactService.importContacts(file, body?.source);
   }
 
   @Patch(':id/read')

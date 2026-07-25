@@ -41,6 +41,9 @@ export class ContactMessage {
   @Column('varchar', { length: 64, nullable: true })
   ipAddress?: string;
 
+  @Column('varchar', { length: 100, nullable: true })
+  source?: string;
+
   @Column({ type: 'boolean', default: false })
   isRead: boolean;
 

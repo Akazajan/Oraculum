@@ -1,10 +1,17 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { ContactMessage } from './entities/contact-message.entity';
 import { SubmitContactDto } from './dto/submit-contact.dto';
 import { EmailService } from '../email/email.service';
 import { AuditAction, AuditService } from '../audit/audit.service';
+import { IMPORT_BATCH_SIZE, IMPORT_MAX_ROWS } from '../config/import.config';
+import { parseImportContent } from '../common/utils/contact-import.utils';
 
 /**
  * Contact form messages:
@@ -69,6 +76,107 @@ export class ContactService {
       );
 
     return { message: 'Your message has been sent successfully.' };
+  }
+
+  async importContacts(
+    file: Express.Multer.File,
+    source?: string,
+  ): Promise<{
+    importedCount: number;
+    failedCount: number;
+    totalRows: number;
+    errors: Array<{ row: number; message: string }>;
+  }> {
+    if (!file?.buffer?.length) {
+      throw new BadRequestException('A CSV or structured text file is required');
+    }
+
+    const content = file.buffer.toString('utf8');
+    const rows = parseImportContent(content, file.mimetype);
+
+    if (rows.length === 0) {
+      throw new BadRequestException('No contact rows were found in the uploaded file');
+    }
+
+    if (rows.length > IMPORT_MAX_ROWS) {
+      throw new BadRequestException(
+        `Import exceeds the maximum supported row count of ${IMPORT_MAX_ROWS}`,
+      );
+    }
+
+    const errors: Array<{ row: number; message: string }> = [];
+    const validPayloads: Partial<ContactMessage>[] = [];
+
+    for (const [index, row] of rows.entries()) {
+      const rowNumber = index + 2;
+      const payload = this.normalizeRow(row);
+      const validation = this.validateRow(payload);
+
+      if (validation) {
+        errors.push({ row: rowNumber, message: validation });
+        continue;
+      }
+
+      validPayloads.push({
+        ...payload,
+        source: source?.trim() || 'bulk-import',
+      });
+    }
+
+    let importedCount = 0;
+    for (let start = 0; start < validPayloads.length; start += IMPORT_BATCH_SIZE) {
+      const batch = validPayloads.slice(start, start + IMPORT_BATCH_SIZE);
+      const created = this.contactRepo.create(batch);
+      await this.contactRepo.save(created);
+      importedCount += created.length;
+    }
+
+    await this.auditService.log({
+      action: AuditAction.CONTACT_SUBMITTED,
+      resourceType: 'ContactMessageImport',
+      metadata: { source, importedCount, failedCount: errors.length },
+    });
+
+    return {
+      importedCount,
+      failedCount: errors.length,
+      totalRows: rows.length,
+      errors,
+    };
+  }
+
+  private normalizeRow(row: Record<string, string>): Partial<ContactMessage> {
+    return {
+      fullName: row.fullname || row.name || row.full_name || '',
+      email: row.email || '',
+      phone: row.phone || undefined,
+      company: row.company || undefined,
+      subject: row.subject || '',
+      message: row.message || '',
+      ipAddress: undefined,
+    };
+  }
+
+  private validateRow(payload: Partial<ContactMessage>): string | null {
+    if (!payload.fullName || !payload.fullName.trim()) {
+      return 'fullName is required';
+    }
+    if (!payload.email || !payload.email.trim()) {
+      return 'email is required';
+    }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(payload.email)) {
+      return 'email must be a valid email address';
+    }
+    if (!payload.subject || !payload.subject.trim()) {
+      return 'subject is required';
+    }
+    if (!payload.message || !payload.message.trim()) {
+      return 'message is required';
+    }
+    if ((payload.message?.trim().length ?? 0) < 10) {
+      return 'message must be at least 10 characters long';
+    }
+    return null;
   }
 
   async listMessages(includeDeleted = false): Promise<ContactMessage[]> {
