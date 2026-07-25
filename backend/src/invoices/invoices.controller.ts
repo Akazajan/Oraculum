@@ -17,6 +17,7 @@ import {
   ApiUnauthorizedResponse,
   ApiForbiddenResponse,
   ApiNotFoundResponse,
+  ApiQuery,
 } from '@nestjs/swagger';
 import { InvoicesService } from './invoices.service';
 import { InvoiceQueryDto } from './dto/invoice-query.dto';
@@ -25,6 +26,8 @@ import { Roles } from '../auth/decorators/roles.decorators';
 import { RolesGuard } from '../auth/guard/roles.guard';
 import { UserRole } from '../users/enums/userRoles.enum';
 import { ApiErrorDto } from '../common/dto/api-error.dto';
+import { CsvExportService } from '../common/csv-export/csv-export.service';
+import { ExportInvoicesProvider } from './providers/export-invoices.provider';
 
 @ApiTags('invoices')
 @ApiBearerAuth('bearer')
@@ -38,7 +41,10 @@ import { ApiErrorDto } from '../common/dto/api-error.dto';
 @Roles(UserRole.USER, UserRole.STAFF, UserRole.ADMIN, UserRole.SUPER_ADMIN)
 @Controller('invoices')
 export class InvoicesController {
-  constructor(private readonly invoicesService: InvoicesService) {}
+  constructor(
+    private readonly invoicesService: InvoicesService,
+    private readonly csvExportService: CsvExportService,
+  ) {}
 
   @Get()
   @ApiOperation({ summary: 'List invoices (users see own; admins see all)' })
@@ -85,5 +91,35 @@ export class InvoicesController {
       'Content-Length': pdf.length,
     });
     res.end(pdf);
+  }
+
+  @Get('export/csv')
+  @ApiOperation({ summary: 'Export invoices as CSV' })
+  @ApiProduces('text/csv')
+  @ApiQuery({ name: 'startDate', required: false, type: String })
+  @ApiQuery({ name: 'endDate', required: false, type: String })
+  @ApiOkResponse({ description: 'CSV file stream returned' })
+  async exportCsv(
+    @GetCurrentUser('id') userId: string,
+    @GetCurrentUser('role') userRole: UserRole,
+    @Query('startDate') startDate?: string,
+    @Query('endDate') endDate?: string,
+    @Res() res?: Response,
+  ) {
+    const data = await this.invoicesService.exportCsv(
+      userId,
+      userRole,
+      startDate,
+      endDate,
+    );
+    const csv = this.csvExportService.toCsv(data, ExportInvoicesProvider.columns);
+    if (res) {
+      res.set({
+        'Content-Type': 'text/csv',
+        'Content-Disposition': `attachment; filename="invoices-export.csv"`,
+      });
+      res.end(csv);
+    }
+    return csv;
   }
 }

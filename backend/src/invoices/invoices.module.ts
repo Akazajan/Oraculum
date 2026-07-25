@@ -11,6 +11,8 @@ import { GenerateInvoiceProvider } from './providers/generate-invoice.provider';
 import { FindInvoicesProvider } from './providers/find-invoices.provider';
 import { PdfInvoiceProvider } from './providers/pdf-invoice.provider';
 import { InvoiceSequenceProvider } from './providers/invoice-sequence.provider';
+import { ExportInvoicesProvider } from './providers/export-invoices.provider';
+import { CsvExportService } from '../common/csv-export/csv-export.service';
 
 @Module({
   imports: [
@@ -23,6 +25,8 @@ import { InvoiceSequenceProvider } from './providers/invoice-sequence.provider';
     FindInvoicesProvider,
     PdfInvoiceProvider,
     InvoiceSequenceProvider,
+    ExportInvoicesProvider,
+    CsvExportService,
   ],
   exports: [InvoicesService],
 })

@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { GenerateInvoiceProvider } from './providers/generate-invoice.provider';
 import { FindInvoicesProvider } from './providers/find-invoices.provider';
 import { PdfInvoiceProvider } from './providers/pdf-invoice.provider';
+import { ExportInvoicesProvider } from './providers/export-invoices.provider';
 import { InvoiceQueryDto } from './dto/invoice-query.dto';
 import { UserRole } from '../users/enums/userRoles.enum';
 
@@ -11,6 +12,7 @@ export class InvoicesService {
     private readonly generateInvoiceProvider: GenerateInvoiceProvider,
     private readonly findInvoicesProvider: FindInvoicesProvider,
     private readonly pdfInvoiceProvider: PdfInvoiceProvider,
+    private readonly exportInvoicesProvider: ExportInvoicesProvider,
   ) {}
 
   generateForPayment(paymentId: string) {
@@ -37,5 +39,9 @@ export class InvoicesService {
     );
     const pdf = await this.pdfInvoiceProvider.generate(invoice);
     return { pdf, invoiceNumber: invoice.invoiceNumber };
+  }
+
+  exportCsv(userId: string, userRole: UserRole, startDate?: string, endDate?: string) {
+    return this.exportInvoicesProvider.findAllForExport(userId, userRole, startDate, endDate);
   }
 }
