@@ -22,6 +22,7 @@ import { InvoicesModule } from './invoices/invoices.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { WorkspaceTrackingModule } from './workspace-tracking/workspace-tracking.module';
 import { AuditModule } from './audit/audit.module';
+import { WebhooksModule } from './webhooks/webhooks.module';
 
 @Module({
   imports: [
@@ -114,6 +115,7 @@ import { AuditModule } from './audit/audit.module';
     InvoicesModule,
     NotificationsModule,
     WorkspaceTrackingModule,
+    WebhooksModule,
   ],
   controllers: [AppController],
   providers: [
