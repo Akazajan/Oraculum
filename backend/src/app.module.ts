@@ -10,6 +10,7 @@ import { JwtAuthGuard } from './auth/guard/jwt.auth.guard';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { BullModule } from '@nestjs/bull';
 import { AppThrottlerGuard } from './common/guards/app-throttler.guard';
+import { CommonModule } from './common/common.module';
 import { ScheduleModule } from '@nestjs/schedule';
 import { NewsletterModule } from './newsletter/newsletter.module';
 import { EmailModule } from './email/email.module';
@@ -114,6 +115,7 @@ import { AuditModule } from './audit/audit.module';
     InvoicesModule,
     NotificationsModule,
     WorkspaceTrackingModule,
+    CommonModule,
   ],
   controllers: [AppController],
   providers: [

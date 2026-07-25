@@ -11,6 +11,7 @@ import { HttpLogger } from './common/middlewares/httpLogger.middleware';
 import { CorrelationIdMiddleware } from './common/middlewares/correlation-id.middleware';
 import { CentralizedValidationPipe } from './common/pipes/validation.pipe';
 import { GlobalExceptionFilter } from './common/filters/global-exception.filter';
+import { GracefulShutdownService } from './common/services/graceful-shutdown.service';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, { rawBody: true });
@@ -111,7 +112,11 @@ List endpoints accept \`page\` (default 1) and \`limit\` (default 20, max 100). 
 
   app.setGlobalPrefix('/api');
 
-  await app.listen(process.env.PORT ?? 3000, '0.0.0.0');
+  const server = await app.listen(process.env.PORT ?? 3000, '0.0.0.0');
+
+  const shutdownService = app.get(GracefulShutdownService);
+  shutdownService.setHttpServer(server);
+  shutdownService.registerSignalHandlers();
   console.log(`Server is listening at: ${await app.getUrl()}`);
   console.log(
     `Swagger UI: ${await app.getUrl()}/swagger — JSON spec: ${await app.getUrl()}/swagger-json`,
