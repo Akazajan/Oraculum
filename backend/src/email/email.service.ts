@@ -6,6 +6,9 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { withRetry } from '../utils/retry.util';
 
+import { InjectQueue } from '@nestjs/bull';
+import { Queue } from 'bull';
+
 interface RetryMetrics {
   attempts: number;
   succeeded: boolean;
@@ -56,14 +59,22 @@ function isTransientEmailError(error: any): boolean {
 export class EmailService {
   private readonly logger = new Logger(EmailService.name);
   private transporter: nodemailer.Transporter;
+  private readonly queueMode: boolean;
   /** Cumulative counters for observability (actionable signals). */
   private readonly metrics = {
     sent: 0,
     retries: 0,
     failed: 0,
+    queued: 0,
   };
 
-  constructor(private readonly configService: ConfigService) {
+  constructor(
+    private readonly configService: ConfigService,
+    @InjectQueue('email') private readonly emailQueue?: Queue,
+  ) {
+    this.queueMode =
+      this.configService.get<string>('EMAIL_QUEUE_MODE') === 'true' &&
+      !!this.emailQueue;
     this.transporter = nodemailer.createTransport({
       host: this.configService.get<string>('SMTP_HOST'),
       port: this.configService.get<number>('SMTP_PORT'),
@@ -99,6 +110,29 @@ export class EmailService {
       contentType: string;
     }>,
   ): Promise<boolean> {
+    if (this.queueMode && this.emailQueue) {
+      this.metrics.queued += 1;
+      await this.emailQueue.add(
+        'send-email',
+        {
+          to,
+          subject,
+          html,
+          attachments: attachments?.map((a) => ({
+            ...a,
+            content: a.content.toString('base64'),
+          })),
+        },
+        {
+          attempts: 3,
+          backoff: { type: 'exponential', delay: 2000 },
+          removeOnComplete: true,
+        },
+      );
+      this.logger.log(`Email enqueued to ${to}: ${subject}`);
+      return true;
+    }
+
     const maxAttempts = this.configService.get<number>(
       'EMAIL_MAX_RETRIES',
       3, // default: one initial attempt + up to 2 retries
@@ -348,5 +382,9 @@ export class EmailService {
    */
   getMetrics() {
     return { ...this.metrics };
+  }
+
+  isQueueMode(): boolean {
+    return this.queueMode;
   }
 }
