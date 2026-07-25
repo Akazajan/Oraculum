@@ -14,6 +14,7 @@ import { FindPaymentsProvider } from './providers/find-payments.provider';
 import { BookingsModule } from '../bookings/bookings.module';
 import { InvoicesModule } from '../invoices/invoices.module';
 import { NotificationsModule } from '../notifications/notifications.module';
+import { IdempotencyModule } from '../common/idempotency.module';
 
 @Module({
   imports: [
@@ -21,6 +22,7 @@ import { NotificationsModule } from '../notifications/notifications.module';
     BookingsModule,
     InvoicesModule,
     NotificationsModule,
+    IdempotencyModule,
   ],
   controllers: [PaymentsController],
   providers: [

@@ -10,6 +10,7 @@ import {
   Query,
   Req,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
 import {
   ApiBearerAuth,
@@ -20,6 +21,7 @@ import {
   ApiBadRequestResponse,
   ApiNotFoundResponse,
   ApiOkResponse,
+  ApiHeader,
 } from '@nestjs/swagger';
 import { RawBodyRequest } from '@nestjs/common';
 import { Request } from 'express';
@@ -33,6 +35,7 @@ import { UserRole } from '../users/enums/userRoles.enum';
 import { PaymentQuery } from './providers/find-payments.provider';
 import { ApiErrorDto } from '../common/dto/api-error.dto';
 import { Payment } from './entities/payment.entity';
+import { IdempotencyGuard } from '../common/guards/idempotency.guard';
 
 @ApiTags('payments')
 @ApiBearerAuth('bearer')
@@ -46,7 +49,13 @@ export class PaymentsController {
   constructor(private readonly paymentsService: PaymentsService) {}
 
   @Post('initialize')
+  @UseInterceptors(IdempotencyGuard)
   @ApiOperation({ summary: 'Initialize a Paystack payment for a booking' })
+  @ApiHeader({
+    name: 'Idempotency-Key',
+    required: false,
+    description: 'Optional idempotency key for duplicate request protection',
+  })
   @ApiOkResponse({ description: 'Payment initialized' })
   @ApiBadRequestResponse({
     description: 'Booking not payable',
