@@ -19,6 +19,8 @@ import { NotificationsService } from '../../notifications/notifications.service'
 import { NotificationType } from '../../notifications/enums/notification-type.enum';
 import { User } from '../../users/entities/user.entity';
 import { EmailService } from '../../email/email.service';
+import { AuditService } from '../../audit/audit.service';
+import { getCorrelationId } from '../../common/context/correlation-context';
 import { runInTransaction } from '../../common/utils/run-in-transaction';
 
 const LONG_TERM_PLANS = new Set([
@@ -50,6 +52,7 @@ export class HandleWebhookProvider {
     private readonly invoicesService: InvoicesService,
     private readonly notificationsService: NotificationsService,
     private readonly emailService: EmailService,
+    private readonly auditService: AuditService,
     private readonly configService: ConfigService,
     private readonly dataSource: DataSource,
   ) {}
@@ -187,6 +190,15 @@ export class HandleWebhookProvider {
     this.logger.log(
       `charge.success: payment ${payment.id} succeeded, booking ${payment.bookingId} confirmed`,
     );
+
+    this.auditService.paymentSuccess(payment.id, payment.userId, {
+      paymentReference: payment.providerReference,
+      amount: payment.amount,
+      currency: payment.currency,
+      provider: payment.provider,
+      bookingId: payment.bookingId,
+      correlationId: getCorrelationId(),
+    });
   }
 
   private async handleChargeFailed(reference: string): Promise<void> {
@@ -211,6 +223,17 @@ export class HandleWebhookProvider {
     });
 
     if (!payment) return;
+
+    this.auditService.paymentFailure(payment.id, payment.userId, {
+      paymentReference: payment.providerReference,
+      amount: payment.amount,
+      currency: payment.currency,
+      provider: payment.provider,
+      errorCode: 'CHARGE_FAILED',
+      errorMessage: 'Paystack charge.failed webhook received',
+      providerResponse: null,
+      correlationId: getCorrelationId(),
+    });
 
     this.usersRepository
       .findOne({ where: { id: payment.userId } })
