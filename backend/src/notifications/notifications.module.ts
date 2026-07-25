@@ -8,10 +8,12 @@ import { NotificationsController } from './notifications.controller';
 import { NotificationsGateway } from './gateway/notifications.gateway';
 import { CreateNotificationProvider } from './providers/create-notification.provider';
 import { FindNotificationsProvider } from './providers/find-notifications.provider';
+import { NotificationPreferencesModule } from '../notification-preferences/notification-preferences.module';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([Notification]),
+    NotificationPreferencesModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],
       useFactory: (configService: ConfigService) => ({
