@@ -52,6 +52,10 @@ export class UploadProfilePictureProvider {
 
       return { id: saved.id, profilePicture: saved.profilePicture };
     } catch (error) {
+      if (error instanceof BadRequestException) {
+        throw error;
+      }
+
       throw new BadRequestException('Failed to upload profile picture');
     }
   }
