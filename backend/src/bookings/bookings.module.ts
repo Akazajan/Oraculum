@@ -11,6 +11,7 @@ import { FindBookingsProvider } from './providers/find-bookings.provider';
 import { PricingService } from './pricing/pricing.service';
 import { WorkspacesModule } from '../workspaces/workspaces.module';
 import { User } from '../users/entities/user.entity';
+import { CacheInvalidationProvider } from '../common/providers/cache-invalidation.provider';
 
 @Module({
   imports: [TypeOrmModule.forFeature([Booking, User]), WorkspacesModule],
@@ -23,6 +24,7 @@ import { User } from '../users/entities/user.entity';
     CancelBookingProvider,
     CompleteBookingProvider,
     FindBookingsProvider,
+    CacheInvalidationProvider,
   ],
   exports: [BookingsService],
 })

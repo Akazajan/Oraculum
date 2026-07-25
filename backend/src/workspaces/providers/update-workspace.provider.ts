@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Workspace } from '../entities/workspace.entity';
@@ -8,33 +8,29 @@ import {
   isOptimisticLockError,
   withRetry,
 } from '../../utils/retry.util';
+import { CacheInvalidationProvider } from '../../common/providers/cache-invalidation.provider';
 
 @Injectable()
 export class UpdateWorkspaceProvider {
+  private readonly logger = new Logger(UpdateWorkspaceProvider.name);
+
   constructor(
     @InjectRepository(Workspace)
     private readonly workspacesRepository: Repository<Workspace>,
     private readonly findWorkspaceByIdProvider: FindWorkspaceByIdProvider,
+    private readonly cacheInvalidation: CacheInvalidationProvider,
   ) {}
 
   async update(id: string, dto: UpdateWorkspaceDto): Promise<Workspace> {
-    // Optimistic locking: TypeORM bumps `version` on every save.
-    // When two callers edit the same workspace concurrently, the loser's
-    // save() throws OptimisticLockVersionMismatchError. We retry the
-    // read+mutate+save cycle so the operation still succeeds cleanly and
-    // workspace state remains consistent.
-    return withRetry(
+    const result = await withRetry(
       async () => {
         const workspace = await this.findWorkspaceByIdProvider.findById(id);
 
-        // If totalSeats is being increased, increase availableSeats proportionally
         if (dto.totalSeats && dto.totalSeats > workspace.totalSeats) {
           const added = dto.totalSeats - workspace.totalSeats;
           workspace.availableSeats = workspace.availableSeats + added;
         }
 
-        // Trim any caller-supplied `version` so Object.assign can't clobber
-        // the optimistic lock token with a stale value.
         const safeDto = { ...dto };
         delete (safeDto as { version?: number }).version;
 
@@ -48,5 +44,11 @@ export class UpdateWorkspaceProvider {
         isRetryable: isOptimisticLockError,
       },
     );
+
+    this.cacheInvalidation
+      .invalidateWorkspaceList()
+      .catch(() => this.logger.warn('Failed to invalidate workspace cache'));
+
+    return result;
   }
 }
