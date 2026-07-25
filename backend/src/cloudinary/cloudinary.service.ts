@@ -5,6 +5,7 @@ import {
   v2 as cloudinary,
 } from 'cloudinary';
 import { ConfigService } from '@nestjs/config';
+import { scanUploadedFile } from '../common/utils/malware-scanner.util';
 
 @Injectable()
 export class CloudinaryService {
@@ -14,6 +15,12 @@ export class CloudinaryService {
     file: Express.Multer.File,
     folder?: string,
   ): Promise<UploadApiResponse | UploadApiErrorResponse> {
+    await scanUploadedFile(
+      file.buffer,
+      file.originalname || 'upload',
+      this.configService,
+    );
+
     return new Promise((resolve, reject) => {
       const uploadStream = cloudinary.uploader.upload_stream(
         {
