@@ -23,6 +23,7 @@ import { InvoicesModule } from './invoices/invoices.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { WorkspaceTrackingModule } from './workspace-tracking/workspace-tracking.module';
 import { AuditModule } from './audit/audit.module';
+import { HealthModule } from './health/health.module';
 import { redisStore } from 'cache-manager-ioredis-yet';
 import { NotificationPreferencesModule } from './notification-preferences/notification-preferences.module';
 import { CacheModule } from '@nestjs/cache-manager';
@@ -136,6 +137,7 @@ import { CleanupModule } from './cleanup/cleanup.module';
     InvoicesModule,
     NotificationsModule,
     WorkspaceTrackingModule,
+    HealthModule,
     CommonModule,
     NotificationPreferencesModule,
     WebhookHistoryModule,
