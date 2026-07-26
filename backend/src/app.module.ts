@@ -23,6 +23,7 @@ import { InvoicesModule } from './invoices/invoices.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { WorkspaceTrackingModule } from './workspace-tracking/workspace-tracking.module';
 import { AuditModule } from './audit/audit.module';
+import { ReconciliationModule } from './reconciliation/reconciliation.module';
 import { HealthModule } from './health/health.module';
 import { redisStore } from 'cache-manager-ioredis-yet';
 import { NotificationPreferencesModule } from './notification-preferences/notification-preferences.module';
@@ -137,6 +138,7 @@ import { CleanupModule } from './cleanup/cleanup.module';
     InvoicesModule,
     NotificationsModule,
     WorkspaceTrackingModule,
+    ReconciliationModule,
     HealthModule,
     CommonModule,
     NotificationPreferencesModule,
