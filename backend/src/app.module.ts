@@ -22,6 +22,8 @@ import { InvoicesModule } from './invoices/invoices.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { WorkspaceTrackingModule } from './workspace-tracking/workspace-tracking.module';
 import { AuditModule } from './audit/audit.module';
+import { CacheModule } from '@nestjs/cache-manager';
+import { redisStore } from 'cache-manager-ioredis-yet';
 import { WebhookHistoryModule } from './webhook-history/webhook-history.module';
 import { WebhooksModule } from './webhooks/webhooks.module';
 import { DeadLetterModule } from './common/dead-letter/dead-letter.module';
@@ -31,6 +33,19 @@ import { CleanupModule } from './cleanup/cleanup.module';
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
+    }),
+    CacheModule.registerAsync({
+      imports: [ConfigModule],
+      inject: [ConfigService],
+      useFactory: async (configService: ConfigService) => ({
+        store: await redisStore({
+          host: configService.get<string>('REDIS_HOST') || 'localhost',
+          port: configService.get<number>('REDIS_PORT') || 6379,
+          password: configService.get<string>('REDIS_PASSWORD'),
+          db: configService.get<number>('REDIS_DB') || 0,
+          ttl: 60_000,
+        }),
+      }),
     }),
     ScheduleModule.forRoot(),
     // Throttler tiers — BE-07 acceptance: harder limits on anonymous
