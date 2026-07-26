@@ -7,6 +7,7 @@ import { ConfirmBookingProvider } from './providers/confirm-booking.provider';
 import { CancelBookingProvider } from './providers/cancel-booking.provider';
 import { CompleteBookingProvider } from './providers/complete-booking.provider';
 import { FindBookingsProvider } from './providers/find-bookings.provider';
+import { ExportBookingsProvider } from './providers/export-bookings.provider';
 import { UserRole } from '../users/enums/userRoles.enum';
 import { Booking } from './entities/booking.entity';
 import { PricingService } from './pricing/pricing.service';
@@ -21,6 +22,7 @@ export class BookingsService {
     private readonly completeBookingProvider: CompleteBookingProvider,
     private readonly findBookingsProvider: FindBookingsProvider,
     private readonly pricingService: PricingService,
+    private readonly exportBookingsProvider: ExportBookingsProvider,
   ) {}
 
   //create booking id
@@ -71,5 +73,9 @@ export class BookingsService {
 
   getPlanSummary(planType: PlanType) {
     return this.pricingService.getPlanSummary(planType);
+  }
+
+  exportCsv(userId: string, userRole: UserRole, startDate?: string, endDate?: string) {
+    return this.exportBookingsProvider.findAllForExport(userId, userRole, startDate, endDate);
   }
 }
