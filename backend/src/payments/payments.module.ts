@@ -16,6 +16,7 @@ import { FindPaymentsProvider } from './providers/find-payments.provider';
 import { BookingsModule } from '../bookings/bookings.module';
 import { InvoicesModule } from '../invoices/invoices.module';
 import { NotificationsModule } from '../notifications/notifications.module';
+import { IdempotencyModule } from '../common/idempotency.module';
 import { AuditModule } from '../audit/audit.module';
 
 @Module({
@@ -24,6 +25,7 @@ import { AuditModule } from '../audit/audit.module';
     BookingsModule,
     InvoicesModule,
     NotificationsModule,
+    IdempotencyModule,
     AuditModule,
   ],
   controllers: [PaymentsController, PaymentFailureLogsController],
