@@ -6,21 +6,16 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { withRetry } from '../utils/retry.util';
 
+export const DEFAULT_LOCALE = 'en';
+export const SUPPORTED_LOCALES = ['en', 'fr'] as const;
+export type SupportedLocale = (typeof SUPPORTED_LOCALES)[number];
+
 interface RetryMetrics {
   attempts: number;
   succeeded: boolean;
   lastError?: string;
 }
 
-/**
- * Classifies SMTP/nodemailer errors so we retry only the transient ones
- * and bail out quickly on permanent failures.
- *
- * - Node socket errors (ECONNRESET, ETIMEDOUT, ...) → transient.
- * - SMTP 4xx response codes (greylist / try-again-later) → transient.
- * - SMTP 5xx response codes (auth failure, mailbox unknown, ...) and the
- *   rest → permanent; retrying will not help.
- */
 function isTransientEmailError(error: any): boolean {
   if (!error) return false;
   const code: string | undefined = error?.code;
@@ -36,8 +31,6 @@ function isTransientEmailError(error: any): boolean {
 
   const responseCode: number | undefined = error?.responseCode;
   if (typeof responseCode === 'number') {
-    // SMTP convention: 4xx = transient (e.g. 451 greylist),
-    // 5xx = permanent (e.g. 535 auth failed, 550 mailbox unknown).
     if (responseCode >= 400 && responseCode < 500) return true;
   }
 
@@ -56,7 +49,6 @@ function isTransientEmailError(error: any): boolean {
 export class EmailService {
   private readonly logger = new Logger(EmailService.name);
   private transporter: nodemailer.Transporter;
-  /** Cumulative counters for observability (actionable signals). */
   private readonly metrics = {
     sent: 0,
     retries: 0,
@@ -75,15 +67,49 @@ export class EmailService {
     });
   }
 
+  private resolveLocale(locale?: string): SupportedLocale {
+    if (
+      locale &&
+      SUPPORTED_LOCALES.includes(locale as SupportedLocale)
+    ) {
+      return locale as SupportedLocale;
+    }
+    return DEFAULT_LOCALE;
+  }
+
   private compileTemplate(
     templateName: string,
     context: Record<string, any>,
+    locale?: string,
   ): string {
-    const templatePath = path.join(
+    const resolvedLocale = this.resolveLocale(locale);
+    let templatePath = path.join(
       __dirname,
       'templates',
+      resolvedLocale,
       `${templateName}.hbs`,
     );
+
+    if (!fs.existsSync(templatePath)) {
+      if (resolvedLocale !== DEFAULT_LOCALE) {
+        this.logger.warn(
+          `Template "${templateName}" not found for locale "${resolvedLocale}", falling back to "${DEFAULT_LOCALE}"`,
+        );
+        templatePath = path.join(
+          __dirname,
+          'templates',
+          DEFAULT_LOCALE,
+          `${templateName}.hbs`,
+        );
+      } else {
+        templatePath = path.join(
+          __dirname,
+          'templates',
+          `${templateName}.hbs`,
+        );
+      }
+    }
+
     const source = fs.readFileSync(templatePath, 'utf8');
     const template = handlebars.compile(source);
     return template(context);
@@ -101,7 +127,7 @@ export class EmailService {
   ): Promise<boolean> {
     const maxAttempts = this.configService.get<number>(
       'EMAIL_MAX_RETRIES',
-      3, // default: one initial attempt + up to 2 retries
+      3,
     );
     const baseDelayMs = this.configService.get<number>(
       'EMAIL_RETRY_BASE_DELAY_MS',
@@ -171,8 +197,13 @@ export class EmailService {
     email: string,
     otp: string,
     fullName: string,
+    locale?: string,
   ): Promise<boolean> {
-    const html = this.compileTemplate('verification-otp', { otp, fullName });
+    const html = this.compileTemplate(
+      'verification-otp',
+      { otp, fullName },
+      locale,
+    );
     return this.send(email, 'Verify Your Email', html);
   }
 
@@ -180,8 +211,13 @@ export class EmailService {
     email: string,
     otp: string,
     fullName: string,
+    locale?: string,
   ): Promise<boolean> {
-    const html = this.compileTemplate('password-reset-otp', { otp, fullName });
+    const html = this.compileTemplate(
+      'password-reset-otp',
+      { otp, fullName },
+      locale,
+    );
     return this.send(email, 'Password Reset Code', html);
   }
 
@@ -189,13 +225,15 @@ export class EmailService {
     email: string,
     token: string,
     fullName: string,
+    locale?: string,
   ): Promise<boolean> {
     const frontendUrl = this.configService.get<string>('FRONTEND_URL') || '';
     const verifyUrl = `${frontendUrl}/verify-email?token=${encodeURIComponent(token)}`;
-    const html = this.compileTemplate('verification-link', {
-      fullName,
-      verifyUrl,
-    });
+    const html = this.compileTemplate(
+      'verification-link',
+      { fullName, verifyUrl },
+      locale,
+    );
     return this.send(email, 'Verify Your Email', html);
   }
 
@@ -203,19 +241,26 @@ export class EmailService {
     email: string,
     fullName: string,
     resetLink: string,
+    locale?: string,
   ): Promise<boolean> {
-    const html = this.compileTemplate('password-reset-link', {
-      fullName,
-      resetLink,
-    });
+    const html = this.compileTemplate(
+      'password-reset-link',
+      { fullName, resetLink },
+      locale,
+    );
     return this.send(email, 'Reset Your Password', html);
   }
 
   async sendPasswordResetSuccessEmail(
     email: string,
     fullName: string,
+    locale?: string,
   ): Promise<boolean> {
-    const html = this.compileTemplate('password-reset-success', { fullName });
+    const html = this.compileTemplate(
+      'password-reset-success',
+      { fullName },
+      locale,
+    );
     return this.send(email, 'Password Reset Successful', html);
   }
 
@@ -224,8 +269,9 @@ export class EmailService {
     subject: string,
     templateName: string,
     placeholders: Record<string, any>,
+    locale?: string,
   ): Promise<boolean> {
-    const html = this.compileTemplate(templateName, placeholders);
+    const html = this.compileTemplate(templateName, placeholders, locale);
     return this.send(email, subject, html);
   }
 
@@ -233,11 +279,13 @@ export class EmailService {
     email: string,
     fullName: string,
     subject: string,
+    locale?: string,
   ): Promise<boolean> {
-    const html = this.compileTemplate('contact-confirmation', {
-      fullName,
-      subject,
-    });
+    const html = this.compileTemplate(
+      'contact-confirmation',
+      { fullName, subject },
+      locale,
+    );
     return this.send(email, 'We received your message', html);
   }
 
@@ -246,16 +294,16 @@ export class EmailService {
     email: string,
     subject: string,
     message: string,
+    locale?: string,
   ): Promise<boolean> {
     const adminEmail =
       this.configService.get<string>('ADMIN_EMAIL') ||
       this.configService.get<string>('EMAIL_FROM');
-    const html = this.compileTemplate('contact-notification', {
-      fullName,
-      email,
-      subject,
-      message,
-    });
+    const html = this.compileTemplate(
+      'contact-notification',
+      { fullName, email, subject, message },
+      locale,
+    );
     return this.send(adminEmail, `New Contact: ${subject}`, html);
   }
 
@@ -271,8 +319,13 @@ export class EmailService {
       seatCount: number;
       totalAmountNaira: string;
     },
+    locale?: string,
   ): Promise<boolean> {
-    const html = this.compileTemplate('booking-created', { fullName, ...data });
+    const html = this.compileTemplate(
+      'booking-created',
+      { fullName, ...data },
+      locale,
+    );
     return this.send(email, 'Booking Created — Oraculum', html);
   }
 
@@ -286,8 +339,13 @@ export class EmailService {
       paidAt: string;
       invoiceNumber: string;
     },
+    locale?: string,
   ): Promise<boolean> {
-    const html = this.compileTemplate('payment-success', { fullName, ...data });
+    const html = this.compileTemplate(
+      'payment-success',
+      { fullName, ...data },
+      locale,
+    );
     return this.send(email, 'Payment Successful — Oraculum', html);
   }
 
@@ -298,8 +356,13 @@ export class EmailService {
       paymentReference: string;
       amountNaira: string;
     },
+    locale?: string,
   ): Promise<boolean> {
-    const html = this.compileTemplate('payment-failed', { fullName, ...data });
+    const html = this.compileTemplate(
+      'payment-failed',
+      { fullName, ...data },
+      locale,
+    );
     return this.send(email, 'Payment Failed — Oraculum', html);
   }
 
@@ -313,11 +376,13 @@ export class EmailService {
       endDate: string;
       cancelledBy: string;
     },
+    locale?: string,
   ): Promise<boolean> {
-    const html = this.compileTemplate('booking-cancelled', {
-      fullName,
-      ...data,
-    });
+    const html = this.compileTemplate(
+      'booking-cancelled',
+      { fullName, ...data },
+      locale,
+    );
     return this.send(email, 'Booking Cancelled — Oraculum', html);
   }
 
@@ -330,8 +395,13 @@ export class EmailService {
       paidAt: string;
     },
     pdfBuffer: Buffer,
+    locale?: string,
   ): Promise<boolean> {
-    const html = this.compileTemplate('invoice-ready', { fullName, ...data });
+    const html = this.compileTemplate(
+      'invoice-ready',
+      { fullName, ...data },
+      locale,
+    );
     return this.send(email, `Invoice ${data.invoiceNumber} — Oraculum`, html, [
       {
         filename: `${data.invoiceNumber}.pdf`,
@@ -341,11 +411,6 @@ export class EmailService {
     ]);
   }
 
-  /**
-   * Returns cumulative counters for tests and metrics exports.
-   * Exposed as a method so we don't need to add a `/metrics` controller
-   * just for verification.
-   */
   getMetrics() {
     return { ...this.metrics };
   }

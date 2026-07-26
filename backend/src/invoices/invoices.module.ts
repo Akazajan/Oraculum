@@ -10,6 +10,8 @@ import { InvoicesController } from './invoices.controller';
 import { GenerateInvoiceProvider } from './providers/generate-invoice.provider';
 import { FindInvoicesProvider } from './providers/find-invoices.provider';
 import { PdfInvoiceProvider } from './providers/pdf-invoice.provider';
+import { PdfGenerationProvider } from './providers/pdf-generation.provider';
+import { PdfGenerationFallbackProvider } from './providers/pdf-generation-fallback.provider';
 import { InvoiceSequenceProvider } from './providers/invoice-sequence.provider';
 
 @Module({
@@ -22,6 +24,8 @@ import { InvoiceSequenceProvider } from './providers/invoice-sequence.provider';
     GenerateInvoiceProvider,
     FindInvoicesProvider,
     PdfInvoiceProvider,
+    PdfGenerationProvider,
+    PdfGenerationFallbackProvider,
     InvoiceSequenceProvider,
   ],
   exports: [InvoicesService],

@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <style>
+    body { font-family: Arial, sans-serif; background: #f4f4f7; margin: 0; padding: 0; }
+    .container { max-width: 560px; margin: 40px auto; background: #fff; border-radius: 8px; padding: 40px; }
+    .btn { display: inline-block; background: #4f46e5; color: #fff; padding: 14px 28px; border-radius: 6px; text-decoration: none; font-weight: bold; margin: 24px 0; }
+    .footer { text-align: center; color: #718096; font-size: 13px; margin-top: 32px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h2>Confirmez votre inscription</h2>
+    <p>Bonjour {{fullName}},</p>
+    <p>Merci de vous être inscrit à la newsletter {{appName}} ! Veuillez confirmer votre inscription en cliquant sur le bouton ci-dessous. Ce lien expire dans {{expiresIn}}.</p>
+    <p style="text-align:center;"><a class="btn" href="{{confirmUrl}}">Confirmer l'inscription</a></p>
+    <p>Si vous ne vous êtes pas inscrit, vous pouvez ignorer cet e-mail en toute sécurité.</p>
+    <div class="footer">&copy; {{year}} {{appName}}</div>
+  </div>
+</body>
+</html>
