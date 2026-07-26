@@ -4,6 +4,8 @@ import { Repository } from 'typeorm';
 import { Notification } from '../entities/notification.entity';
 import { NotificationType } from '../enums/notification-type.enum';
 import { NotificationsGateway } from '../gateway/notifications.gateway';
+import { NotificationPreferencesService } from '../../notification-preferences/notification-preferences.service';
+import { NotificationChannel } from '../../notification-preferences/enums/notification-channel.enum';
 
 export interface CreateNotificationInput {
   userId: string;
@@ -19,9 +21,20 @@ export class CreateNotificationProvider {
     @InjectRepository(Notification)
     private readonly notificationsRepository: Repository<Notification>,
     private readonly gateway: NotificationsGateway,
+    private readonly preferencesService: NotificationPreferencesService,
   ) {}
 
   async create(input: CreateNotificationInput): Promise<Notification> {
+    const inAppEnabled = await this.preferencesService.isEnabled(
+      input.userId,
+      NotificationChannel.IN_APP,
+      input.type,
+    );
+
+    if (!inAppEnabled) {
+      return null;
+    }
+
     const notification = this.notificationsRepository.create(input);
     const saved = await this.notificationsRepository.save(notification);
 
