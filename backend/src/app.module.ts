@@ -23,6 +23,7 @@ import { NotificationsModule } from './notifications/notifications.module';
 import { WorkspaceTrackingModule } from './workspace-tracking/workspace-tracking.module';
 import { AuditModule } from './audit/audit.module';
 import { DeadLetterModule } from './common/dead-letter/dead-letter.module';
+import { CleanupModule } from './cleanup/cleanup.module';
 
 @Module({
   imports: [
@@ -116,6 +117,7 @@ import { DeadLetterModule } from './common/dead-letter/dead-letter.module';
     NotificationsModule,
     WorkspaceTrackingModule,
     DeadLetterModule,
+    CleanupModule,
   ],
   controllers: [AppController],
   providers: [
