@@ -6,6 +6,11 @@ export interface EmailJobData {
   to: string;
   subject: string;
   html: string;
+  attachments?: Array<{
+    filename: string;
+    content: string;
+    contentType: string;
+  }>;
 }
 
 export interface TemplateEmailJobData {
@@ -41,9 +46,29 @@ export class EmailQueueProvider {
     return String(job.id);
   }
 
+  async getJobStatus(
+    jobId: string,
+  ): Promise<{ status: string; data?: unknown } | null> {
   async getJobStatus(jobId: string): Promise<{ status: string; data?: unknown } | null> {
     const job = await this.emailQueue.getJob(jobId);
     if (!job) return null;
     return { status: await job.getState(), data: job.returnvalue };
+  }
+
+  async getJobCount(): Promise<{
+    waiting: number;
+    active: number;
+    completed: number;
+    failed: number;
+    delayed: number;
+  }> {
+    const [waiting, active, completed, failed, delayed] = await Promise.all([
+      this.emailQueue.getWaitingCount(),
+      this.emailQueue.getActiveCount(),
+      this.emailQueue.getCompletedCount(),
+      this.emailQueue.getFailedCount(),
+      this.emailQueue.getDelayedCount(),
+    ]);
+    return { waiting, active, completed, failed, delayed };
   }
 }
