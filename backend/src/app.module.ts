@@ -22,6 +22,7 @@ import { InvoicesModule } from './invoices/invoices.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { WorkspaceTrackingModule } from './workspace-tracking/workspace-tracking.module';
 import { AuditModule } from './audit/audit.module';
+import { DeadLetterModule } from './common/dead-letter/dead-letter.module';
 import { CleanupModule } from './cleanup/cleanup.module';
 
 @Module({
@@ -115,6 +116,7 @@ import { CleanupModule } from './cleanup/cleanup.module';
     InvoicesModule,
     NotificationsModule,
     WorkspaceTrackingModule,
+    DeadLetterModule,
     CleanupModule,
   ],
   controllers: [AppController],
