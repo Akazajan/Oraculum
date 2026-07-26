@@ -10,6 +10,7 @@ import { JwtAuthGuard } from './auth/guard/jwt.auth.guard';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { BullModule } from '@nestjs/bull';
 import { AppThrottlerGuard } from './common/guards/app-throttler.guard';
+import { CommonModule } from './common/common.module';
 import { ScheduleModule } from '@nestjs/schedule';
 import { NewsletterModule } from './newsletter/newsletter.module';
 import { EmailModule } from './email/email.module';
@@ -23,11 +24,32 @@ import { NotificationsModule } from './notifications/notifications.module';
 import { WorkspaceTrackingModule } from './workspace-tracking/workspace-tracking.module';
 import { AuditModule } from './audit/audit.module';
 import { HealthModule } from './health/health.module';
+import { redisStore } from 'cache-manager-ioredis-yet';
+import { NotificationPreferencesModule } from './notification-preferences/notification-preferences.module';
+import { CacheModule } from '@nestjs/cache-manager';
+import { redisStore } from 'cache-manager-ioredis-yet';
+import { WebhookHistoryModule } from './webhook-history/webhook-history.module';
+import { WebhooksModule } from './webhooks/webhooks.module';
+import { DeadLetterModule } from './common/dead-letter/dead-letter.module';
+import { CleanupModule } from './cleanup/cleanup.module';
 
 @Module({
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
+    }),
+    CacheModule.registerAsync({
+      imports: [ConfigModule],
+      inject: [ConfigService],
+      useFactory: async (configService: ConfigService) => ({
+        store: await redisStore({
+          host: configService.get<string>('REDIS_HOST') || 'localhost',
+          port: configService.get<number>('REDIS_PORT') || 6379,
+          password: configService.get<string>('REDIS_PASSWORD'),
+          db: configService.get<number>('REDIS_DB') || 0,
+          ttl: 60_000,
+        }),
+      }),
     }),
     ScheduleModule.forRoot(),
     // Throttler tiers — BE-07 acceptance: harder limits on anonymous
@@ -116,6 +138,12 @@ import { HealthModule } from './health/health.module';
     NotificationsModule,
     WorkspaceTrackingModule,
     HealthModule,
+    CommonModule,
+    NotificationPreferencesModule,
+    WebhookHistoryModule,
+    WebhooksModule,
+    DeadLetterModule,
+    CleanupModule,
   ],
   controllers: [AppController],
   providers: [
