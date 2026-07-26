@@ -3,6 +3,7 @@ import { GenerateInvoiceProvider } from './providers/generate-invoice.provider';
 import { FindInvoicesProvider } from './providers/find-invoices.provider';
 import { PdfInvoiceProvider } from './providers/pdf-invoice.provider';
 import { ExportInvoicesProvider } from './providers/export-invoices.provider';
+import { PdfGenerationProvider } from './providers/pdf-generation.provider';
 import { InvoiceQueryDto } from './dto/invoice-query.dto';
 import { UserRole } from '../users/enums/userRoles.enum';
 
@@ -13,6 +14,7 @@ export class InvoicesService {
     private readonly findInvoicesProvider: FindInvoicesProvider,
     private readonly pdfInvoiceProvider: PdfInvoiceProvider,
     private readonly exportInvoicesProvider: ExportInvoicesProvider,
+    private readonly pdfGenerationProvider: PdfGenerationProvider,
   ) {}
 
   generateForPayment(paymentId: string) {
@@ -37,11 +39,12 @@ export class InvoicesService {
       userId,
       userRole,
     );
-    const pdf = await this.pdfInvoiceProvider.generate(invoice);
+    const pdf = await this.pdfGenerationProvider.generate(invoice);
     return { pdf, invoiceNumber: invoice.invoiceNumber };
   }
 
   exportCsv(userId: string, userRole: UserRole, startDate?: string, endDate?: string) {
     return this.exportInvoicesProvider.findAllForExport(userId, userRole, startDate, endDate);
   }
+}
 }

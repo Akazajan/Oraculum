@@ -8,7 +8,7 @@ import { User } from '../../users/entities/user.entity';
 import { Workspace } from '../../workspaces/entities/workspace.entity';
 import { InvoiceStatus } from '../enums/invoice-status.enum';
 import { EmailService } from '../../email/email.service';
-import { PdfInvoiceProvider } from './pdf-invoice.provider';
+import { PdfGenerationProvider } from './pdf-generation.provider';
 
 @Injectable()
 export class GenerateInvoiceProvider {
@@ -27,11 +27,10 @@ export class GenerateInvoiceProvider {
     private readonly workspacesRepository: Repository<Workspace>,
     private readonly dataSource: DataSource,
     private readonly emailService: EmailService,
-    private readonly pdfInvoiceProvider: PdfInvoiceProvider,
+    private readonly pdfGenerationProvider: PdfGenerationProvider,
   ) {}
 
   async generateForPayment(paymentId: string): Promise<Invoice> {
-    // Idempotency — return existing invoice if already generated
     const existing = await this.invoicesRepository.findOne({
       where: { paymentId },
     });
@@ -89,9 +88,8 @@ export class GenerateInvoiceProvider {
       `Invoice ${invoiceNumber} generated for payment ${paymentId}`,
     );
 
-    // Fire-and-forget invoice email with PDF attachment
     if (user) {
-      this.pdfInvoiceProvider
+      this.pdfGenerationProvider
         .generate(saved)
         .then((pdfBuffer) => {
           this.emailService
@@ -115,10 +113,6 @@ export class GenerateInvoiceProvider {
     return saved;
   }
 
-  /**
-   * Atomically increment and return the next invoice sequence number.
-   * Produces strings like INV-00001, INV-00002, …
-   */
   private async nextInvoiceNumber(): Promise<string> {
     const result = await this.dataSource.query<{ nextval: string }[]>(
       `SELECT nextval('invoice_number_seq')`,
