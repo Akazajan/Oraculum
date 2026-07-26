@@ -1,0 +1,26 @@
+<html>
+  <head>
+    <meta charset='utf-8' />
+    <style>
+      body { font-family: Arial, sans-serif; background: #f4f4f7; margin: 0; padding: 0; }
+      .container { max-width: 560px; margin: 40px auto; background: #fff; border-radius: 8px; padding: 40px; }
+      .header { font-size: 20px; font-weight: bold; color: #1a1a1a; margin-bottom: 16px; }
+      .text { color: #4a5568; font-size: 15px; line-height: 1.6; }
+      .highlight { background: #f7f7f5; border-radius: 6px; padding: 16px; margin: 20px 0; }
+      .highlight p { margin: 4px 0; color: #2d3748; font-size: 14px; }
+      .footer { text-align: center; color: #718096; font-size: 13px; margin-top: 32px; }
+    </style>
+  </head>
+  <body>
+    <div class='container'>
+      <div class='header'>Nous avons reçu votre message</div>
+      <p class='text'>Bonjour {{fullName}},</p>
+      <p class='text'>Merci de nous avoir contactés. Nous avons bien reçu votre message et notre équipe vous répondra sous 24 à 48 heures.</p>
+      <div class='highlight'>
+        <p><strong>Sujet :</strong> {{subject}}</p>
+      </div>
+      <p class='text'>Si votre demande est urgente, vous pouvez répondre directement à cet e-mail ou nous contacter à <a href='mailto:support@Oraculum.com'>support@Oraculum.com</a>.</p>
+      <div class='footer'>&copy; 2025 Oraculum. Tous droits réservés.</div>
+    </div>
+  </body>
+</html>

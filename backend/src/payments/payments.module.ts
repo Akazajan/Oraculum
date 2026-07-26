@@ -3,8 +3,10 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { Payment } from './entities/payment.entity';
 import { Booking } from '../bookings/entities/booking.entity';
 import { User } from '../users/entities/user.entity';
+import { AuditLog } from '../audit/entities/audit-log.entity';
 import { PaymentsService } from './payments.service';
 import { PaymentsController } from './payments.controller';
+import { PaymentFailureLogsController } from './payment-failure-logs.controller';
 import { PaystackProvider } from './providers/paystack.provider';
 import { SorobanEscrowProvider } from './providers/soroban-escrow.provider';
 import { InitializePaymentProvider } from './providers/initialize-payment.provider';
@@ -14,15 +16,19 @@ import { FindPaymentsProvider } from './providers/find-payments.provider';
 import { BookingsModule } from '../bookings/bookings.module';
 import { InvoicesModule } from '../invoices/invoices.module';
 import { NotificationsModule } from '../notifications/notifications.module';
+import { IdempotencyModule } from '../common/idempotency.module';
+import { AuditModule } from '../audit/audit.module';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Payment, Booking, User]),
+    TypeOrmModule.forFeature([Payment, Booking, User, AuditLog]),
     BookingsModule,
     InvoicesModule,
     NotificationsModule,
+    IdempotencyModule,
+    AuditModule,
   ],
-  controllers: [PaymentsController],
+  controllers: [PaymentsController, PaymentFailureLogsController],
   providers: [
     PaymentsService,
     PaystackProvider,

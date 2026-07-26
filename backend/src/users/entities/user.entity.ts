@@ -132,6 +132,9 @@ export class User {
   @Column({ type: 'int', default: 0 })
   profileCompleteness: number;
 
+  @Column({ type: 'varchar', length: 10, default: 'en' })
+  preferredLanguage: string;
+
   @DeleteDateColumn()
   deletedAt: Date;
   get fullName(): string {

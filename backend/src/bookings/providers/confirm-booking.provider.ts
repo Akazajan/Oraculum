@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -10,6 +11,7 @@ import { BookingStatus } from '../enums/booking-status.enum';
 import { User } from '../../users/entities/user.entity';
 import { MembershipStatus } from '../../users/enums/membership-status.enum';
 import { runInTransaction } from '../../common/utils/run-in-transaction';
+import { CacheInvalidationProvider } from '../../common/providers/cache-invalidation.provider';
 
 /**
  * Confirms a booking and — atomically — promotes the user to ACTIVE on
@@ -18,15 +20,20 @@ import { runInTransaction } from '../../common/utils/run-in-transaction';
  * If any step fails the whole flow is rolled back. The optional
  * `manager` parameter lets callers (e.g. the Paystack webhook) reuse
  * their outer transaction so we never end up with nested savepoints.
+ *
+ * BE-24 — invalidates booking list cache after confirmation.
  */
 @Injectable()
 export class ConfirmBookingProvider {
+  private readonly logger = new Logger(ConfirmBookingProvider.name);
+
   constructor(
     @InjectRepository(Booking)
     private readonly bookingsRepository: Repository<Booking>,
     @InjectRepository(User)
     private readonly usersRepository: Repository<User>,
     private readonly dataSource: DataSource,
+    private readonly cacheInvalidation: CacheInvalidationProvider,
   ) {}
 
   async confirm(
@@ -56,15 +63,20 @@ export class ConfirmBookingProvider {
         await manager.save(user);
       }
 
-      // Return the in-memory record we already saved inside this
-      // transaction. Don't re-fetch via the non-transactional repository
-      // — a separate connection could miss the uncommitted row.
       return savedBooking;
     };
 
+    let saved: Booking;
     if (passedManager) {
-      return work(passedManager);
+      saved = await work(passedManager);
+    } else {
+      saved = await runInTransaction(this.dataSource, work);
     }
-    return runInTransaction(this.dataSource, work);
+
+    this.cacheInvalidation
+      .invalidateBookingList(saved.workspaceId)
+      .catch(() => this.logger.warn('Failed to invalidate booking cache'));
+
+    return saved;
   }
 }

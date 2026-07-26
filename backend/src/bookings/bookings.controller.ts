@@ -10,7 +10,9 @@ import {
   UseGuards,
   HttpCode,
   HttpStatus,
+  Res,
 } from '@nestjs/common';
+import { Response } from 'express';
 import {
   ApiTags,
   ApiBearerAuth,
@@ -21,6 +23,7 @@ import {
   ApiBadRequestResponse,
   ApiNotFoundResponse,
   ApiOkResponse,
+  ApiProduces,
 } from '@nestjs/swagger';
 import { BookingsService } from './bookings.service';
 import { CreateBookingDto } from './dto/create-booking.dto';
@@ -32,6 +35,8 @@ import { GetCurrentUser } from '../auth/decorators/getCurrentUser.decorator';
 import { PlanType } from './enums/plan-type.enum';
 import { ApiErrorDto } from '../common/dto/api-error.dto';
 import { Booking } from './entities/booking.entity';
+import { CsvExportService } from '../common/csv-export/csv-export.service';
+import { ExportBookingsProvider } from './providers/export-bookings.provider';
 
 @ApiTags('bookings')
 @ApiBearerAuth('bearer')
@@ -43,7 +48,10 @@ import { Booking } from './entities/booking.entity';
 @ApiNotFoundResponse({ description: 'Resource not found', type: ApiErrorDto })
 @Controller('bookings')
 export class BookingsController {
-  constructor(private readonly bookingsService: BookingsService) {}
+  constructor(
+    private readonly bookingsService: BookingsService,
+    private readonly csvExportService: CsvExportService,
+  ) {}
 
   @Post()
   @ApiOperation({ summary: 'Create a booking' })
@@ -96,6 +104,36 @@ export class BookingsController {
       message: 'Price estimate calculated',
       data: { amountKobo: amount, amountNaira: amount / 100, ...summary },
     };
+  }
+
+  @Get('export/csv')
+  @ApiOperation({ summary: 'Export bookings as CSV' })
+  @ApiProduces('text/csv')
+  @ApiQuery({ name: 'startDate', required: false, type: String })
+  @ApiQuery({ name: 'endDate', required: false, type: String })
+  @ApiOkResponse({ description: 'CSV file stream returned' })
+  async exportCsv(
+    @GetCurrentUser('id') userId: string,
+    @GetCurrentUser('role') userRole: UserRole,
+    @Query('startDate') startDate?: string,
+    @Query('endDate') endDate?: string,
+    @Res() res?: Response,
+  ) {
+    const data = await this.bookingsService.exportCsv(
+      userId,
+      userRole,
+      startDate,
+      endDate,
+    );
+    const csv = this.csvExportService.toCsv(data, ExportBookingsProvider.columns);
+    if (res) {
+      res.set({
+        'Content-Type': 'text/csv',
+        'Content-Disposition': `attachment; filename="bookings-export.csv"`,
+      });
+      res.end(csv);
+    }
+    return csv;
   }
 
   @Get(':id')

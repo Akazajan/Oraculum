@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Workspace } from '../entities/workspace.entity';
@@ -8,6 +8,7 @@ import {
   withRetry,
 } from '../../utils/retry.util';
 import { AuditAction, AuditService } from '../../audit/audit.service';
+import { CacheInvalidationProvider } from '../../common/providers/cache-invalidation.provider';
 
 /**
  * BE-14 — Soft-deletes a workspace via TypeORM's `repository.softDelete`
@@ -19,19 +20,22 @@ import { AuditAction, AuditService } from '../../audit/audit.service';
  *
  * BE-03 — emits an audit event so the deletion is traceable end-to-
  * end and rolls forward into the admin audit-log surface.
+ *
+ * BE-24 — invalidates workspace list cache after delete/restore.
  */
 @Injectable()
 export class DeleteWorkspaceProvider {
+  private readonly logger = new Logger(DeleteWorkspaceProvider.name);
+
   constructor(
     @InjectRepository(Workspace)
     private readonly workspacesRepository: Repository<Workspace>,
     private readonly findWorkspaceByIdProvider: FindWorkspaceByIdProvider,
     private readonly auditService: AuditService,
+    private readonly cacheInvalidation: CacheInvalidationProvider,
   ) {}
 
   async softDelete(id: string): Promise<void> {
-    // Same optimistic locking discipline as UpdateWorkspaceProvider so a
-    // concurrent edit cannot silently overwrite a softDelete (or vice versa).
     await withRetry(
       async () => {
         const workspace = await this.findWorkspaceByIdProvider.findById(id, {
@@ -47,7 +51,7 @@ export class DeleteWorkspaceProvider {
 
         await this.auditService.adminAction(
           AuditAction.WORKSPACE_DELETED,
-          {}, // actor will be filled from ALS by the AuditService
+          {},
           'Workspace',
           id,
           { previousActive: workspace.isActive },
@@ -60,6 +64,10 @@ export class DeleteWorkspaceProvider {
         isRetryable: isOptimisticLockError,
       },
     );
+
+    this.cacheInvalidation
+      .invalidateWorkspaceList()
+      .catch(() => this.logger.warn('Failed to invalidate workspace cache'));
   }
 
   async restore(id: string): Promise<void> {
@@ -79,5 +87,9 @@ export class DeleteWorkspaceProvider {
       'Workspace',
       id,
     );
+
+    this.cacheInvalidation
+      .invalidateWorkspaceList()
+      .catch(() => this.logger.warn('Failed to invalidate workspace cache'));
   }
 }
