@@ -10,7 +10,11 @@ import { InvoicesController } from './invoices.controller';
 import { GenerateInvoiceProvider } from './providers/generate-invoice.provider';
 import { FindInvoicesProvider } from './providers/find-invoices.provider';
 import { PdfInvoiceProvider } from './providers/pdf-invoice.provider';
+import { PdfGenerationProvider } from './providers/pdf-generation.provider';
+import { PdfGenerationFallbackProvider } from './providers/pdf-generation-fallback.provider';
 import { InvoiceSequenceProvider } from './providers/invoice-sequence.provider';
+import { ExportInvoicesProvider } from './providers/export-invoices.provider';
+import { CsvExportService } from '../common/csv-export/csv-export.service';
 
 @Module({
   imports: [
@@ -22,7 +26,11 @@ import { InvoiceSequenceProvider } from './providers/invoice-sequence.provider';
     GenerateInvoiceProvider,
     FindInvoicesProvider,
     PdfInvoiceProvider,
+    PdfGenerationProvider,
+    PdfGenerationFallbackProvider,
     InvoiceSequenceProvider,
+    ExportInvoicesProvider,
+    CsvExportService,
   ],
   exports: [InvoicesService],
 })
