@@ -12,6 +12,7 @@ import { HttpLogger } from './common/middlewares/httpLogger.middleware';
 import { CorrelationIdMiddleware } from './common/middlewares/correlation-id.middleware';
 import { CentralizedValidationPipe } from './common/pipes/validation.pipe';
 import { GlobalExceptionFilter } from './common/filters/global-exception.filter';
+import { GracefulShutdownService } from './common/services/graceful-shutdown.service';
 import {
   ApiVersionMiddleware,
   CURRENT_API_VERSION,
@@ -144,6 +145,13 @@ List endpoints accept \`page\` (default 1) and \`limit\` (default 20, max 100). 
 
   SwaggerModule.setup('swagger', app as any, document, ui);
 
+  app.setGlobalPrefix('/api');
+
+  const server = await app.listen(process.env.PORT ?? 3000, '0.0.0.0');
+
+  const shutdownService = app.get(GracefulShutdownService);
+  shutdownService.setHttpServer(server);
+  shutdownService.registerSignalHandlers();
   await app.listen(process.env.PORT ?? 3000, '0.0.0.0');
   console.log(`Server is listening at: ${await app.getUrl()}`);
   console.log(
