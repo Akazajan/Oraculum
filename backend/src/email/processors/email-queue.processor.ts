@@ -5,6 +5,7 @@ import { EmailService } from '../email.service';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as handlebars from 'handlebars';
+import { DeadLetterProvider } from '../../common/providers/dead-letter.provider';
 
 @Processor('email')
 export class EmailQueueProcessor {
@@ -39,6 +40,20 @@ export class EmailQueueProcessor {
       this.logger.error(
         `Email job ${job.id} failed: ${(error as Error).message}`,
       );
+  constructor(
+    private readonly deadLetterProvider: DeadLetterProvider,
+  ) {}
+
+  @Process('send-email')
+  async handleSendEmail(job: Job<{ to: string; subject: string; html: string }>) {
+    this.logger.log(`Processing email job ${job.id}: ${job.data.subject}`);
+    try {
+      // Job is handled by the email-queue.provider when queue mode is used.
+      // This processor is a placeholder for the queue consumer.
+      await job.progress(100);
+      return { success: true, jobId: job.id };
+    } catch (error) {
+      this.logger.error(`Email job ${job.id} failed: ${(error as Error).message}`);
       throw error;
     }
   }
@@ -73,6 +88,8 @@ export class EmailQueueProcessor {
       );
       await job.progress(100);
       return { success: result, jobId: job.id };
+      await job.progress(100);
+      return { success: true, jobId: job.id };
     } catch (error) {
       this.logger.error(
         `Template email job ${job.id} failed: ${(error as Error).message}`,

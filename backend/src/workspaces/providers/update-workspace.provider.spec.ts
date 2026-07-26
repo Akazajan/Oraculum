@@ -4,6 +4,7 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import { UpdateWorkspaceProvider } from './update-workspace.provider';
 import { FindWorkspaceByIdProvider } from './find-workspace-by-id.provider';
 import { Workspace } from '../entities/workspace.entity';
+import { CacheInvalidationProvider } from '../../common/providers/cache-invalidation.provider';
 
 class OptimisticLockError extends Error {
   constructor() {
@@ -28,6 +29,12 @@ describe('UpdateWorkspaceProvider (optimistic locking retries)', () => {
         {
           provide: FindWorkspaceByIdProvider,
           useValue: { findById },
+        },
+        {
+          provide: CacheInvalidationProvider,
+          useValue: {
+            invalidateWorkspaceList: jest.fn().mockResolvedValue(undefined),
+          },
         },
       ],
     }).compile();

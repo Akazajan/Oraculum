@@ -1,6 +1,8 @@
 import { Test } from '@nestjs/testing';
 import { getQueueToken } from '@nestjs/bull';
 import { EmailQueueProvider } from '../email-queue.provider';
+import { EmailQueueProvider } from '../email-queue.provider';
+import { getQueueToken } from '@nestjs/bull';
 
 describe('EmailQueueProvider', () => {
   let provider: EmailQueueProvider;
@@ -45,6 +47,15 @@ describe('EmailQueueProvider', () => {
     expect(queue.add).toHaveBeenCalledWith(
       'send-email',
       { to: 'test@example.com', subject: 'Welcome', html: '<p>Hello</p>' },
+  it('enqueueSendEmail adds a job to the queue', async () => {
+    const jobId = await provider.enqueueSendEmail({
+      to: 'a@b.com',
+      subject: 'Test',
+      html: '<p>Hello</p>',
+    });
+    expect(queue.add).toHaveBeenCalledWith(
+      'send-email',
+      { to: 'a@b.com', subject: 'Test', html: '<p>Hello</p>' },
       expect.objectContaining({ attempts: 3 }),
     );
     expect(jobId).toBe('job-1');
@@ -63,12 +74,23 @@ describe('EmailQueueProvider', () => {
       expect.objectContaining({
         templateName: 'verification-otp',
       }),
+  it('enqueueSendTemplateEmail adds a template job', async () => {
+    const jobId = await provider.enqueueSendTemplateEmail({
+      to: 'a@b.com',
+      subject: 'Welcome',
+      templateName: 'welcome',
+      placeholders: { name: 'A' },
+    });
+    expect(queue.add).toHaveBeenCalledWith(
+      'send-template-email',
+      expect.objectContaining({ templateName: 'welcome' }),
       expect.objectContaining({ attempts: 3 }),
     );
     expect(jobId).toBe('job-1');
   });
 
   it('getJobStatus returns null for non-existent job', async () => {
+  it('getJobStatus returns null if job not found', async () => {
     queue.getJob.mockResolvedValue(null);
     const result = await provider.getJobStatus('nonexistent');
     expect(result).toBeNull();

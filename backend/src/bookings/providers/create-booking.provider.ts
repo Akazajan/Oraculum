@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -13,9 +14,12 @@ import { PricingService } from '../pricing/pricing.service';
 import { Workspace } from '../../workspaces/entities/workspace.entity';
 import { User } from '../../users/entities/user.entity';
 import { EmailService } from '../../email/email.service';
+import { CacheInvalidationProvider } from '../../common/providers/cache-invalidation.provider';
 
 @Injectable()
 export class CreateBookingProvider {
+  private readonly logger = new Logger(CreateBookingProvider.name);
+
   constructor(
     @InjectRepository(Booking)
     private readonly bookingsRepository: Repository<Booking>,
@@ -24,6 +28,7 @@ export class CreateBookingProvider {
     private readonly pricingService: PricingService,
     private readonly dataSource: DataSource,
     private readonly emailService: EmailService,
+    private readonly cacheInvalidation: CacheInvalidationProvider,
   ) {}
 
   async create(dto: CreateBookingDto, userId: string): Promise<Booking> {
@@ -31,8 +36,7 @@ export class CreateBookingProvider {
       throw new BadRequestException('endDate must be after startDate');
     }
 
-    return this.dataSource.transaction(async (manager) => {
-      // Lock the workspace row to prevent concurrent seat over-booking
+    const saved = await this.dataSource.transaction(async (manager) => {
       const workspace = await manager
         .createQueryBuilder(Workspace, 'w')
         .setLock('pessimistic_write')
@@ -46,7 +50,6 @@ export class CreateBookingProvider {
         throw new BadRequestException('Workspace is not active');
       }
 
-      // Conflict check: sum existing confirmed/pending seat counts for overlapping dates
       const overlap = await manager
         .createQueryBuilder(Booking, 'b')
         .select('COALESCE(SUM(b.seatCount), 0)', 'booked')
@@ -82,28 +85,33 @@ export class CreateBookingProvider {
         status: BookingStatus.PENDING,
       });
 
-      const saved = await manager.save(booking);
+      const savedBooking = await manager.save(booking);
 
-      // Fire-and-forget booking created email
       this.usersRepository
         .findOne({ where: { id: userId } })
         .then((user) => {
           if (!user) return;
           this.emailService
             .sendBookingCreatedEmail(user.email, user.fullName, {
-              bookingId: saved.id,
+              bookingId: savedBooking.id,
               workspaceName: workspace.name,
-              planType: saved.planType,
-              startDate: saved.startDate,
-              endDate: saved.endDate,
-              seatCount: saved.seatCount,
+              planType: savedBooking.planType,
+              startDate: savedBooking.startDate,
+              endDate: savedBooking.endDate,
+              seatCount: savedBooking.seatCount,
               totalAmountNaira: (totalAmount / 100).toFixed(2),
             })
             .catch(() => void 0);
         })
         .catch(() => void 0);
 
-      return saved;
+      return savedBooking;
     });
+
+    this.cacheInvalidation
+      .invalidateBookingList(dto.workspaceId)
+      .catch(() => this.logger.warn('Failed to invalidate booking cache'));
+
+    return saved;
   }
 }

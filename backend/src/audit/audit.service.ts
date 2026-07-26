@@ -49,6 +49,16 @@ export const AuditAction = {
   CONTACT_MARKED_READ: 'CONTACT_MARKED_READ',
   CONTACT_DELETED: 'CONTACT_DELETED',
   CONTACT_RESTORED: 'CONTACT_RESTORED',
+  // Payments
+  PAYMENT_INITIATED: 'PAYMENT_INITIATED',
+  PAYMENT_SUCCESS: 'PAYMENT_SUCCESS',
+  PAYMENT_FAILED: 'PAYMENT_FAILED',
+  PAYMENT_REFUNDED: 'PAYMENT_REFUNDED',
+  PAYMENT_WEBHOOK_RECEIVED: 'PAYMENT_WEBHOOK_RECEIVED',
+  PAYMENT_RECONCILED: 'PAYMENT_RECONCILED',
+  // Invoices
+  INVOICE_GENERATED: 'INVOICE_GENERATED',
+  INVOICE_RECONCILED: 'INVOICE_RECONCILED',
 } as const;
 
 export type AuditActionCode =
@@ -182,6 +192,36 @@ export class AuditService {
       actor,
       resourceType,
       resourceId,
+      metadata,
+    });
+  }
+
+  paymentFailure(
+    paymentId: string,
+    userId: string | null,
+    metadata: Record<string, unknown>,
+  ) {
+    return this.log({
+      action: AuditAction.PAYMENT_FAILED,
+      outcome: 'FAILURE',
+      actor: userId ? { id: userId } : undefined,
+      resourceType: 'Payment',
+      resourceId: paymentId,
+      metadata,
+    });
+  }
+
+  paymentSuccess(
+    paymentId: string,
+    userId: string,
+    metadata?: Record<string, unknown>,
+  ) {
+    return this.log({
+      action: AuditAction.PAYMENT_SUCCESS,
+      outcome: 'SUCCESS',
+      actor: { id: userId },
+      resourceType: 'Payment',
+      resourceId: paymentId,
       metadata,
     });
   }

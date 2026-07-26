@@ -49,6 +49,7 @@ export class EmailQueueProvider {
   async getJobStatus(
     jobId: string,
   ): Promise<{ status: string; data?: unknown } | null> {
+  async getJobStatus(jobId: string): Promise<{ status: string; data?: unknown } | null> {
     const job = await this.emailQueue.getJob(jobId);
     if (!job) return null;
     return { status: await job.getState(), data: job.returnvalue };

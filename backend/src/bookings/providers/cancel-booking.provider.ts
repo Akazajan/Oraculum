@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -13,15 +14,20 @@ import { User } from '../../users/entities/user.entity';
 import { EmailService } from '../../email/email.service';
 import { WorkspacesService } from '../../workspaces/workspaces.service';
 import { runInTransaction } from '../../common/utils/run-in-transaction';
+import { CacheInvalidationProvider } from '../../common/providers/cache-invalidation.provider';
 
 /**
  * Cancels a booking. Only a single entity is mutated today
  * (the Booking row), so we still wrap in a transaction so that
  * future extensions (refund insertion, cancellation ledger entry)
  * can be added here without partial-failure regressions (BE-12).
+ *
+ * BE-24 — invalidates workspace + booking list cache after cancellation.
  */
 @Injectable()
 export class CancelBookingProvider {
+  private readonly logger = new Logger(CancelBookingProvider.name);
+
   constructor(
     @InjectRepository(Booking)
     private readonly bookingsRepository: Repository<Booking>,
@@ -30,6 +36,7 @@ export class CancelBookingProvider {
     private readonly dataSource: DataSource,
     private readonly emailService: EmailService,
     private readonly workspacesService: WorkspacesService,
+    private readonly cacheInvalidation: CacheInvalidationProvider,
   ) {}
 
   async cancel(
@@ -66,6 +73,14 @@ export class CancelBookingProvider {
       booking.status = BookingStatus.CANCELLED;
       return manager.save(booking);
     });
+
+    this.cacheInvalidation
+      .invalidateBookingList(saved.workspaceId)
+      .catch(() => this.logger.warn('Failed to invalidate booking cache'));
+
+    this.cacheInvalidation
+      .invalidateWorkspaceList()
+      .catch(() => this.logger.warn('Failed to invalidate workspace cache'));
 
     // Fire-and-forget cancellation email (kept outside the transaction
     // because emails are best-effort and must never block state).
