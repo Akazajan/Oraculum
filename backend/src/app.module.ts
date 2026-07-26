@@ -22,6 +22,7 @@ import { InvoicesModule } from './invoices/invoices.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { WorkspaceTrackingModule } from './workspace-tracking/workspace-tracking.module';
 import { AuditModule } from './audit/audit.module';
+import { WebhookHistoryModule } from './webhook-history/webhook-history.module';
 import { WebhooksModule } from './webhooks/webhooks.module';
 import { DeadLetterModule } from './common/dead-letter/dead-letter.module';
 import { CleanupModule } from './cleanup/cleanup.module';
@@ -117,6 +118,7 @@ import { CleanupModule } from './cleanup/cleanup.module';
     InvoicesModule,
     NotificationsModule,
     WorkspaceTrackingModule,
+    WebhookHistoryModule,
     WebhooksModule,
     DeadLetterModule,
     CleanupModule,
