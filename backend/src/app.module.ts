@@ -24,6 +24,10 @@ import { WorkspaceTrackingModule } from './workspace-tracking/workspace-tracking
 import { AuditModule } from './audit/audit.module';
 import { CacheModule } from '@nestjs/cache-manager';
 import { redisStore } from 'cache-manager-ioredis-yet';
+import { WebhookHistoryModule } from './webhook-history/webhook-history.module';
+import { WebhooksModule } from './webhooks/webhooks.module';
+import { DeadLetterModule } from './common/dead-letter/dead-letter.module';
+import { CleanupModule } from './cleanup/cleanup.module';
 
 @Module({
   imports: [
@@ -129,6 +133,10 @@ import { redisStore } from 'cache-manager-ioredis-yet';
     InvoicesModule,
     NotificationsModule,
     WorkspaceTrackingModule,
+    WebhookHistoryModule,
+    WebhooksModule,
+    DeadLetterModule,
+    CleanupModule,
   ],
   controllers: [AppController],
   providers: [
