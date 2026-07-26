@@ -11,6 +11,7 @@ import { FindBookingsProvider } from './providers/find-bookings.provider';
 import { PricingService } from './pricing/pricing.service';
 import { WorkspacesModule } from '../workspaces/workspaces.module';
 import { User } from '../users/entities/user.entity';
+import { CacheInvalidationProvider } from '../common/providers/cache-invalidation.provider';
 import { ExportBookingsProvider } from './providers/export-bookings.provider';
 import { CsvExportService } from '../common/csv-export/csv-export.service';
 
@@ -25,6 +26,7 @@ import { CsvExportService } from '../common/csv-export/csv-export.service';
     CancelBookingProvider,
     CompleteBookingProvider,
     FindBookingsProvider,
+    CacheInvalidationProvider,
     ExportBookingsProvider,
     CsvExportService,
   ],
