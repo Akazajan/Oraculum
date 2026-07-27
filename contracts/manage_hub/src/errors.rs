@@ -32,6 +32,7 @@ pub enum Error {
     PauseCountExceeded = 26,
     PauseTooEarly = 27,
     SubscriptionNotPaused = 28,
+    SubscriptionAlreadyRevoked = 51,
     // Attendance analytics errors
     InvalidDateRange = 29,
     NoAttendanceRecords = 30,
@@ -60,4 +61,6 @@ pub enum Error {
     AutoRenewalFailed = 49,
     // Token fractionalization errors
     TokenFractionalized = 50,
+    SubscriptionAlreadyRevoked = 51,
+    SubscriptionInvalid = 52,
 }
