@@ -225,7 +225,13 @@ export class AuthService {
       role: user.role,
     });
 
+    // BE-04 — Persist the refresh token so the rotation flow (and the
+    // logout endpoint) can later invalidate it via DB lookup.
     const tokens = this.jwtHelper.generateTokens(user);
+    await this.refreshTokenRepositoryOperations.saveRefreshToken(
+      user,
+      tokens.refreshToken,
+    );
 
     return {
       message: UserMessages.VERIFY_OTP_SUCCESS,
@@ -308,22 +314,120 @@ export class AuthService {
       return { requiresTwoFactor: true, tempToken };
     }
 
-    const { accessToken } = this.jwtHelper.generateTokens(user);
+    // BE-04 — Persist the refresh token on login so the rotation flow
+    // can later detect reuse. The DB row carries the family UUID; the
+    // JWT carries the same family so we can correlate them.
+    const { accessToken, refreshToken } = this.jwtHelper.generateTokens(user);
+    await this.refreshTokenRepositoryOperations.saveRefreshToken(
+      user,
+      refreshToken,
+    );
     return {
       user: this.userHelper.formatUserResponse(user),
       accessToken,
+      refreshToken,
     };
   }
+
+  /**
+   * BE-04 — Refresh-token rotation with replay detection.
+   *
+   * 1. Decode the JWT to discover the *user* and the *family* lineage.
+   * 2. Look the token up in the DB. If it does not exist, reject.
+   * 3. If the token row is already revoked (replay attempt):
+   *    revoke every sibling token in the same family so a stolen
+   *    token cannot be used to keep the session alive.
+   * 4. Otherwise: mark the old token revoked ("rotation"), mint a new
+   *    access + refresh pair in the same family, persist, return both.
+   */
   async refreshToken(refreshToken: string) {
-    const userId = this.jwtHelper.validateRefreshToken(refreshToken);
+    if (!refreshToken) {
+      throw new UnauthorizedException(UserMessages.INVALID_REFRESH_TOKEN);
+    }
+
+    const claim = this.jwtHelper.validateRefreshToken(refreshToken);
+    if (!claim) {
+      throw new UnauthorizedException(UserMessages.INVALID_REFRESH_TOKEN);
+    }
+
+    const stored = await this.refreshTokenRepositoryOperations.findToken(
+      refreshToken,
+    );
+
+    // Token does not exist in DB → not part of any issued session.
+    if (!stored) {
+      throw new UnauthorizedException(UserMessages.INVALID_REFRESH_TOKEN);
+    }
+
+    // Reuse of a revoked token is treated as theft: kill the family.
+    if (stored.revoked) {
+      await this.refreshTokenRepositoryOperations.revokeFamily(
+        stored.family ?? '',
+        'replay',
+      );
+      await this.auditService.authFailure(
+        AuditAction.LOGIN_FAILED,
+        null,
+        {
+          reason: 'refresh_token_replay',
+          userId: stored.userId,
+          family: stored.family,
+        },
+      );
+      throw new UnauthorizedException(UserMessages.INVALID_REFRESH_TOKEN);
+    }
+
+    if (stored.expiresAt && stored.expiresAt < new Date()) {
+      throw new UnauthorizedException(UserMessages.INVALID_REFRESH_TOKEN);
+    }
+
     const user = await this.userRepository.findOne({
-      where: { id: userId },
+      where: { id: claim.userId },
     });
     if (!user) {
       throw new UnauthorizedException(UserMessages.INVALID_REFRESH_TOKEN);
     }
-    const accessToken = this.jwtHelper.generateAccessToken(user);
-    return { accessToken };
+
+    // Rotate: revoke the old, persist the new with the same family.
+    await this.refreshTokenRepositoryOperations.revokeToken(
+      refreshToken,
+      'rotation',
+    );
+    const newAccessToken = this.jwtHelper.generateAccessToken(user);
+    const newRefreshToken = this.jwtHelper.generateRefreshToken(
+      user,
+      stored.family,
+    );
+    await this.refreshTokenRepositoryOperations.saveRefreshToken(
+      user,
+      newRefreshToken,
+      stored.family,
+    );
+
+    return {
+      accessToken: newAccessToken,
+      refreshToken: newRefreshToken,
+    };
+  }
+
+  /**
+   * BE-04 — Logout revokes the supplied refresh token so it cannot be
+   * rotated even though its JWT might still be within the expiry
+   * window. Access tokens remain valid until natural expiry, but no
+   * new access tokens can be minted from the revoked refresh token.
+   */
+  async logout(refreshToken: string, userId?: string) {
+    if (refreshToken) {
+      await this.refreshTokenRepositoryOperations.revokeToken(
+        refreshToken,
+        'logout',
+      );
+    }
+    if (userId) {
+      await this.auditService.authSuccess(AuditAction.LOGOUT, {
+        id: userId,
+      });
+    }
   }
   async retrieveUserById(userId: string) {
     const user = await this.userRepository.findOne({
@@ -561,11 +665,60 @@ export class AuthService {
       email: user?.email,
       role: user?.role,
     });
+    // BE-04 — Security hygiene: revoking sessions after 2FA is disabled
+    // ensures a device that was using TOTP must re-authenticate.
+    try {
+      await this.refreshTokenRepositoryOperations.revokeAllRefreshTokens(
+        userId,
+        'admin',
+      );
+    } catch (err) {
+      this.logger.warn(
+        `Failed to revoke sessions after 2FA disable for user ${userId}: ${
+          (err as Error)?.message ?? err
+        }`,
+      );
+    }
     return result;
   }
 
   get2faStatus(userId: string) {
     return this.manageTotpProvider.get2faStatus(userId);
+  }
+
+  /**
+   * BE-06 — Regenerate the user's 2FA backup codes.
+   *
+   * Recovery flow (documented for reviewers):
+   *   1. User authenticates with their password (already solved by
+   *      JwtAuthGuard on the route AND the supplied password, which
+   *      the provider verifies against the stored bcrypt hash).
+   *   2. We mint 8 fresh plain codes, store bcrypt hashes, and return
+   *      the plain codes exactly once.
+   *   3. Any previously issued backup codes are invalidated.
+   *
+   * If the caller has lost access to their TOTP device *and* their
+   * old backup codes, they need an out-of-band recovery path (admin /
+   * support). That path is **not** exposed by this endpoint — it
+   * requires a verified identity proof before being issued.
+   */
+  async regenerateBackupCodes(
+    userId: string,
+    password: string,
+  ): Promise<{ backupCodes: string[]; backupCodesRemaining: number }> {
+    if (!password) {
+      throw new UnauthorizedException(
+        'Current password is required to rotate backup codes',
+      );
+    }
+    const result = await this.manageTotpProvider.regenerateBackupCodes(
+      userId,
+      password,
+    );
+    await this.auditService.authSuccess(AuditAction.TOTP_ENABLED, {
+      id: userId,
+    });
+    return result;
   }
 
   async resetPassword(resetPasswordDto: ResetPasswordDto) {
