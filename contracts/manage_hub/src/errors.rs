@@ -32,6 +32,7 @@ pub enum Error {
     PauseCountExceeded = 26,
     PauseTooEarly = 27,
     SubscriptionNotPaused = 28,
+    SubscriptionAlreadyRevoked = 51,
     // Attendance analytics errors
     InvalidDateRange = 29,
     NoAttendanceRecords = 30,
@@ -78,4 +79,7 @@ pub enum Error {
     /// Pagination parameters failed validation (e.g. limit = 0,
     /// limit > MAX_PAGE_SIZE).
     InvalidPaginationParams = 56,
+}
+    SubscriptionAlreadyRevoked = 51,
+    SubscriptionInvalid = 52,
 }

@@ -199,6 +199,8 @@ pub enum MembershipStatus {
     Revoked,
     /// Inactive membership
     Inactive,
+    /// Invalid membership
+    Invalid,
 }
 
 // ============================================================================

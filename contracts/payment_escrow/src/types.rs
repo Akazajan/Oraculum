@@ -46,4 +46,10 @@ pub struct Escrow {
     pub dispute_raised_at: Option<u64>,
     /// Ledger timestamp when the escrow was resolved (released/refunded).
     pub resolved_at: Option<u64>,
+    /// Fee recipient address (e.g. the hub operator).
+    pub fee_recipient: Address,
+    /// Fee basis points (e.g. 100 = 1%).
+    pub fee_bps: u32,
+    /// Calculated fee amount.
+    pub fee_amount: i128,
 }
