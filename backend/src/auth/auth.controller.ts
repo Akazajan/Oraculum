@@ -32,6 +32,7 @@ import { Setup2faDto } from './dto/setup-2fa.dto';
 import { VerifyTotpDto } from './dto/verify-totp.dto';
 import { UseBackupCodeDto } from './dto/use-backup-code.dto';
 import { Disable2faDto } from './dto/disable-2fa.dto';
+import { RegenerateBackupCodesDto } from './dto/regenerate-backup-codes.dto';
 import { ApiErrorDto } from '../common/dto/api-error.dto';
 
 @ApiTags('auth')
@@ -93,11 +94,30 @@ export class AuthController {
   @Public()
   @Post('refresh-token')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Exchange a refresh token for new tokens' })
+  @ApiOperation({
+    summary:
+      'Exchange a refresh token for a fresh access + refresh pair (rotated)',
+  })
   @ApiResponse({ status: 200, description: 'Tokens refreshed' })
   @ApiResponse({ status: 401, type: ApiErrorDto })
   refreshToken(@Body('refreshToken') refreshToken: string) {
     return this.authService.refreshToken(refreshToken);
+  }
+
+  @Public()
+  @Post('logout')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary:
+      'Revoke the supplied refresh token so the session cannot be rotated',
+  })
+  @ApiResponse({ status: 200, description: 'Session revoked' })
+  async logout(
+    @Body('refreshToken') refreshToken: string,
+    @CurrentUser() user: User | undefined,
+  ) {
+    await this.authService.logout(refreshToken, user?.id);
+    return { message: 'Logged out' };
   }
 
   @Get('current-user')
@@ -200,5 +220,29 @@ export class AuthController {
   @ApiOperation({ summary: 'Get the 2FA status for the current user' })
   get2faStatus(@GetCurrentUser('id') userId: string) {
     return this.authService.get2faStatus(userId);
+  }
+
+  /**
+   * BE-06 — Recovery flow for users who have lost their TOTP device.
+   *
+   * Caller must (a) be authenticated (JwtAuthGuard) and (b) prove
+   * they still know their current password (so a stolen access token
+   * cannot be used to silently rotate backup codes). The endpoint
+   * returns a fresh batch of plain-text codes; only their bcrypt
+   * hashes are persisted, so a database leak cannot forge a login.
+   */
+  @Post('2fa/backup-codes/regenerate')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAuthGuard)
+  @ApiOperation({
+    summary: 'Regenerate the caller\'s 2FA backup codes (BE-06 recovery flow)',
+  })
+  @ApiResponse({ status: 200, description: 'Fresh backup codes returned' })
+  @ApiResponse({ status: 401, type: ApiErrorDto })
+  regenerateBackupCodes(
+    @GetCurrentUser('id') userId: string,
+    @Body() dto: RegenerateBackupCodesDto,
+  ) {
+    return this.authService.regenerateBackupCodes(userId, dto.password);
   }
 }
