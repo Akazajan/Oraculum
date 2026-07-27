@@ -83,8 +83,8 @@ mod validation;
 use attendance_log::{AttendanceLog, AttendanceLogModule};
 use batch::BatchModule;
 use common_types::{
-    AttendanceFrequency, DateRange, DayPattern, MetadataUpdate, MetadataValue, PeakHourData,
-    TimePeriod, TokenMetadata, UserAttendanceStats,
+    AttendanceFrequency, DateRange, DayPattern, MetadataUpdate, MetadataValue, PageParams,
+    PeakHourData, TimePeriod, TokenMetadata, UserAttendanceStats,
 };
 use errors::Error;
 use fractionalization::FractionalizationModule;
@@ -395,6 +395,75 @@ impl Contract {
     /// Deactivates a tier (soft delete). Admin only.
     pub fn deactivate_tier(env: Env, admin: Address, id: String) -> Result<(), Error> {
         SubscriptionContract::deactivate_tier(env, admin, id)
+    }
+
+    /// Reactivates a previously deactivated tier. Admin only.
+    ///
+    /// Companion to [`Self::deactivate_tier`]: reverse the soft-delete
+    /// while preserving the tier's identity and lineage metadata
+    /// (`reactivated_at` is stamped, `deactivated_at` is retained).
+    ///
+    /// Acceptance criteria for issue #97 (CT-18).
+    pub fn reactivate_tier(env: Env, admin: Address, id: String) -> Result<(), Error> {
+        SubscriptionContract::reactivate_tier(env, admin, id)
+    }
+
+    /// Paginated, deterministic listing of every subscription tier.
+    ///
+    /// Results are sorted ascending by tier id. Bounded persisted
+    /// reads per call (see issue #94, CT-15). Paginated contract
+    /// results make consumers safe to operate against databases that
+    /// exceed the per-transaction budget (issue #95, CT-16).
+    pub fn get_all_tiers_paginated(
+        env: Env,
+        page: PageParams,
+    ) -> Result<Vec<SubscriptionTier>, Error> {
+        SubscriptionContract::get_all_tiers_paginated(env, page)
+    }
+
+    /// Paginated, deterministic listing of active subscription tiers.
+    pub fn get_active_tiers_paginated(
+        env: Env,
+        page: PageParams,
+    ) -> Result<Vec<SubscriptionTier>, Error> {
+        SubscriptionContract::get_active_tiers_paginated(env, page)
+    }
+
+    /// Deactivate a staking tier. Admin only.
+    ///
+    /// Stamps `deactivated_at` on the persisted tier so the lifecycle
+    /// remains auditable; pairs with [`Self::reactivate_staking_tier`].
+    pub fn deactivate_staking_tier(
+        env: Env,
+        admin: Address,
+        tier_id: String,
+    ) -> Result<(), Error> {
+        StakingModule::deactivate_staking_tier(env, admin, tier_id)
+    }
+
+    /// Reactivate a previously deactivated staking tier. Admin only.
+    pub fn reactivate_staking_tier(
+        env: Env,
+        admin: Address,
+        tier_id: String,
+    ) -> Result<(), Error> {
+        StakingModule::reactivate_staking_tier(env, admin, tier_id)
+    }
+
+    /// Paginated, deterministic listing of all staking tiers.
+    pub fn get_staking_tiers_paginated(
+        env: Env,
+        page: PageParams,
+    ) -> Result<Vec<StakingTier>, Error> {
+        StakingModule::get_staking_tiers_paginated(env, page)
+    }
+
+    /// Paginated, deterministic listing of active staking tiers.
+    pub fn get_active_staking_tiers_paginated(
+        env: Env,
+        page: PageParams,
+    ) -> Result<Vec<StakingTier>, Error> {
+        StakingModule::get_active_staking_tiers_paginated(env, page)
     }
 
     // ============================================================================
