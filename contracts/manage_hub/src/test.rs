@@ -4,6 +4,7 @@ extern crate alloc;
 use alloc::format;
 
 use super::*;
+use crate::membership_token::{DataKey, LegacyMembershipToken, MembershipToken};
 use crate::types::MembershipStatus;
 use crate::AttendanceAction;
 use soroban_sdk::map;
@@ -2947,6 +2948,52 @@ fn test_token_starts_at_version_zero() {
 
     let version = client.get_token_version(&token_id);
     assert_eq!(version, 0);
+}
+
+#[test]
+fn test_legacy_token_layout_migrates_on_read() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(Contract, ());
+    let client = ContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let user = Address::generate(&env);
+    let token_id = BytesN::<32>::random(&env);
+
+    client.set_admin(&admin);
+
+    let legacy_token = LegacyMembershipToken {
+        id: token_id.clone(),
+        user: user.clone(),
+        status: MembershipStatus::Active,
+        issue_date: 100,
+        expiry_date: 200,
+    };
+
+    env.as_contract(&contract_id, || {
+        env.storage()
+            .persistent()
+            .set(&DataKey::Token(token_id.clone()), &legacy_token);
+    });
+
+    let migrated = client.get_token(&token_id);
+    assert_eq!(migrated.id, token_id);
+    assert_eq!(migrated.user, user);
+    assert_eq!(migrated.expiry_date, 200);
+    assert_eq!(migrated.current_version, 0);
+    assert_eq!(migrated.tier_id, None);
+    assert_eq!(migrated.renewal_attempts, 0);
+
+    let migrated_v2: MembershipToken = env.as_contract(&contract_id, || {
+        env.storage()
+            .persistent()
+            .get(&DataKey::TokenV2(token_id.clone()))
+            .unwrap()
+    });
+    assert_eq!(migrated_v2.current_version, 0);
+    assert_eq!(migrated_v2.expiry_date, 200);
 }
 
 #[test]
