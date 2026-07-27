@@ -29,4 +29,6 @@ pub enum Error {
     InvalidAmount = 11,
     /// Payment token address has not been set.
     PaymentTokenNotSet = 12,
+    /// Fee recipient address has not been set.
+    FeeRecipientNotSet = 13,
 }

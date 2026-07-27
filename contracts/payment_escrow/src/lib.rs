@@ -25,6 +25,10 @@ pub enum DataKey {
     PaymentToken,
     /// Default dispute window in seconds (applied to every new escrow).
     DefaultDisputeWindow,
+    /// Default fee recipient address.
+    DefaultFeeRecipient,
+    /// Default fee basis points.
+    DefaultFeeBps,
     /// Escrow record keyed by escrow ID.
     Escrow(String),
     /// List of escrow IDs created by a depositor.
@@ -72,6 +76,20 @@ impl PaymentEscrowContract {
             .unwrap_or(0u64)
     }
 
+    fn get_fee_recipient(env: &Env) -> Result<Address, Error> {
+        env.storage()
+            .instance()
+            .get(&DataKey::DefaultFeeRecipient)
+            .ok_or(Error::FeeRecipientNotSet)
+    }
+
+    fn get_fee_bps(env: &Env) -> u32 {
+        env.storage()
+            .instance()
+            .get(&DataKey::DefaultFeeBps)
+            .unwrap_or(0u32)
+    }
+
     fn load_escrow(env: &Env, escrow_id: &String) -> Result<Escrow, Error> {
         env.storage()
             .persistent()
@@ -98,6 +116,8 @@ impl PaymentEscrowContract {
         admin: Address,
         payment_token: Address,
         dispute_window_secs: u64,
+        fee_recipient: Address,
+        fee_bps: u32,
     ) -> Result<(), Error> {
         if env.storage().instance().has(&DataKey::Admin) {
             return Err(Error::AlreadyInitialized);
@@ -110,10 +130,22 @@ impl PaymentEscrowContract {
         env.storage()
             .instance()
             .set(&DataKey::DefaultDisputeWindow, &dispute_window_secs);
+        env.storage()
+            .instance()
+            .set(&DataKey::DefaultFeeRecipient, &fee_recipient);
+        env.storage()
+            .instance()
+            .set(&DataKey::DefaultFeeBps, &fee_bps);
 
         env.events().publish(
             (symbol_short!("init"),),
-            (admin, payment_token, dispute_window_secs),
+            (
+                admin,
+                payment_token,
+                dispute_window_secs,
+                fee_recipient,
+                fee_bps,
+            ),
         );
         Ok(())
     }
@@ -130,6 +162,30 @@ impl PaymentEscrowContract {
 
         env.events()
             .publish((symbol_short!("dw_set"),), (window_secs,));
+        Ok(())
+    }
+
+    /// Update the default fee recipient.
+    pub fn set_fee_recipient(env: Env, caller: Address, recipient: Address) -> Result<(), Error> {
+        Self::require_admin(&env, &caller)?;
+        env.storage()
+            .instance()
+            .set(&DataKey::DefaultFeeRecipient, &recipient);
+
+        env.events()
+            .publish((symbol_short!("fee_to_set"),), (recipient,));
+        Ok(())
+    }
+
+    /// Update the default fee basis points.
+    pub fn set_fee_bps(env: Env, caller: Address, fee_bps: u32) -> Result<(), Error> {
+        Self::require_admin(&env, &caller)?;
+        env.storage()
+            .instance()
+            .set(&DataKey::DefaultFeeBps, &fee_bps);
+
+        env.events()
+            .publish((symbol_short!("fee_bps_set"),), (fee_bps,));
         Ok(())
     }
 
@@ -168,6 +224,9 @@ impl PaymentEscrowContract {
         let payment_token = Self::get_payment_token(&env)?;
         let dispute_window = Self::get_dispute_window(&env);
         let now = env.ledger().timestamp();
+        let fee_recipient = Self::get_fee_recipient(&env)?;
+        let fee_bps = Self::get_fee_bps(&env);
+        let fee_amount = (amount * fee_bps as i128) / 10_000;
 
         // Pull funds from depositor into the contract
         token::Client::new(&env, &payment_token).transfer(
@@ -189,6 +248,9 @@ impl PaymentEscrowContract {
             dispute_window,
             dispute_raised_at: None,
             resolved_at: None,
+            fee_recipient,
+            fee_bps,
+            fee_amount,
         };
 
         Self::save_escrow(&env, &escrow);
@@ -234,10 +296,23 @@ impl PaymentEscrowContract {
         }
 
         let now = env.ledger().timestamp();
-        token::Client::new(&env, &escrow.payment_token).transfer(
+        let token_client = token::Client::new(&env, &escrow.payment_token);
+
+        // Transfer the fee, if any
+        if escrow.fee_amount > 0 {
+            token_client.transfer(
+                &env.current_contract_address(),
+                &escrow.fee_recipient,
+                &escrow.fee_amount,
+            );
+        }
+
+        // Transfer the remaining amount to the beneficiary
+        let beneficiary_amount = escrow.amount - escrow.fee_amount;
+        token_client.transfer(
             &env.current_contract_address(),
             &escrow.beneficiary,
-            &escrow.amount,
+            &beneficiary_amount,
         );
 
         escrow.status = EscrowStatus::Released;
@@ -246,7 +321,12 @@ impl PaymentEscrowContract {
 
         env.events().publish(
             (symbol_short!("released"), escrow_id),
-            (escrow.beneficiary, escrow.amount),
+            (
+                escrow.beneficiary,
+                beneficiary_amount,
+                escrow.fee_recipient,
+                escrow.fee_amount,
+            ),
         );
         Ok(())
     }
@@ -335,29 +415,52 @@ impl PaymentEscrowContract {
         }
 
         let now = env.ledger().timestamp();
-        let recipient = if release_to_beneficiary {
-            escrow.beneficiary.clone()
-        } else {
-            escrow.depositor.clone()
-        };
+        let token_client = token::Client::new(&env, &escrow.payment_token);
 
-        token::Client::new(&env, &escrow.payment_token).transfer(
-            &env.current_contract_address(),
-            &recipient,
-            &escrow.amount,
-        );
+        if release_to_beneficiary {
+            // Transfer the fee, if any
+            if escrow.fee_amount > 0 {
+                token_client.transfer(
+                    &env.current_contract_address(),
+                    &escrow.fee_recipient,
+                    &escrow.fee_amount,
+                );
+            }
 
-        escrow.status = if release_to_beneficiary {
-            EscrowStatus::Released
+            // Transfer the remaining amount to the beneficiary
+            let beneficiary_amount = escrow.amount - escrow.fee_amount;
+            token_client.transfer(
+                &env.current_contract_address(),
+                &escrow.beneficiary,
+                &beneficiary_amount,
+            );
+
+            escrow.status = EscrowStatus::Released;
         } else {
-            EscrowStatus::Refunded
-        };
+            // Refund the full amount to the depositor
+            token_client.transfer(
+                &env.current_contract_address(),
+                &escrow.depositor,
+                &escrow.amount,
+            );
+
+            escrow.status = EscrowStatus::Refunded;
+        }
+
         escrow.resolved_at = Some(now);
         Self::save_escrow(&env, &escrow);
 
         env.events().publish(
             (symbol_short!("resolved"), escrow_id),
-            (recipient, escrow.amount, release_to_beneficiary),
+            (
+                if release_to_beneficiary {
+                    escrow.beneficiary
+                } else {
+                    escrow.depositor
+                },
+                escrow.amount,
+                release_to_beneficiary,
+            ),
         );
         Ok(())
     }
@@ -387,10 +490,23 @@ impl PaymentEscrowContract {
         }
 
         let now = env.ledger().timestamp();
-        token::Client::new(&env, &escrow.payment_token).transfer(
+        let token_client = token::Client::new(&env, &escrow.payment_token);
+
+        // Transfer the fee, if any
+        if escrow.fee_amount > 0 {
+            token_client.transfer(
+                &env.current_contract_address(),
+                &escrow.fee_recipient,
+                &escrow.fee_amount,
+            );
+        }
+
+        // Transfer the remaining amount to the beneficiary
+        let beneficiary_amount = escrow.amount - escrow.fee_amount;
+        token_client.transfer(
             &env.current_contract_address(),
             &escrow.beneficiary,
-            &escrow.amount,
+            &beneficiary_amount,
         );
 
         escrow.status = EscrowStatus::Released;
@@ -399,7 +515,12 @@ impl PaymentEscrowContract {
 
         env.events().publish(
             (symbol_short!("claimed"), escrow_id),
-            (escrow.beneficiary, escrow.amount),
+            (
+                escrow.beneficiary,
+                beneficiary_amount,
+                escrow.fee_recipient,
+                escrow.fee_amount,
+            ),
         );
         Ok(())
     }
