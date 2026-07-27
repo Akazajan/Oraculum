@@ -3,8 +3,8 @@ use soroban_sdk::{contracttype, Address, BytesN, String, Vec};
 // Re-export types from common_types for consistency
 pub use common_types::MembershipStatus;
 pub use common_types::{
-    MetadataValue, SubscriptionTier, TierChangeRequest, TierChangeStatus, TierChangeType,
-    TierFeature, TierLevel, TierPromotion,
+    MetadataValue, PageParams, SubscriptionTier, TierChangeRequest, TierChangeStatus,
+    TierChangeType, TierFeature, TierLevel, TierPromotion,
 };
 
 #[contracttype]
@@ -385,6 +385,10 @@ pub struct TokenPauseState {
 // ============================================================================
 
 /// Staking tier defining lock duration and reward multiplier.
+///
+/// Active/inactive state and deactivation/reactivation lineage are tracked
+/// directly on the tier so consumers can audit the full lifecycle in a
+/// single read.
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
 pub struct StakingTier {
@@ -400,6 +404,12 @@ pub struct StakingTier {
     pub reward_multiplier_bps: u32,
     /// Annual base reward rate in basis points (e.g. 500 = 5%)
     pub base_rate_bps: u32,
+    /// Whether tier is currently accepting new stakes.
+    pub is_active: bool,
+    /// Timestamp of last deactivation (None if never deactivated).
+    pub deactivated_at: Option<u64>,
+    /// Timestamp of last reactivation (None if never reactivated).
+    pub reactivated_at: Option<u64>,
 }
 
 /// Represents an active stake held by a user.

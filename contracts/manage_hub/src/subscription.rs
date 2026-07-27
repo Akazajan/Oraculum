@@ -12,6 +12,7 @@ use crate::types::{
     TierAnalytics, TierChangeRequest, TierChangeStatus, TierChangeType, TierFeature, TierLevel,
     TierPromotion, UpdateTierParams, UserSubscriptionInfo,
 };
+use common_types::{validate_page_params, PageParams};
 
 #[contracttype]
 pub enum SubscriptionDataKey {
@@ -660,6 +661,8 @@ impl SubscriptionContract {
             is_active: true,
             created_at: current_time,
             updated_at: current_time,
+            deactivated_at: None,
+            reactivated_at: None,
         };
 
         // Store tier
@@ -761,40 +764,167 @@ impl SubscriptionContract {
     }
 
     /// Gets all available subscription tiers.
+    ///
+    /// Returns the entire tier list in **deterministic, ascending
+    /// lexicographic order of the tier id**. Sorting is performed on
+    /// every read (rather than on every write) so that the tier storage
+    /// does not need to be rewritten when a tier is deactivated.
+    ///
+    /// This convenience wrapper preserves the pre-CT-15 behaviour for
+    /// existing callers (returns the full list). For large datasets use
+    /// [`Self::get_all_tiers_paginated`] which bounds per-call gas.
     pub fn get_all_tiers(env: Env) -> Vec<SubscriptionTier> {
-        let list_key = SubscriptionDataKey::TierList;
-        let tier_ids: Vec<String> = env
+        let mut tier_ids: Vec<String> = env
             .storage()
             .persistent()
-            .get(&list_key)
+            .get(&SubscriptionDataKey::TierList)
             .unwrap_or_else(|| Vec::new(&env));
+        Self::sort_string_vec(&mut tier_ids);
+        Self::collect_tier_slice(&env, &tier_ids, 0, tier_ids.len())
+    }
 
-        let mut tiers = Vec::new(&env);
-        for tier_id in tier_ids.iter() {
+    /// Gets only active tiers available for purchase, in deterministic
+    /// ascending order.
+    ///
+    /// Preserves pre-CT-15 behaviour for callers that need the full
+    /// active set. For large datasets prefer
+    /// [`Self::get_active_tiers_paginated`].
+    pub fn get_active_tiers(env: Env) -> Vec<SubscriptionTier> {
+        let all = Self::get_all_tiers(env.clone());
+        let mut active = Vec::new(&env);
+        for tier in all.iter() {
+            if tier.is_active {
+                active.push_back(tier);
+            }
+        }
+        active
+    }
+
+    /// Paginated, deterministic listing of every subscription tier.
+    ///
+    /// Implementation notes (CT-15 / CT-16):
+    /// - We sort the small `Vec<String>` of tier IDs first, so the
+    ///   iteration order is stable across all clients and environments.
+    /// - We slice that sorted ID vector **before** doing per-ID
+    ///   persistent reads. Each persistent read costs gas, so this
+    ///   bounds total gas to `O(limit)` rather than `O(total)`.
+    pub fn get_all_tiers_paginated(env: Env, page: PageParams) -> Vec<SubscriptionTier> {
+        validate_page_params(page.offset, page.limit)
+            .map_err(|_| Error::InvalidPaginationParams)?;
+
+        let mut tier_ids: Vec<String> = env
+            .storage()
+            .persistent()
+            .get(&SubscriptionDataKey::TierList)
+            .unwrap_or_else(|| Vec::new(&env));
+        Self::sort_string_vec(&mut tier_ids);
+
+        Self::collect_tier_slice(&env, &tier_ids, page.offset, page.limit)
+    }
+
+    /// Paginated, deterministic listing of active subscription tiers.
+    ///
+    /// Like [`Self::get_all_tiers_paginated`] but additionally filters for
+    /// `is_active == true`. The filter runs on the **returned** page only,
+    /// so consumers that iterate through pages with `limit < MAX_PAGE_SIZE`
+    /// benefit fully from the gas savings described in CT-15.
+    pub fn get_active_tiers_paginated(env: Env, page: PageParams) -> Vec<SubscriptionTier> {
+        validate_page_params(page.offset, page.limit)
+            .map_err(|_| Error::InvalidPaginationParams)?;
+
+        let mut tier_ids: Vec<String> = env
+            .storage()
+            .persistent()
+            .get(&SubscriptionDataKey::TierList)
+            .unwrap_or_else(|| Vec::new(&env));
+        Self::sort_string_vec(&mut tier_ids);
+
+        let page_tiers = Self::collect_tier_slice(&env, &tier_ids, page.offset, page.limit);
+
+        let mut active = Vec::new(&env);
+        for tier in page_tiers.iter() {
+            if tier.is_active {
+                active.push_back(tier);
+            }
+        }
+        active
+    }
+
+    /// Internal helper: take a (sorted) `Vec<String>` of tier IDs and
+    /// return the tier structs in the requested index range.
+    ///
+    /// `limit == 0` or `offset >= total` returns an empty `Vec`. The
+    /// caller is responsible for clamping `limit` to `total - offset` if
+    /// a hard upper bound is desired; this helper additionally caps the
+    /// returned slice to the available range to avoid out-of-bounds.
+    fn collect_tier_slice(
+        env: &Env,
+        sorted_ids: &Vec<String>,
+        offset: u32,
+        limit: u32,
+    ) -> Vec<SubscriptionTier> {
+        let total = sorted_ids.len();
+        if offset >= total || limit == 0 {
+            return Vec::new(env);
+        }
+        let remaining = total - offset;
+        let take = remaining.min(limit);
+        let end = offset + take;
+
+        // Vec::slice panics on out-of-bounds; both ends are guaranteed
+        // valid here because `take <= remaining` and `offset < total`.
+        let page_slice = sorted_ids.slice(offset, end);
+        let mut out = Vec::new(env);
+        for tier_id in page_slice.iter() {
             if let Some(tier) = env
                 .storage()
                 .persistent()
-                .get::<_, SubscriptionTier>(&SubscriptionDataKey::Tier(tier_id))
+                .get::<_, SubscriptionTier>(&SubscriptionDataKey::Tier(tier_id.clone()))
             {
-                tiers.push_back(tier);
+                out.push_back(tier);
             }
         }
-        tiers
+        out
     }
 
-    /// Gets only active tiers available for purchase.
-    pub fn get_active_tiers(env: Env) -> Vec<SubscriptionTier> {
-        let all_tiers = Self::get_all_tiers(env.clone());
-        let mut active_tiers = Vec::new(&env);
-        for tier in all_tiers.iter() {
-            if tier.is_active {
-                active_tiers.push_back(tier);
-            }
+    /// Insertion sort `Vec<String>` in place, ascending lexicographic
+    /// (byte comparison — Soroban `String` ordering is byte-wise).
+    ///
+    /// O(N²) in the worst case, but N is bounded by the number of tier
+    /// IDs (usually a few dozen, at most a few hundred). For larger
+    /// datasets, the paginated read path keeps gas linear in the page
+    /// size rather than in the total dataset.
+    ///
+    /// `Vec::get` returns T by value: it pulls a copy from the host-side
+    /// storage without mutating it, so we only need to call `Vec::set`
+    /// when actually swapping.
+    fn sort_string_vec(vec: &mut Vec<String>) {
+        let n = vec.len();
+        if n <= 1 {
+            return;
         }
-        active_tiers
+        let mut i: u32 = 1;
+        while i < n {
+            let mut j = i;
+            while j > 0 {
+                let prev = vec.get(j - 1);
+                let curr = vec.get(j);
+                if prev > curr {
+                    vec.set(j - 1, curr);
+                    vec.set(j, prev);
+                    j -= 1;
+                } else {
+                    break;
+                }
+            }
+            i += 1;
+        }
     }
 
     /// Deactivates a tier (soft delete). Admin only.
+    ///
+    /// Preserves identity (id, created_at) and lineage metadata
+    /// (`deactivated_at` is stamped on every call).
     pub fn deactivate_tier(env: Env, admin: Address, id: String) -> Result<(), Error> {
         admin.require_auth();
 
@@ -805,15 +935,56 @@ impl SubscriptionContract {
             .get(&key)
             .ok_or(Error::TierNotFound)?;
 
+        if !tier.is_active {
+            return Err(Error::TierAlreadyDeactivated);
+        }
+
+        let now = env.ledger().timestamp();
         tier.is_active = false;
-        tier.updated_at = env.ledger().timestamp();
+        tier.deactivated_at = Some(now);
+        tier.updated_at = now;
 
         env.storage().persistent().set(&key, &tier);
 
         // Emit tier deactivated event
         env.events().publish(
             (symbol_short!("tier_dea"), id.clone(), admin.clone()),
-            (tier.updated_at,),
+            (now,),
+        );
+
+        Ok(())
+    }
+
+    /// Reactivates a previously deactivated tier. Admin only.
+    ///
+    /// Preserves identity (id, created_at) and lineage metadata
+    /// (`reactivated_at` is stamped on every successful call; the latest
+    /// `deactivated_at` is retained so the full lifecycle can be audited).
+    pub fn reactivate_tier(env: Env, admin: Address, id: String) -> Result<(), Error> {
+        admin.require_auth();
+
+        let key = SubscriptionDataKey::Tier(id.clone());
+        let mut tier: SubscriptionTier = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .ok_or(Error::TierNotFound)?;
+
+        if tier.is_active {
+            return Err(Error::TierAlreadyActive);
+        }
+
+        let now = env.ledger().timestamp();
+        tier.is_active = true;
+        tier.reactivated_at = Some(now);
+        tier.updated_at = now;
+
+        env.storage().persistent().set(&key, &tier);
+
+        // Emit tier reactivated event
+        env.events().publish(
+            (symbol_short!("tier_rea"), id.clone(), admin.clone()),
+            (now,),
         );
 
         Ok(())

@@ -22,6 +22,18 @@ pub const MAX_ATTRIBUTE_KEY_LENGTH: u32 = 50;
 /// Maximum length for text attribute values
 pub const MAX_TEXT_VALUE_LENGTH: u32 = 200;
 
+/// Default page size for paginated contract queries.
+///
+/// Chosen so that callers reading a single page stays well within the
+/// Soroban per-transaction budget even when the full result set is large.
+pub const DEFAULT_PAGE_SIZE: u32 = 25;
+
+/// Hard ceiling for any single page query.
+///
+/// Prevents a caller from requesting a single oversized page that would
+/// effectively bypass pagination (defeating its gas optimisation purpose).
+pub const MAX_PAGE_SIZE: u32 = 100;
+
 /// Represents different types of metadata values that can be stored.
 ///
 /// This enum provides flexibility in storing various data types as metadata
@@ -406,6 +418,8 @@ pub enum TierFeature {
 /// * `is_active` - Whether this tier is currently available for purchase
 /// * `created_at` - Timestamp when tier was created
 /// * `updated_at` - Timestamp of last update
+/// * `deactivated_at` - Optional timestamp of last deactivation (lineage)
+/// * `reactivated_at` - Optional timestamp of last reactivation (lineage)
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SubscriptionTier {
@@ -431,6 +445,10 @@ pub struct SubscriptionTier {
     pub created_at: u64,
     /// Last update timestamp
     pub updated_at: u64,
+    /// Timestamp of last deactivation (None if never deactivated)
+    pub deactivated_at: Option<u64>,
+    /// Timestamp of last reactivation (None if never reactivated)
+    pub reactivated_at: Option<u64>,
 }
 
 /// Promotional pricing for subscription tiers.
@@ -516,6 +534,73 @@ pub enum TierChangeType {
     Downgrade,
     /// Lateral move to same-level tier
     Lateral,
+}
+
+// ============================================================================
+// Pagination Types
+// ============================================================================
+
+/// Offset/limit pagination parameters used by list-style contract queries.
+///
+/// `offset` is the number of items to skip; `limit` is the maximum number of
+/// items to return. Use [`PageParams::default`] for sane defaults.
+///
+/// Pagination is **always deterministic**: results are returned in the same
+/// order across calls as long as the underlying data does not change between
+/// calls. See [`validate_page_params`] for the rules enforced before a
+/// paginated query is executed.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PageParams {
+    /// Number of items to skip before returning results.
+    pub offset: u32,
+    /// Maximum number of items to return in this page.
+    pub limit: u32,
+}
+
+impl Default for PageParams {
+    fn default() -> Self {
+        Self {
+            offset: 0,
+            limit: DEFAULT_PAGE_SIZE,
+        }
+    }
+}
+
+impl PageParams {
+    /// Construct a [`PageParams`] requesting the given page index (0-based)
+    /// using the default page size.
+    pub fn page(page_index: u32) -> Self {
+        Self {
+            offset: page_index.saturating_mul(DEFAULT_PAGE_SIZE),
+            limit: DEFAULT_PAGE_SIZE,
+        }
+    }
+
+    /// Build a [`PageParams`] with explicit offset and limit.
+    pub fn range(offset: u32, limit: u32) -> Self {
+        Self { offset, limit }
+    }
+}
+
+/// Validates raw offset/limit pagination values.
+///
+/// # Rules
+/// * `limit` MUST be > 0 (an empty page is never useful)
+/// * `limit` MUST be ≤ [`MAX_PAGE_SIZE`] to bound worst-case gas
+///
+/// `offset` is unbounded because pagination will simply return an empty
+/// page slice if offset exceeds the dataset size.
+pub fn validate_page_params(offset: u32, limit: u32) -> Result<(), &'static str> {
+    if limit == 0 {
+        return Err("Page limit cannot be zero");
+    }
+    if limit > MAX_PAGE_SIZE {
+        return Err("Page limit exceeds maximum allowed size");
+    }
+    // offset intentionally has no upper bound
+    let _ = offset;
+    Ok(())
 }
 
 /// Status of a tier change request.
