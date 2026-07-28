@@ -61,12 +61,14 @@
 //!
 use soroban_sdk::{contract, contractimpl, vec, Address, BytesN, Env, Map, String, Vec};
 
+pub mod cross_contract_safety;
 mod allowance;
 mod attendance_log;
 mod batch;
 mod errors;
 mod fractionalization;
 mod guards;
+pub mod multisig_guards;
 mod membership_token;
 mod migration;
 mod pause_errors;
@@ -75,10 +77,14 @@ pub mod royalty;
 mod staking;
 mod staking_errors;
 mod subscription;
+pub mod timelock;
+pub mod audit_trail;
 mod types;
 mod upgrade;
 mod upgrade_errors;
 mod validation;
+#[cfg(test)]
+mod edge_case_tests;
 
 use attendance_log::{AttendanceLog, AttendanceLogModule};
 use batch::BatchModule;
