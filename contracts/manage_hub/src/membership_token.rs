@@ -5,6 +5,7 @@ use crate::allowance::AllowanceModule;
 use crate::errors::Error;
 use crate::fractionalization::FractionalizationModule;
 use crate::guards::PauseGuard;
+use crate::migration::MigrationModule;
 use crate::types::{EmergencyPauseState, MembershipStatus, TokenAllowance, TokenPauseState};
 use common_types::{
     validate_attribute, validate_metadata, MetadataUpdate, MetadataValue, TokenMetadata,
@@ -15,6 +16,7 @@ use soroban_sdk::{contracttype, symbol_short, Address, BytesN, Env, Map, String,
 #[contracttype]
 pub enum DataKey {
     Token(BytesN<32>),
+    TokenV2(BytesN<32>),
     Admin,
     Metadata(BytesN<32>),
     MetadataHistory(BytesN<32>),
@@ -90,8 +92,8 @@ impl MembershipTokenContract {
         user: Address,
         expiry_date: u64,
     ) -> Result<(), Error> {
-        // Check if token already exists
-        if env.storage().persistent().has(&DataKey::Token(id.clone())) {
+        // Check if token already exists in either the legacy or migrated layout
+        if MigrationModule::token_exists(&env, &id) {
             return Err(Error::TokenAlreadyIssued);
         }
 
@@ -312,11 +314,7 @@ impl MembershipTokenContract {
 
         spender.require_auth();
 
-        let mut token: MembershipToken = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Token(token_id.clone()))
-            .ok_or(Error::TokenNotFound)?;
+        let mut token: MembershipToken = MigrationModule::load_token(&env, &token_id)?;
 
         if token.user != owner {
             return Err(Error::Unauthorized);
@@ -332,9 +330,7 @@ impl MembershipTokenContract {
 
         let old_user = token.user.clone();
         token.user = to.clone();
-        env.storage()
-            .persistent()
-            .set(&DataKey::Token(token_id.clone()), &token);
+        MigrationModule::store_token(&env, &token_id, &token);
 
         env.events().publish(
             (symbol_short!("token_xfr"), token_id.clone(), to.clone()),
