@@ -99,6 +99,72 @@ jobs:
         run: cargo build --all --verbose
 
   # ─────────────────────────────────────────────
+  # COVERAGE — code coverage for contract tests
+  # ─────────────────────────────────────────────
+  coverage:
+    name: Coverage Report
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        env:
+          RUSTUP_TOOLCHAIN: stable
+        with:
+          components: llvm-tools-preview
+      - name: Install grcov
+        run: cargo install grcov
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            contracts/target
+          key: ${{ runner.os }}-cargo-coverage-${{ hashFiles('''contracts/Cargo.lock''') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-coverage-
+            ${{ runner.os }}-cargo-
+      - name: Generate coverage data
+        working-directory: contracts
+        run: |
+          export CARGO_INCREMENTAL=0
+          export RUSTFLAGS="-Cinstrument-coverage"
+          export RUSTDOCFLAGS="-Cinstrument-coverage"
+          export LLVM_PROFILE_FILE="target/coverage/cargo-test-%p-%m.profraw"
+          cargo test --workspace --all-features
+      - name: Generate coverage report
+        working-directory: contracts
+        run: |
+          grcov target/coverage \
+            --source-dir . \
+            --output-type lcov \
+            --branch \
+            --ignore-not-existing \
+            --ignore "/*" \
+            --ignore "**/tests/*" \
+            --ignore "**/test.rs" \
+            --ignore "**/target/**" \
+            --output-path target/coverage/lcov.info
+      - name: Upload coverage to artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: contracts/target/coverage/
+      - name: Upload to Coveralls (if available)
+        continue-on-error: true
+        working-directory: contracts
+        env:
+          COVERALLS_REPO_TOKEN: ${{ secrets.COVERALLS_REPO_TOKEN }}
+        run: |
+          if [ -n "$COVERALLS_REPO_TOKEN" ]; then
+            cargo install cargo-coveralls
+            cargo coveralls --file target/coverage/lcov.info
+          else
+            echo "COVERALLS_REPO_TOKEN not set — skipping Coveralls upload."
+          fi
+
+  # ─────────────────────────────────────────────
   # BACKEND — NestJS
   # ─────────────────────────────────────────────
   backend:

@@ -31,4 +31,6 @@ pub enum Error {
     PaymentTokenNotSet = 12,
     /// Fee recipient address has not been set.
     FeeRecipientNotSet = 13,
+    InsufficientBalance = 14,
+}
 }
