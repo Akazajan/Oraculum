@@ -3,10 +3,15 @@
 #![allow(deprecated)]
 
 mod errors;
+pub mod token_fallback;
 mod types;
 
 #[cfg(test)]
 mod test;
+#[cfg(test)]
+mod settlement_tests;
+#[cfg(test)]
+mod revenue_split_tests;
 
 pub use errors::Error;
 pub use types::{Escrow, EscrowStatus};
