@@ -38,11 +38,25 @@ while [[ $# -gt 0 ]]; do
 done
 
 # ── Ensure we're in the right directory ───────────────────────
+# ── Prerequisites check ────────────────────────────────────────
+# Python is needed for JSON display/parsing (optional — falls back to cat)
+HAS_PYTHON=false
+if command -v python3 &>/dev/null; then
+    HAS_PYTHON=true
+elif command -v python &>/dev/null; then
+    # Alias python -> python3 if available
+    python3() { python "$@"; }
+    HAS_PYTHON=true
+fi
+
 cd "${WORKSPACE_DIR}"
 
 echo "━━━ Oraculum — Deterministic Wasm Hash Generator ━━━━━━━━"
 echo "  Workspace: ${WORKSPACE_DIR}"
 echo "  Hash file: ${HASH_FILE}"
+if [ "$HAS_PYTHON" = false ]; then
+    echo "  ⚠  Python3 not found — JSON display will use cat instead"
+fi
 echo ""
 
 # ── Build if requested ────────────────────────────────────────
@@ -135,7 +149,11 @@ echo ""
 
 # ── Display summary ───────────────────────────────────────────
 echo "─── Hash Summary ─────────────────────────────────────"
-echo "${HASHES_JSON}" | python3 -m json.tool 2>/dev/null || echo "${HASHES_JSON}"
+if [ "$HAS_PYTHON" = true ]; then
+    echo "${HASHES_JSON}" | python3 -m json.tool 2>/dev/null || cat "${HASH_FILE}"
+else
+    cat "${HASH_FILE}"
+fi
 echo ""
 
 # ── Verification mode ────────────────────────────────────────
@@ -152,7 +170,13 @@ if [[ "${VERIFY}" == "true" ]]; then
     for wasm in "${WASM_ARTIFACTS[@]}"; do
         NAME=$(basename "$wasm" .wasm)
         CURRENT_SHA=$(sha256sum "$wasm" | cut -d' ' -f1)
-        STORED_SHA=$(python3 -c "import json; d=json.load(open('${HASH_FILE}')); print(d['contracts']['${NAME}']['sha256'])" 2>/dev/null || echo "")
+
+        if [ "$HAS_PYTHON" = true ]; then
+            STORED_SHA=$(python3 -c "import json; d=json.load(open('${HASH_FILE}')); print(d['contracts']['${NAME}']['sha256'])" 2>/dev/null || echo "")
+        else
+            # Fallback: grep the raw JSON file
+            STORED_SHA=$(grep -A2 "\"${NAME}\"" "${HASH_FILE}" 2>/dev/null | grep "sha256" | sed 's/.*"sha256": "\(.*\)".*/\1/' || echo "")
+        fi
 
         if [ -z "${STORED_SHA}" ]; then
             echo "  ⚠  ${NAME}: no stored hash to compare against"
