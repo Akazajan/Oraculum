@@ -173,7 +173,7 @@ impl PaymentEscrowContract {
             .set(&DataKey::DefaultFeeRecipient, &recipient);
 
         env.events()
-            .publish((symbol_short!("fee_to_set"),), (recipient,));
+            .publish((symbol_short!("feer_set"),), (recipient,));
         Ok(())
     }
 
@@ -185,7 +185,7 @@ impl PaymentEscrowContract {
             .set(&DataKey::DefaultFeeBps, &fee_bps);
 
         env.events()
-            .publish((symbol_short!("fee_bps_set"),), (fee_bps,));
+            .publish((symbol_short!("fbps_set"),), (fee_bps,));
         Ok(())
     }
 

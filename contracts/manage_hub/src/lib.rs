@@ -433,20 +433,12 @@ impl Contract {
     ///
     /// Stamps `deactivated_at` on the persisted tier so the lifecycle
     /// remains auditable; pairs with [`Self::reactivate_staking_tier`].
-    pub fn deactivate_staking_tier(
-        env: Env,
-        admin: Address,
-        tier_id: String,
-    ) -> Result<(), Error> {
+    pub fn deactivate_staking_tier(env: Env, admin: Address, tier_id: String) -> Result<(), Error> {
         StakingModule::deactivate_staking_tier(env, admin, tier_id)
     }
 
     /// Reactivate a previously deactivated staking tier. Admin only.
-    pub fn reactivate_staking_tier(
-        env: Env,
-        admin: Address,
-        tier_id: String,
-    ) -> Result<(), Error> {
+    pub fn reactivate_staking_tier(env: Env, admin: Address, tier_id: String) -> Result<(), Error> {
         StakingModule::reactivate_staking_tier(env, admin, tier_id)
     }
 
@@ -459,7 +451,7 @@ impl Contract {
     }
 
     /// Paginated, deterministic listing of active staking tiers.
-    pub fn get_active_staking_tiers_paginated(
+    pub fn actv_staking_tiers_paginated(
         env: Env,
         page: PageParams,
     ) -> Result<Vec<StakingTier>, Error> {

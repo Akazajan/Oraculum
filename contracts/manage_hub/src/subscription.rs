@@ -9,7 +9,7 @@ use crate::membership_token::DataKey as MembershipTokenDataKey;
 use crate::types::{
     AttendanceAction, BillingCycle, CreatePromotionParams, CreateTierParams, MembershipStatus,
     PauseAction, PauseConfig, PauseHistoryEntry, PauseStats, Subscription, SubscriptionTier,
-    TierAnalytics, TierChangeRequest, TierChangeStatus, TierChangeType, TierFeature, TierLevel,
+    TierAnalytics, TierChangeRequest, TierChangeStatus, TierChangeType,
     TierPromotion, UpdateTierParams, UserSubscriptionInfo,
 };
 use common_types::{validate_page_params, PageParams};
@@ -837,8 +837,9 @@ impl SubscriptionContract {
     ///   persistent reads. Each persistent read costs gas, so this
     ///   bounds total gas to `O(limit)` rather than `O(total)`.
     pub fn get_all_tiers_paginated(env: Env, page: PageParams) -> Vec<SubscriptionTier> {
-        validate_page_params(page.offset, page.limit)
-            .map_err(|_| Error::InvalidPaginationParams)?;
+        if validate_page_params(page.offset, page.limit).is_err() {
+            return Vec::new(&env);
+        }
 
         let mut tier_ids: Vec<String> = env
             .storage()
@@ -857,8 +858,9 @@ impl SubscriptionContract {
     /// so consumers that iterate through pages with `limit < MAX_PAGE_SIZE`
     /// benefit fully from the gas savings described in CT-15.
     pub fn get_active_tiers_paginated(env: Env, page: PageParams) -> Vec<SubscriptionTier> {
-        validate_page_params(page.offset, page.limit)
-            .map_err(|_| Error::InvalidPaginationParams)?;
+        if validate_page_params(page.offset, page.limit).is_err() {
+            return Vec::new(&env);
+        }
 
         let mut tier_ids: Vec<String> = env
             .storage()
@@ -935,11 +937,10 @@ impl SubscriptionContract {
         while i < n {
             let mut j = i;
             while j > 0 {
-                let prev = vec.get(j - 1);
-                let curr = vec.get(j);
-                if prev > curr {
-                    vec.set(j - 1, curr);
-                    vec.set(j, prev);
+                if vec.get(j - 1) > vec.get(j) {
+                    let tmp = vec.get(j - 1).unwrap();
+                    vec.set(j - 1, vec.get(j).unwrap());
+                    vec.set(j, tmp);
                     j -= 1;
                 } else {
                     break;
@@ -955,23 +956,36 @@ impl SubscriptionContract {
     /// (`deactivated_at` is stamped on every call).
     pub fn deactivate_tier(env: Env, admin: Address, id: String) -> Result<(), Error> {
         admin.require_auth();
-    pub fn get_all_tiers(env: Env) -> Result<Vec<SubscriptionTier>, Error> {
-        let tier_list = Self::get_all_tiers_list(&env);
-        let mut tiers = Vec::new(&env);
-        for tier_id in tier_list.iter() {
-            if let Ok(tier) = Self::get_tier(env.clone(), tier_id) {
-                tiers.push_back(tier);
-            }
+
+        let key = SubscriptionDataKey::Tier(id.clone());
+        let tier: SubscriptionTier = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .ok_or(Error::TierNotFound)?;
+
+        if !tier.is_active {
+            return Err(Error::TierAlreadyDeactivated);
         }
-        Ok(tiers)
+
+        let now = env.ledger().timestamp();
+        let mut updated = tier;
+        updated.is_active = false;
+        updated.deactivated_at = Some(now);
+        updated.updated_at = now;
+
+        env.storage().persistent().set(&key, &updated);
+        env.storage().persistent().extend_ttl(&key, 100, 1000);
+
+        env.events().publish(
+            (symbol_short!("tier_dea"), id.clone(), admin.clone()),
+            (now,),
+        );
+
+        Ok(())
     }
 
-    fn get_all_tiers_list(env: &Env) -> Vec<String> {
-        env.storage()
-            .instance()
-            .get(&SubscriptionDataKey::TierList)
-            .unwrap_or_else(|| Vec::new(env))
-    }
+
 
     #[allow(deprecated)]
     pub fn update_tier(env: Env, admin: Address, params: UpdateTierParams) -> Result<(), Error> {
@@ -1011,23 +1025,10 @@ impl SubscriptionContract {
             tier.is_active = is_active;
         }
 
-        if !tier.is_active {
-            return Err(Error::TierAlreadyDeactivated);
-        }
-
-        let now = env.ledger().timestamp();
-        tier.is_active = false;
-        tier.deactivated_at = Some(now);
-        tier.updated_at = now;
         tier.updated_at = env.ledger().timestamp();
 
         env.storage().persistent().set(&tier_key, &tier);
         env.storage().persistent().extend_ttl(&tier_key, 100, 1000);
-
-        env.events().publish(
-            (symbol_short!("tier_dea"), id.clone(), admin.clone()),
-            (now,),
-        );
 
         Ok(())
     }
@@ -1333,7 +1334,9 @@ impl SubscriptionContract {
         let request_id = Self::generate_tier_change_request_id(&env, &user, &to_tier_id);
         let request_key = SubscriptionDataKey::TierChangeRequest(request_id.clone());
         env.storage().persistent().set(&request_key, &request);
-        env.storage().persistent().extend_ttl(&request_key, 100, 1000);
+        env.storage()
+            .persistent()
+            .extend_ttl(&request_key, 100, 1000);
 
         // Add to user's history
         let mut history = Self::get_user_tier_change_history(&env, &user);
@@ -1351,11 +1354,7 @@ impl SubscriptionContract {
         Ok(request)
     }
 
-    fn generate_tier_change_request_id(
-        env: &Env,
-        user: &Address,
-        to_tier_id: &String,
-    ) -> String {
+    fn generate_tier_change_request_id(env: &Env, user: &Address, to_tier_id: &String) -> String {
         let mut id_parts = String::from_str(env, "tcr_");
         id_parts.append(&user.to_string());
         id_parts.append(&String::from_str(env, "_"));
@@ -1414,11 +1413,7 @@ impl SubscriptionContract {
     }
 
     #[allow(deprecated)]
-    pub fn approve_tier_change(
-        env: Env,
-        admin: Address,
-        request_id: String,
-    ) -> Result<(), Error> {
+    pub fn approve_tier_change(env: Env, admin: Address, request_id: String) -> Result<(), Error> {
         Self::require_admin(&env, &admin)?;
 
         let request_key = SubscriptionDataKey::TierChangeRequest(request_id.clone());
@@ -1473,8 +1468,10 @@ impl SubscriptionContract {
         env.storage().persistent().extend_ttl(&new_key, 100, 1000);
 
         // Update user-tier mapping
-        let user_tier_key =
-            SubscriptionDataKey::UserSubscriptionByTier(request.user.clone(), request.to_tier.clone());
+        let user_tier_key = SubscriptionDataKey::UserSubscriptionByTier(
+            request.user.clone(),
+            request.to_tier.clone(),
+        );
         env.storage()
             .persistent()
             .set(&user_tier_key, &to_subscription_id);
