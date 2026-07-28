@@ -21,6 +21,15 @@
 
 set -euo pipefail
 
+# Cleanup handler for temporary files
+CLEANUP_FILES=""
+cleanup() {
+    if [ -n "$CLEANUP_FILES" ]; then
+        rm -f "$CLEANUP_FILES"
+    fi
+}
+trap cleanup EXIT
+
 WORKSPACE_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 CONTRACTS_DIR="${WORKSPACE_DIR}/contracts"
 COMPAT_FILE="${WORKSPACE_DIR}/scripts/sdk-compatibility.json"
@@ -122,11 +131,6 @@ echo ""
 RUSTC_VERSION=$(rustc --version 2>/dev/null | awk '{print $2}' || echo "unknown")
 RUSTUP_TOOLCHAIN=$(rustup show active-toolchain 2>/dev/null | awk '{print $1}' || echo "unknown")
 
-# ── Parse version info ────────────────────────────────────────
-TARGET_PARTS=$(semver_parse "$TARGET_VERSION")
-TARGET_MAJOR=$(echo "$TARGET_PARTS" | python3 -c "import json,sys; print(json.load(sys.stdin)['major'])")
-TARGET_MINOR=$(echo "$TARGET_PARTS" | python3 -c "import json,sys; print(json.load(sys.stdin)['minor'])")
-
 # ── Check 1: Rustc version compatibility ──────────────────────
 echo "─── Check 1: Rust Toolchain ───"
 echo "  Installed: ${RUSTC_VERSION} (${RUSTUP_TOOLCHAIN})"
@@ -140,17 +144,21 @@ for entry in "${KNOWN_VERSIONS[@]}"; do
     fi
 done
 
-# Try sort -V first, fall back to awk comparison
-if sort -V < /dev/null 2>/dev/null; then
-    VER_CMP="ver_compare"
-elif command -v awk &>/dev/null; then
-    VER_CMP="ver_compare_fallback"
-else
-    echo "  ⚠  No version comparison tool available — skipping check"
-    VER_CMP="true"  # Skip check
-fi
+# Dispatch version comparison — try sort -V first, fall back to awk
+# NOTE: Uses dispatch wrapper instead of $VAR function call to avoid
+# bash "command not found" errors with dynamic function name resolution.
+check_rustc_version() {
+    if sort -V < /dev/null 2>/dev/null; then
+        ver_compare "$1" "$2"
+    elif command -v awk &>/dev/null; then
+        ver_compare_fallback "$1" "$2"
+    else
+        echo "  ⚠  No version comparison tool available — skipping check"
+        return 0
+    fi
+}
 
-if $VER_CMP "$RUSTC_VERSION" "$MIN_RUSTC"; then
+if check_rustc_version "$RUSTC_VERSION" "$MIN_RUSTC"; then
     echo "  ✅ Rustc ${RUSTC_VERSION} meets minimum requirement ${MIN_RUSTC}"
 else
     echo "  ❌ Rustc ${RUSTC_VERSION} is below minimum ${MIN_RUSTC}"
@@ -178,6 +186,7 @@ echo "  Building all contracts to verify compatibility…"
 
 cd "${CONTRACTS_DIR}"
 BUILD_LOG=$(mktemp)
+CLEANUP_FILES="$CLEANUP_FILES $BUILD_LOG"
 if cargo check --workspace --all-features 2>"${BUILD_LOG}"; then
     echo "  ✅ All crates build successfully"
 else
@@ -186,10 +195,8 @@ else
     echo ""
     echo "  → SDK ${TARGET_VERSION} may be incompatible with the current codebase."
     echo "  → Review the errors above and update affected code."
-    rm -f "${BUILD_LOG}"
     exit 1
 fi
-rm -f "${BUILD_LOG}"
 cd "${WORKSPACE_DIR}"
 echo ""
 
@@ -200,6 +207,7 @@ echo "─── Check 4: SDK API Surface ───"
 # We check for deprecated/removed APIs by looking at compiler warnings.
 cd "${CONTRACTS_DIR}"
 WARN_LOG=$(mktemp)
+CLEANUP_FILES="$CLEANUP_FILES $WARN_LOG"
 cargo build --workspace --all-features 2>&1 | grep -i -E "(deprecated|removed|moved|renamed)" > "${WARN_LOG}" || true
 
 if [ -s "${WARN_LOG}" ]; then
@@ -209,7 +217,6 @@ if [ -s "${WARN_LOG}" ]; then
 else
     echo "  ✅ No deprecation or migration warnings"
 fi
-rm -f "${WARN_LOG}"
 cd "${WORKSPACE_DIR}"
 echo ""
 
@@ -217,9 +224,9 @@ echo ""
 echo "─── Check 5: Test Suite ───"
 cd "${CONTRACTS_DIR}"
 TEST_LOG=$(mktemp)
+CLEANUP_FILES="$CLEANUP_FILES $TEST_LOG"
 if cargo test --workspace --all-features > "${TEST_LOG}" 2>&1; then
     echo "  ✅ All tests pass with SDK ${TARGET_VERSION}"
-    rm -f "${TEST_LOG}"
 else
     echo "  ❌ Test failures detected with SDK ${TARGET_VERSION}"
     echo "     Some APIs may have changed behavior."
@@ -227,7 +234,6 @@ else
     echo ""
     echo "  Test output (last 30 lines):"
     tail -30 "${TEST_LOG}" | sed 's/^/    /'
-    rm -f "${TEST_LOG}"
 fi
 cd "${WORKSPACE_DIR}"
 echo ""

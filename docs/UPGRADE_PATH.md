@@ -117,12 +117,14 @@ If an upgrade introduces issues:
 
 ## CI Integration
 
-The compatibility checks are integrated into CI pipeline:
+The compatibility checks complement the existing CI pipeline:
 
 - **Build Check**: Ensures compilation succeeds
 - **Test Suite**: Validates all tests pass
-- **Coverage**: Monitors code coverage changes
-- **Preflight**: Full validation before deployment
+- **Coverage**: Monitors code coverage changes (via CI coverage job)
+- **Preflight Check**: Available as a local script — run before deployment to validate builds, tests, and wasm artifacts
+
+> **Note**: The preflight check script (`scripts/preflight-check.sh`) is designed for local execution. Run it before any deployment to catch issues early.
 
 ## Troubleshooting
 
