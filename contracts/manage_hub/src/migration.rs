@@ -4,6 +4,7 @@
 //! versions. Migrations preserve token identity (id, user, issue_date) while
 //! allowing modifications to mutable fields (expiry_date, tier_id, status).
 
+use crate::errors::Error;
 use crate::membership_token::{DataKey, MembershipToken};
 use crate::types::{MembershipStatus, TokenVersionSnapshot, UpgradeRecord};
 use soroban_sdk::{Address, BytesN, Env, String, Vec};
@@ -11,6 +12,29 @@ use soroban_sdk::{Address, BytesN, Env, String, Vec};
 pub struct MigrationModule;
 
 impl MigrationModule {
+    /// Check if a token exists in storage.
+    pub fn token_exists(env: &Env, id: &BytesN<32>) -> bool {
+        env.storage().persistent().has(&DataKey::Token(id.clone()))
+    }
+
+    /// Load a token from storage.
+    pub fn load_token(env: &Env, token_id: &BytesN<32>) -> Result<MembershipToken, Error> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Token(token_id.clone()))
+            .ok_or(Error::TokenNotFound)
+    }
+
+    /// Store a token to storage.
+    pub fn store_token(env: &Env, token_id: &BytesN<32>, token: &MembershipToken) {
+        env.storage()
+            .persistent()
+            .set(&DataKey::Token(token_id.clone()), token);
+        env.storage()
+            .persistent()
+            .extend_ttl(&DataKey::Token(token_id.clone()), 100, 1000);
+    }
+
     /// Capture a snapshot of the token's current state for rollback purposes.
     ///
     /// Must be called **before** mutating the token so the snapshot reflects

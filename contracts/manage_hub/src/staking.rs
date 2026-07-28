@@ -471,8 +471,9 @@ impl StakingModule {
     /// is taken from the sorted ID vector **before** any per-tier storage
     /// reads, bounding gas to `O(limit)` rather than `O(total)`.
     pub fn get_staking_tiers_paginated(env: Env, page: PageParams) -> Vec<StakingTier> {
-        validate_page_params(page.offset, page.limit)
-            .map_err(|_| Error::InvalidPaginationParams)?;
+        if validate_page_params(page.offset, page.limit).is_err() {
+            return Vec::new(&env);
+        }
 
         let mut list: Vec<String> = env
             .storage()
@@ -489,7 +490,7 @@ impl StakingModule {
         let take = remaining.min(page.limit);
         let end = page.offset + take;
 
-        let page_slice = list.slice(page.offset, end);
+        let page_slice = list.slice(page.offset..end);
         let mut tiers = Vec::new(&env);
         for id in page_slice.iter() {
             if let Some(tier) = env
@@ -531,11 +532,10 @@ impl StakingModule {
         while i < n {
             let mut j = i;
             while j > 0 {
-                let prev = vec.get(j - 1);
-                let curr = vec.get(j);
-                if prev > curr {
-                    vec.set(j - 1, curr);
-                    vec.set(j, prev);
+                if vec.get(j - 1) > vec.get(j) {
+                    let tmp = vec.get(j - 1).unwrap();
+                    vec.set(j - 1, vec.get(j).unwrap());
+                    vec.set(j, tmp);
                     j -= 1;
                 } else {
                     break;

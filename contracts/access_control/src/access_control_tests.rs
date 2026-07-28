@@ -1328,6 +1328,151 @@ fn test_duplicate_admin_prevented() {
     });
 }
 
+// ==================== Multisig Admin Transfer Tests (Issue #98 - CT-19) ====================
+
+#[test]
+fn test_multisig_admin_transfer_via_proposal() {
+    let env = Env::default();
+    let contract_id = env.register(crate::AccessControl, ());
+    let admin1 = Address::generate(&env);
+    let admin2 = Address::generate(&env);
+    let new_admin = Address::generate(&env);
+
+    env.as_contract(&contract_id, || {
+        let admins = Vec::from_array(&env, [admin1.clone(), admin2.clone()]);
+        AccessControlModule::initialize_multisig(&env, admins, 2, None).unwrap();
+
+        // Create proposal to transfer admin ownership to new_admin
+        let action = ProposalAction::TransferAdmin(new_admin.clone());
+        let proposal_id =
+            AccessControlModule::create_proposal(&env, admin1.clone(), action).unwrap();
+
+        let proposal = AccessControlModule::get_proposal(&env, proposal_id).unwrap();
+        assert_eq!(proposal.proposal_type, ProposalType::Critical);
+
+        // Fast forward time past time-lock (24 hours + 1 second)
+        env.ledger().set(LedgerInfo {
+            timestamp: env.ledger().timestamp() + 86401,
+            protocol_version: 23,
+            sequence_number: 10,
+            network_id: [0; 32],
+            base_reserve: 10,
+            min_temp_entry_ttl: 10,
+            min_persistent_entry_ttl: 10,
+            max_entry_ttl: 6312000,
+        });
+
+        // Second approval should execute the transfer (critical threshold for 2 admins = 2)
+        AccessControlModule::approve_proposal(&env, admin2.clone(), proposal_id).unwrap();
+
+        // Verify new admin has admin role
+        assert_eq!(
+            AccessControlModule::get_role(&env, new_admin.clone()),
+            UserRole::Admin
+        );
+
+        // Verify old admin1 role was downgraded
+        assert_eq!(
+            AccessControlModule::get_role(&env, admin1.clone()),
+            UserRole::Guest
+        );
+
+        // Verify multisig config was updated - admin1 removed, new_admin added
+        let updated_config = AccessControlModule::get_multisig_config(&env).unwrap();
+        assert!(
+            !updated_config.admins.contains(&admin1),
+            "admin1 should be removed from multisig admins"
+        );
+        assert!(
+            updated_config.admins.contains(&new_admin),
+            "new_admin should be added to multisig admins"
+        );
+        assert!(
+            updated_config.admins.contains(&admin2),
+            "admin2 should remain in multisig admins"
+        );
+
+        // New admin should be able to perform admin operations
+        let user = Address::generate(&env);
+        assert!(AccessControlModule::set_role(
+            &env,
+            new_admin.clone(),
+            user.clone(),
+            UserRole::Member
+        )
+        .is_ok());
+
+        // Old admin (admin1) should not be able to perform admin operations
+        let result = AccessControlModule::set_role(
+            &env,
+            admin1.clone(),
+            user.clone(),
+            UserRole::Member,
+        );
+        assert_eq!(
+            result.unwrap_err(),
+            AccessControlError::AdminRequired,
+            "Old admin should no longer have admin privileges"
+        );
+    });
+}
+
+#[test]
+fn test_multisig_transfer_admin_to_self_fails() {
+    let env = Env::default();
+    let contract_id = env.register(crate::AccessControl, ());
+    let admin1 = Address::generate(&env);
+    let admin2 = Address::generate(&env);
+
+    env.as_contract(&contract_id, || {
+        let admins = Vec::from_array(&env, [admin1.clone(), admin2.clone()]);
+        AccessControlModule::initialize_multisig(&env, admins, 2, None).unwrap();
+
+        // Transferring to self should be blocked
+        let action = ProposalAction::TransferAdmin(admin1.clone());
+        let result =
+            AccessControlModule::create_proposal(&env, admin1.clone(), action);
+        // The proposal should still be creatable, but execution should fail
+        assert!(result.is_ok());
+
+        let proposal_id = result.unwrap();
+
+        // Fast forward time past time-lock
+        env.ledger().set(LedgerInfo {
+            timestamp: env.ledger().timestamp() + 86401,
+            protocol_version: 23,
+            sequence_number: 10,
+            network_id: [0; 32],
+            base_reserve: 10,
+            min_temp_entry_ttl: 10,
+            min_persistent_entry_ttl: 10,
+            max_entry_ttl: 6312000,
+        });
+
+        // Execution should fail with DuplicateAdmin (admin1 is already in the admins list)
+        let result = AccessControlModule::approve_proposal(&env, admin2.clone(), proposal_id);
+        assert_eq!(result.unwrap_err(), AccessControlError::DuplicateAdmin);
+    });
+}
+
+#[test]
+fn test_multisig_prevents_direct_admin_transfer() {
+    let env = Env::default();
+    let contract_id = env.register(crate::AccessControl, ());
+    let admin1 = Address::generate(&env);
+    let admin2 = Address::generate(&env);
+    let new_admin = Address::generate(&env);
+
+    env.as_contract(&contract_id, || {
+        let admins = Vec::from_array(&env, [admin1.clone(), admin2.clone()]);
+        AccessControlModule::initialize_multisig(&env, admins, 2, None).unwrap();
+
+        // Direct admin transfer should be blocked in multisig mode
+        let result = AccessControlModule::propose_admin_transfer(&env, admin1.clone(), new_admin.clone());
+        assert_eq!(result.unwrap_err(), AccessControlError::InvalidAddress);
+    });
+}
+
 #[test]
 fn test_get_pending_proposals_list() {
     let env = Env::default();

@@ -5,7 +5,7 @@
 [![Soroban](https://img.shields.io/badge/Platform-Soroban-7D00FF?style=flat-square)](https://soroban.stellar.org)
 [![Rust](https://img.shields.io/badge/Rust-1.75+-orange?style=flat-square&logo=rust)]()
 
-Covers `packages/contracts`. See [Root README](../../README.md) · [Backend](../gateway/README.md) · [Frontend](../../apps/web/README.md).
+Covers `contracts/`. See [Root README](../README.md) · [Backend](../backend/README.md) · [Frontend](../frontend/README.md).
 
 ---
 
@@ -13,20 +13,25 @@ Covers `packages/contracts`. See [Root README](../../README.md) · [Backend](../
 
 | Contract | Purpose |
 |---|---|
-| `agent-registry` | On-chain directory: agent metadata, pricing, ownership, remix lineage |
-| `x402-soroban` | Pay-per-query settlement — on-chain HTTP-402-style flow |
-| `revenue-stream` | Continuous USDC revenue sharing from remixed agents to original creators |
-| `query-receipt` | Verifiable, on-chain proof a query was paid for and fulfilled |
+| `access_control` | Role-based access: admin, user/agent roles, multi-sig proposals, governance |
+| `workspace_booking` | Bookable resources (hot desks, offices, meeting rooms) with availability |
+| `payment_escrow` | Dispute-aware escrow: deposits, releases, refunds, 402-style settlement |
+| `resource_credits` | Off-chain credit accounting (deprecated — kept for migration) |
+| `membership_token` | Simple membership NFT with issuance and transfer |
+| `manage_hub` | Hub orchestration: membership tokens, staking tiers, subscription plans, fractionalization, royalty, allowances, upgrades, batch ops |
 
-All written in Rust via the Soroban SDK, settling in **USDC** through Stellar's native Stellar Asset Contract (SAC) — no custom token, no XLM required from end users.
+All written in Rust via the Soroban SDK, settling in **USDC** through Stellar's native Stellar Asset Contract (SAC).
 
 ```
-packages/contracts/
-├── agent-registry/src/{lib,types,storage}.rs
-├── x402-soroban/src/{lib,types,usdc}.rs
-├── revenue-stream/src/{lib,stream}.rs
-├── query-receipt/src/{lib,receipt}.rs
-└── shared/src/{errors,auth}.rs
+contracts/
+├── access_control/src/
+├── common_types/src/
+├── manage_hub/src/          # multi-module: membership_token, staking, subscription,
+│                            #   fractionalization, allowance, royalty, upgrade, batch
+├── membership_token/src/
+├── payment_escrow/src/
+├── resource_credits/src/
+└── workspace_booking/src/
 ```
 
 ---
@@ -38,17 +43,27 @@ packages/contracts/
 rustup target add wasm32-unknown-unknown
 stellar keys generate deployer --network testnet && stellar keys fund deployer --network testnet
 
-cd packages/contracts
+cd contracts
 stellar contract build
 cargo test
-
-stellar contract deploy \
-  --wasm target/wasm32-unknown-unknown/release/agent_registry.wasm \
-  --source deployer --network testnet
-# Repeat for x402_soroban.wasm, revenue_stream.wasm, query_receipt.wasm
 ```
 
-Each deploy returns a contract ID — record in the Gateway and Frontend `.env` files. A convenience script wraps all four: `../../scripts/deploy-contracts.sh`.
+Each deploy returns a contract ID. Convenience scripts are provided:
+
+- `scripts/deploy-contracts.sh` — builds and deploys all contracts, saves IDs to `.contract-ids.env`
+- `scripts/init-contracts.sh` — initialises each contract with admin, payment token, and fees
+
+Usage:
+
+```bash
+export STELLAR_NETWORK=testnet
+export ADMIN_ADDRESS=G...
+export PAYMENT_TOKEN_ID=CA...
+
+./scripts/deploy-contracts.sh
+source scripts/.contract-ids.env
+./scripts/init-contracts.sh
+```
 
 ---
 
@@ -141,20 +156,142 @@ Current phase: a single admin `Address` controls protocol parameters (fee bps, u
 
 ## Events
 
-| Contract | Event | Payload |
+All contracts emit events through `env.events().publish(...)`. The tables below document every emitted event topic and data payload.
+
+### `access_control`
+
+| Event | Topics | Data |
 |---|---|---|
-| `agent-registry` | `agent_registered` | `agent_id, owner, parent_agent_id` |
-| `x402-soroban` | `payment_settled` | `request_id, agent_id, payer, amount` |
-| `revenue-stream` | `revenue_claimed` | `recipient, amount` |
-| `query-receipt` | `receipt_issued` | `receipt_id, agent_id, payer, query_hash` |
+| `init` | `(Symbol("init"), admin)` | `(admins, config)` |
+| `role_set` | `(Symbol("role_set"), user, role)` | `(caller, old_role)` |
+| `role_rm` | `(Symbol("role_rm"), user)` | `(caller, old_role)` |
+| `acc_deny` | `(Symbol("acc_deny"), user, required_role)` | `"blacklisted"` |
+| `acc_try` | `(Symbol("acc_try"), user, required_role)` | `(success, current_attempts + 1)` |
+| `cfg_upd` | `(Symbol("cfg_upd"), config)` | `(caller, old_config)` |
+| `adm_prop` | `(Symbol("adm_prop"), new_admin)` | `current_admin` |
+| `adm_xfer` | `(Symbol("adm_xfer"), new_admin)` | `old_admin` |
+| `adm_canc` | `(Symbol("adm_canc"), proposed_admin)` | `current_admin` |
+| `paused` | `(Symbol("paused"), true)` | `proposer` |
+| `unpaused` | `(Symbol("unpaused"), false)` | `proposer` |
+| `proposal` | `(Symbol("proposal"), proposal_id, proposal_type)` | `proposer` |
+| `executed` | `(Symbol("executed"), proposal_id)` | `proposer` |
+| `ms_upd` | `(Symbol("ms_upd"), new_config)` | `proposer` |
+| `emrg_pse` | `(Symbol("emrg_pse"), reason)` | `proposer` |
+| `batch_bl` | `(Symbol("batch_bl"), users.len())` | `proposer` |
+| `add_adm` | `(Symbol("add_adm"), new_admin)` | `proposer` |
+| `rm_adm` | `(Symbol("rm_adm"), admin_to_remove)` | `proposer` |
+| `tier_set` | `(Symbol("tier_set"), user, tier_level)` | `(caller, old_tier)` |
+| `tier_req` | `(Symbol("tier_req"), role, required_tier)` | `caller` |
+| `tier_chk` | `(Symbol("tier_chk"), user, required_tier)` | `has_access` |
+
+### `workspace_booking`
+
+| Event | Topics | Data |
+|---|---|---|
+| `init` | `(Symbol("init"))` | `(admin, payment_token)` |
+| `ws_reg` | `(Symbol("ws_reg"), id)` | `(name, workspace_type, capacity, hourly_rate)` |
+| `ws_avail` | `(Symbol("ws_avail"), workspace_id)` | `(is_available)` |
+| `booked` | `(Symbol("booked"), booking_id)` | `(member, workspace_id, start_time, end_time, amount)` |
+| `cancel` | `(Symbol("cancel"), booking_id)` | `(caller, amount_paid)` |
+| `complete` | `(Symbol("complete"), booking_id)` | `(workspace_id, member)` |
+
+### `payment_escrow`
+
+| Event | Topics | Data |
+|---|---|---|
+| `init` | `(Symbol("init"))` | `(admin, payment_token, dispute_window_secs, fee_recipient, fee_bps)` |
+| `dw_set` | `(Symbol("dw_set"))` | `(window_secs)` |
+| `feer_set` | `(Symbol("feer_set"))` | `(recipient)` |
+| `fbps_set` | `(Symbol("fbps_set"))` | `(fee_bps)` |
+| `created` | `(Symbol("created"), escrow_id)` | `(depositor, beneficiary, amount, release_after)` |
+| `released` | `(Symbol("released"), escrow_id)` | `(beneficiary, beneficiary_amount, fee_recipient, fee_amount)` |
+| `refunded` | `(Symbol("refunded"), escrow_id)` | `(depositor, amount)` |
+| `disputed` | `(Symbol("disputed"), escrow_id)` | `(depositor, now)` |
+| `resolved` | `(Symbol("resolved"), escrow_id)` | `(winner, amount, release_to_beneficiary)` |
+| `claimed` | `(Symbol("claimed"), escrow_id)` | `(beneficiary, beneficiary_amount, fee_recipient, fee_amount)` |
+
+### `manage_hub` — membership / batch
+
+| Event | Topics | Data |
+|---|---|---|
+| `token_iss` | `(Symbol("token_iss"), id, user)` | `(admin, current_time, expiry_date, MembershipStatus::Active)` |
+| `token_xfr` | `(Symbol("token_xfr"), id, new_user)` | `(old_user, timestamp)` |
+| `tok_sale` | `(Symbol("tok_sale"), id, new_user)` | `(sale_price, timestamp)` |
+| `token_dlg` | `(Symbol("token_dlg"), id, spender)` | `(old_user, to, allowance_amount, timestamp)` |
+| `admin_set` | `(Symbol("admin_set"), admin)` | `timestamp` |
+| `meta_set` | `(Symbol("meta_set"), id, version)` | `(caller, current_time)` |
+| `meta_upd` | `(Symbol("meta_upd"), id, metadata.version)` | `(updated_by, last_updated)` |
+| `meta_rmv` | `(Symbol("meta_rmv"), id, metadata.version)` | `(updated_by, last_updated)` |
+| `rnw_cfg` | `(Symbol("rnw_cfg"), admin)` | `(grace_period_duration, auto_renewal_notice_days, renewals_enabled)` |
+| `token_rnw` | `(Symbol("token_rnw"), id, user)` | `(payment_token, amount, old_expiry, new_expiry)` |
+| `grace_in` | `(Symbol("grace_in"), id, user)` | `(current_time, grace_period_expires_at)` |
+| `auto_rnw` | `(Symbol("auto_rnw"), id, user)` | `(enabled, payment_token)` |
+| `auto_ok` | `(Symbol("auto_ok"), id, user)` | `(payment_token, amount, old_expiry, new_expiry)` |
+| `emg_pause` | `(Symbol("emg_pause"), admin)` | `(current_time, reason, auto_unpause_at, time_lock_until)` |
+| `emg_unp` | `(Symbol("emg_unp"), admin)` | `(timestamp)` |
+| `tok_pause` | `(Symbol("tok_pause"), id, admin)` | `(current_time, reason)` |
+| `tok_unp` | `(Symbol("tok_unp"), id, admin)` | `(timestamp)` |
+| `grace_ar` | `(Symbol("grace_ar"), id, user)` | `(current_time, grace_period_expires_at, "auto_renewal_failed")` |
+| `bat_mint` | `(Symbol("bat_mint"))` | `(params_vec.len(), timestamp)` |
+| `bat_xfr` | `(Symbol("bat_xfr"))` | `(params_vec.len(), timestamp)` |
+| `bat_upd` | `(Symbol("bat_upd"))` | `(params_vec.len(), timestamp)` |
+
+### `manage_hub` — staking
+
+| Event | Topics | Data |
+|---|---|---|
+| `StakingTierCreated` | `(Symbol("StakingTierCreated"), tier.id)` | `timestamp` |
+| `StakingTierDeactivated` | `(Symbol("StakingTierDeactivated"), tier_id)` | `now` |
+| `StakingTierReactivated` | `(Symbol("StakingTierReactivated"), tier_id)` | `now` |
+| `Staked` | `(Symbol("Staked"), staker, tier_id)` | `(amount, unlock_at)` |
+| `Unstaked` | `(Symbol("Unstaked"), staker)` | `(stake.amount, rewards)` |
+| `EmergencyUnstaked` | `(Symbol("EmergencyUnstaked"), staker)` | `(amount_returned, penalty)` |
+
+### `manage_hub` — subscription
+
+| Event | Topics | Data |
+|---|---|---|
+| `sub_creat` | `(Symbol("sub_creat"), id, user)` | `(payment_token, amount, current_time, expires_at)` |
+| `subscr` | `(Symbol("subscr"), id, user)` | `PauseHistoryEntry` |
+| `sub_revok` | `(Symbol("sub_revok"), id, user)` | `(timestamp, old_status, MembershipStatus::Revoked)` |
+| `sub_inval` | `(Symbol("sub_inval"), id, user)` | `(timestamp, old_status, MembershipStatus::Invalid)` |
+| `sub_cancl` | `(Symbol("sub_cancl"), id, user)` | `(timestamp, old_status, MembershipStatus::Inactive)` |
+| `sub_renew` | `(Symbol("sub_renew"), id, user)` | `(payment_token, amount, old_expiry, expires_at)` |
+| `tier_cr` | `(Symbol("tier_cr"), tier.id)` | `(tier, admin)` |
+| `tier_dea` | `(Symbol("tier_dea"), id, admin)` | `(now)` |
+| `tier_rea` | `(Symbol("tier_rea"), id, admin)` | `(now)` |
+| `tier_upd` | `(Symbol("tier_upd"), tier.id)` | `(tier, admin)` |
+| `sub_tier` | `(Symbol("sub_tier"), subscription_id)` | `(user, tier_id, billing_cycle, amount)` |
+| `promo_cr` | `(Symbol("promo_cr"), promo_code)` | `(promotion, admin)` |
+| `tier_chg` | `(Symbol("tier_chg"), request_id)` | `(user, from_tier_id, to_tier_id)` |
+| `usdc_set` | `(Symbol("usdc_set"), usdc_address)` | `(admin, timestamp)` |
+
+### `manage_hub` — fractionalization
+
+| Event | Topics | Data |
+|---|---|---|
+| `Fractionalized` | `(String("Fractionalized"), token_id, user)` | `(total_shares, min_fraction_size, timestamp)` |
+| `FractionTransferred` | `(String("FractionTransferred"), token_id, from)` | `(to, share_amount, timestamp)` |
+| `Recombined` | `(String("Recombined"), token_id, holder)` | `timestamp` |
+| `DividendDistributed` | `(String("DividendDistributed"), token_id, admin)` | `(total_amount, recipients, distributed_at)` |
+
+### `manage_hub` — allowance & royalty & upgrade
+
+| Event | Topics | Data |
+|---|---|---|
+| `Approval` | `(String("Approval"), token_id, owner, spender)` | `(amount, expires_at, updated_at)` |
+| `AllowanceRevoked` | `(String("AllowanceRevoked"), token_id, owner, spender)` | `timestamp` |
+| `AllowanceUsed` | `(String("AllowanceUsed"), token_id, owner, spender)` | `(amount, allowance.amount, updated_at)` |
+| `roy_set` | `(Symbol("roy_set"), token_id)` | `(recipients.len(), timestamp)` |
+| `roy_paid` | `(Symbol("roy_paid"), token_id, recipient)` | `(payment_token, amount, timestamp)` |
+| `TokenUpgraded` | `(String("TokenUpgraded"), token_id, caller)` | `(from_version, to_version)` |
 
 ---
 
 ## Security Considerations
 
 - **Auth:** every mutating function requires `require_auth()` via Soroban's native framework
-- **Expiry:** `PaymentRequest`s expire after 5 minutes to prevent stale/replayed flows
-- **Receipt uniqueness:** single-use, tied to a specific `query_hash`; replays rejected even within cache window
+- **Escrow expiry:** payment escrows enforce release-after timestamps and dispute windows to prevent stale or malicious claims
 - **Audits:** contracts are unaudited pre-Wave submission; a formal audit is planned before mainnet value limits are raised
 
 ```bash
@@ -166,4 +303,4 @@ stellar network start local && cargo test --features integration-tests
 
 ## Related Docs
 
-[Root README](../../README.md) · [Backend](../gateway/README.md) · [Frontend](../../apps/web/README.md)
+[Root README](../README.md) · [Backend](../backend/README.md) · [Frontend](../frontend/README.md)
