@@ -5,15 +5,18 @@ use crate::allowance::AllowanceModule;
 use crate::errors::Error;
 use crate::fractionalization::FractionalizationModule;
 use crate::guards::PauseGuard;
+use crate::migration::MigrationModule;
 use crate::types::{EmergencyPauseState, MembershipStatus, TokenAllowance, TokenPauseState};
 use common_types::{
     validate_attribute, validate_metadata, MetadataUpdate, MetadataValue, TokenMetadata,
+    AgentRegisteredEvent, AgentMetadataUpdatedEvent,
 };
 use soroban_sdk::{contracttype, symbol_short, Address, BytesN, Env, Map, String, Vec};
 
 #[contracttype]
 pub enum DataKey {
     Token(BytesN<32>),
+    TokenV2(BytesN<32>),
     Admin,
     Metadata(BytesN<32>),
     MetadataHistory(BytesN<32>),
@@ -89,8 +92,8 @@ impl MembershipTokenContract {
         user: Address,
         expiry_date: u64,
     ) -> Result<(), Error> {
-        // Check if token already exists
-        if env.storage().persistent().has(&DataKey::Token(id.clone())) {
+        // Check if token already exists in either the legacy or migrated layout
+        if MigrationModule::token_exists(&env, &id) {
             return Err(Error::TokenAlreadyIssued);
         }
 
@@ -127,6 +130,24 @@ impl MembershipTokenContract {
                 expiry_date,
                 MembershipStatus::Active,
             ),
+        );
+
+        // Emit agent registered event for observability
+        let default_metadata = TokenMetadata {
+            description: String::from_env(env),
+            attributes: Map::new(env),
+            version: 0,
+            last_updated: current_time,
+            updated_by: admin.clone(),
+        };
+        env.events().publish(
+            (symbol_short!("agent_registered"), id.clone()),
+            AgentRegisteredEvent {
+                agent_id: id.clone(),
+                owner: user.clone(),
+                metadata: default_metadata,
+                timestamp: current_time,
+            },
         );
 
         Ok(())
@@ -293,11 +314,7 @@ impl MembershipTokenContract {
 
         spender.require_auth();
 
-        let mut token: MembershipToken = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Token(token_id.clone()))
-            .ok_or(Error::TokenNotFound)?;
+        let mut token: MembershipToken = MigrationModule::load_token(&env, &token_id)?;
 
         if token.user != owner {
             return Err(Error::Unauthorized);
@@ -313,9 +330,7 @@ impl MembershipTokenContract {
 
         let old_user = token.user.clone();
         token.user = to.clone();
-        env.storage()
-            .persistent()
-            .set(&DataKey::Token(token_id.clone()), &token);
+        MigrationModule::store_token(&env, &token_id, &token);
 
         env.events().publish(
             (symbol_short!("token_xfr"), token_id.clone(), to.clone()),
@@ -528,15 +543,15 @@ impl MembershipTokenContract {
         let current_time = env.ledger().timestamp();
         let caller = token.user.clone(); // In production, get from auth context
 
-        // Get existing metadata to determine version
-        let version = if let Some(existing_metadata) = env
+        // Get existing metadata to determine version and for index updates
+        let existing_metadata = env
             .storage()
             .persistent()
-            .get::<DataKey, TokenMetadata>(&DataKey::Metadata(token_id.clone()))
-        {
-            existing_metadata.version + 1
-        } else {
-            1
+            .get::<DataKey, TokenMetadata>(&DataKey::Metadata(token_id.clone()));
+
+        let version = match &existing_metadata {
+            Some(m) => m.version + 1,
+            None => 1,
         };
 
         // Create new metadata
@@ -553,14 +568,10 @@ impl MembershipTokenContract {
 
         // Update metadata indexes
         // If there's existing metadata, remove old indexes first
-        if let Some(existing_metadata) = env
-            .storage()
-            .persistent()
-            .get::<DataKey, TokenMetadata>(&DataKey::Metadata(token_id.clone()))
-        {
+        if let Some(ref existing_meta) = existing_metadata {
             // Remove old attribute indexes
-            for key in existing_metadata.attributes.keys() {
-                if let Some(value) = existing_metadata.attributes.get(key.clone()) {
+            for key in existing_meta.attributes.keys() {
+                if let Some(value) = existing_meta.attributes.get(key.clone()) {
                     Self::remove_from_metadata_index(env, &key, &value, &token_id);
                 }
             }
@@ -600,7 +611,20 @@ impl MembershipTokenContract {
             .persistent()
             .set(&DataKey::MetadataHistory(token_id.clone()), &history);
 
-        // Emit metadata set event
+        // Emit agent metadata updated event for observability
+        env.events().publish(
+            (symbol_short!("agent_metadata_updated"), token_id.clone()),
+            AgentMetadataUpdatedEvent {
+                agent_id: token_id.clone(),
+                updater: caller.clone(),
+                previous_version: existing_metadata.map(|m| m.version).unwrap_or(0),
+                new_version: version,
+                timestamp: current_time,
+                new_metadata: metadata,
+            },
+        );
+
+        // Emit metadata set event (for backward compatibility)
         env.events().publish(
             (symbol_short!("meta_set"), token_id.clone(), version),
             (caller, current_time),

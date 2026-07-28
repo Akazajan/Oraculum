@@ -4,6 +4,7 @@ use crate::errors::Error;
 use crate::membership_token::DataKey as MembershipDataKey;
 use crate::staking_errors::StakingError;
 use crate::types::{StakeInfo, StakingConfig, StakingTier};
+use common_types::{validate_page_params, PageParams};
 use soroban_sdk::{contracttype, token, Address, Env, String, Vec};
 
 // ---------------------------------------------------------------------------
@@ -67,6 +68,12 @@ impl StakingModule {
     }
 
     /// Create a new staking tier. Admin only.
+    ///
+    /// Stores the supplied tier as-is; callers that build a `StakingTier`
+    /// themselves should set `is_active = true`, `deactivated_at = None`,
+    /// and `reactivated_at = None` for a clean initial state. This
+    /// function does not normalise those fields so partial updates that
+    /// preserve lineage remain possible.
     pub fn create_staking_tier(env: Env, admin: Address, tier: StakingTier) -> Result<(), Error> {
         let stored_admin: Address = env
             .storage()
@@ -117,6 +124,100 @@ impl StakingModule {
                 tier.id.clone(),
             ),
             env.ledger().timestamp(),
+        );
+
+        Ok(())
+    }
+
+    /// Deactivate a staking tier. Admin only.
+    ///
+    /// Preserves identity (id) and lineage metadata (`deactivated_at` is
+    /// stamped on each successful call). Rejecting double-deactivation
+    /// mirrors the subscription-tier flow so UI/UX remains consistent.
+    pub fn deactivate_staking_tier(env: Env, admin: Address, tier_id: String) -> Result<(), Error> {
+        let stored_admin: Address = env
+            .storage()
+            .instance()
+            .get(&MembershipDataKey::Admin)
+            .ok_or(Error::AdminNotSet)?;
+        stored_admin.require_auth();
+        if stored_admin != admin {
+            return Err(Error::Unauthorized);
+        }
+
+        let key = StakingDataKey::Tier(tier_id.clone());
+        if !env.storage().persistent().has(&key) {
+            return Err(Error::StakingTierNotFound);
+        }
+        let mut tier: StakingTier = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .ok_or(Error::StakingTierNotFound)?;
+
+        if !tier.is_active {
+            return Err(Error::StakingTierAlreadyDeactivated);
+        }
+
+        let now = env.ledger().timestamp();
+        tier.is_active = false;
+        tier.deactivated_at = Some(now);
+
+        env.storage().persistent().set(&key, &tier);
+
+        env.events().publish(
+            (
+                String::from_str(&env, "StakingTierDeactivated"),
+                tier_id.clone(),
+            ),
+            now,
+        );
+
+        Ok(())
+    }
+
+    /// Reactivate a previously deactivated staking tier. Admin only.
+    ///
+    /// Preserves lineage metadata (`reactivated_at` is stamped on each
+    /// successful call; the most recent `deactivated_at` is retained so
+    /// audits can see the full lifecycle).
+    pub fn reactivate_staking_tier(env: Env, admin: Address, tier_id: String) -> Result<(), Error> {
+        let stored_admin: Address = env
+            .storage()
+            .instance()
+            .get(&MembershipDataKey::Admin)
+            .ok_or(Error::AdminNotSet)?;
+        stored_admin.require_auth();
+        if stored_admin != admin {
+            return Err(Error::Unauthorized);
+        }
+
+        let key = StakingDataKey::Tier(tier_id.clone());
+        if !env.storage().persistent().has(&key) {
+            return Err(Error::StakingTierNotFound);
+        }
+        let mut tier: StakingTier = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .ok_or(Error::StakingTierNotFound)?;
+
+        if tier.is_active {
+            return Err(Error::StakingTierAlreadyActive);
+        }
+
+        let now = env.ledger().timestamp();
+        tier.is_active = true;
+        tier.reactivated_at = Some(now);
+
+        env.storage().persistent().set(&key, &tier);
+
+        env.events().publish(
+            (
+                String::from_str(&env, "StakingTierReactivated"),
+                tier_id.clone(),
+            ),
+            now,
         );
 
         Ok(())
@@ -339,25 +440,109 @@ impl StakingModule {
             .get(&StakingDataKey::Stake(staker))
     }
 
-    /// Return all available staking tiers.
+    /// Return all available staking tiers in deterministic ascending
+    /// order of tier id.
+    ///
+    /// Preserves pre-CT-15 behaviour (returns the full list); for large
+    /// datasets prefer [`Self::get_staking_tiers_paginated`].
     pub fn get_staking_tiers(env: Env) -> Vec<StakingTier> {
-        let list: Vec<String> = env
+        let mut list: Vec<String> = env
             .storage()
             .instance()
             .get(&StakingDataKey::TierList)
             .unwrap_or_else(|| Vec::new(&env));
-
+        Self::sort_string_vec(&mut list);
         let mut tiers = Vec::new(&env);
         for id in list.iter() {
             if let Some(tier) = env
                 .storage()
                 .persistent()
-                .get::<StakingDataKey, StakingTier>(&StakingDataKey::Tier(id))
+                .get::<StakingDataKey, StakingTier>(&StakingDataKey::Tier(id.clone()))
             {
                 tiers.push_back(tier);
             }
         }
         tiers
+    }
+
+    /// Paginated, deterministic listing of all staking tiers.
+    ///
+    /// See [`Self::get_staking_tiers`] for ordering semantics. The slice
+    /// is taken from the sorted ID vector **before** any per-tier storage
+    /// reads, bounding gas to `O(limit)` rather than `O(total)`.
+    pub fn get_staking_tiers_paginated(env: Env, page: PageParams) -> Vec<StakingTier> {
+        if validate_page_params(page.offset, page.limit).is_err() {
+            return Vec::new(&env);
+        }
+
+        let mut list: Vec<String> = env
+            .storage()
+            .instance()
+            .get(&StakingDataKey::TierList)
+            .unwrap_or_else(|| Vec::new(&env));
+        Self::sort_string_vec(&mut list);
+
+        let total = list.len();
+        if page.offset >= total || page.limit == 0 {
+            return Vec::new(&env);
+        }
+        let remaining = total - page.offset;
+        let take = remaining.min(page.limit);
+        let end = page.offset + take;
+
+        let page_slice = list.slice(page.offset..end);
+        let mut tiers = Vec::new(&env);
+        for id in page_slice.iter() {
+            if let Some(tier) = env
+                .storage()
+                .persistent()
+                .get::<StakingDataKey, StakingTier>(&StakingDataKey::Tier(id.clone()))
+            {
+                tiers.push_back(tier);
+            }
+        }
+        tiers
+    }
+
+    /// Paginated, deterministic listing of active staking tiers.
+    ///
+    /// Like [`Self::get_staking_tiers_paginated`] but additionally filters
+    /// for `is_active == true`. The filter runs after slicing, so the
+    /// number of persistent reads per call is bounded by `page.limit`.
+    pub fn get_active_staking_tiers_paginated(env: Env, page: PageParams) -> Vec<StakingTier> {
+        let all = Self::get_staking_tiers_paginated(env.clone(), page);
+        let mut active = Vec::new(&env);
+        for tier in all.iter() {
+            if tier.is_active {
+                active.push_back(tier);
+            }
+        }
+        active
+    }
+
+    /// Insertion sort for `Vec<String>`, ascending lexicographic (byte
+    /// comparison). See the analogous helper in
+    /// `subscription::sort_string_vec` for rationale and complexity.
+    fn sort_string_vec(vec: &mut Vec<String>) {
+        let n = vec.len();
+        if n <= 1 {
+            return;
+        }
+        let mut i: u32 = 1;
+        while i < n {
+            let mut j = i;
+            while j > 0 {
+                if vec.get(j - 1) > vec.get(j) {
+                    let tmp = vec.get(j - 1).unwrap();
+                    vec.set(j - 1, vec.get(j).unwrap());
+                    vec.set(j, tmp);
+                    j -= 1;
+                } else {
+                    break;
+                }
+            }
+            i += 1;
+        }
     }
 
     /// Return the global staking configuration.

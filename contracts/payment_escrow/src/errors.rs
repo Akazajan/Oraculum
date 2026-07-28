@@ -33,3 +33,4 @@ pub enum Error {
     FeeRecipientNotSet = 13,
     InsufficientBalance = 14,
 }
+}

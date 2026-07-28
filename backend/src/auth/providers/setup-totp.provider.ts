@@ -3,11 +3,12 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { generateSecret, generateURI } from 'otplib';
 import * as QRCode from 'qrcode';
-import * as bcrypt from 'bcrypt';
-import * as crypto from 'crypto';
 import { User } from '../../users/entities/user.entity';
 import { Setup2faDto } from '../dto/setup-2fa.dto';
 import { verifySync } from 'otplib';
+import {
+  generateAndHashBackupCodes,
+} from './manage-totp.provider';
 
 @Injectable()
 export class SetupTotpProvider {
@@ -34,6 +35,12 @@ export class SetupTotpProvider {
     return { secret, qrCodeDataUrl };
   }
 
+  /**
+   * BE-06 — Finalise 2FA enrollment and hand the user their first
+   * batch of recovery codes. The hash policy is shared with the
+   * regeneration path via `generateAndHashBackupCodes` so the rules
+   * (count, entropy, bcrypt cost) cannot drift apart.
+   */
   async confirm2faSetup(userId: string, dto: Setup2faDto) {
     const user = await this.usersRepository.findOne({ where: { id: userId } });
     if (!user || !user.totpSecret) {
@@ -45,18 +52,12 @@ export class SetupTotpProvider {
       throw new UnauthorizedException('Invalid TOTP code');
     }
 
-    // Generate 8 plain backup codes, store hashed
-    const plainCodes = Array.from({ length: 8 }, () =>
-      crypto.randomBytes(5).toString('hex'),
-    );
-    const hashedCodes = await Promise.all(
-      plainCodes.map((c) => bcrypt.hash(c, 10)),
-    );
+    const { plain, hashed } = await generateAndHashBackupCodes();
 
     user.twoFactorEnabled = true;
-    user.totpBackupCodes = hashedCodes;
+    user.totpBackupCodes = hashed;
     await this.usersRepository.save(user);
 
-    return { backupCodes: plainCodes };
+    return { backupCodes: plain };
   }
 }

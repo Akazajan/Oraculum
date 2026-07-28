@@ -11,21 +11,25 @@ type TwoFaPendingPayload = {
   exp?: number;
 };
 
-//jwt expiry type
+type RefreshPayload = JwtPayload & { family?: string };
 
+//jwt expiry type
 type JwtExpiry = `${number}${'s' | 'm' | 'h' | 'd'}` | number;
 
 @Injectable()
 export class JwtHelper {
   constructor(private readonly jwtService: JwtService) {}
 
-  public validateRefreshToken(refreshToken: string): string | null {
+  public validateRefreshToken(
+    refreshToken: string,
+  ): { userId: string; family?: string } | null {
     try {
-      const payload = this.jwtService.verify<JwtPayload>(refreshToken, {
+      const payload = this.jwtService.verify<RefreshPayload>(refreshToken, {
         secret: process.env.JWT_REFRESH_SECRET as string,
       });
 
-      return payload?.sub ?? null;
+      if (!payload?.sub) return null;
+      return { userId: payload.sub, family: payload.family };
     } catch (error: unknown) {
       if (error instanceof Error) {
         console.error('JWT verification failed:', error.message);
@@ -50,11 +54,18 @@ export class JwtHelper {
     });
   }
 
-  public generateRefreshToken(user: User): string {
-    const payload: JwtPayload = {
+  /**
+   * BE-04 — Refresh tokens are minted with a family id so a successful
+   * `refresh-token` call can rotate them safely. The rotation flow in
+   * AuthService stamps the new token with the *previous* token's family
+   * so lineage survives across rotations.
+   */
+  public generateRefreshToken(user: User, family?: string): string {
+    const payload: RefreshPayload = {
       sub: user.id,
       email: user.email,
       fullName: user.fullName,
+      family,
     };
 
     return this.jwtService.sign(payload, {
@@ -63,7 +74,14 @@ export class JwtHelper {
     });
   }
 
-  public generateTokens(user: User) {
+  /**
+   * Convenience wrapper that mints both tokens with a fresh family on
+   * the very first issuance (e.g. login). Rotations always pass an
+   * existing family through `generateRefreshToken` directly.
+   */
+  public generateTokens(
+    user: User,
+  ): { accessToken: string; refreshToken: string } {
     return {
       accessToken: this.generateAccessToken(user),
       refreshToken: this.generateRefreshToken(user),
