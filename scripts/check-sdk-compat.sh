@@ -25,7 +25,8 @@ set -euo pipefail
 CLEANUP_FILES=""
 cleanup() {
     if [ -n "$CLEANUP_FILES" ]; then
-        rm -f "$CLEANUP_FILES"
+        # shellcheck disable=SC2086
+        rm -f $CLEANUP_FILES
     fi
 }
 trap cleanup EXIT
