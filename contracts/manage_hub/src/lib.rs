@@ -79,6 +79,7 @@ mod types;
 mod upgrade;
 mod upgrade_errors;
 mod validation;
+pub mod cross_contract_safety;
 pub mod timelock;
 pub mod audit_trail;
 #[cfg(test)]
