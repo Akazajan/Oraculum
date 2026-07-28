@@ -15,7 +15,7 @@
 #   ./scripts/generate-wasm-hash.sh                      # hash existing wasm artifacts
 #   ./scripts/generate-wasm-hash.sh --build               # build & hash
 #   ./scripts/generate-wasm-hash.sh --verify              # verify stored hashes
-#   ./scripts/generate-wasm-hash.sh --update-readme       # update README with hashes
+#   ./scripts/generate-wasm-hash.sh --print-readme-table  # print markdown table of hashes for README
 # ────────────────────────────────────────────────────────────────
 
 set -euo pipefail
@@ -32,7 +32,7 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --build)        BUILD="true"; shift ;;
         --verify)       VERIFY="true"; shift ;;
-        --update-readme) UPDATE_README="true"; shift ;;
+        --print-readme-table) UPDATE_README="true"; shift ;;
         *)              echo "Unknown option: $1"; exit 1 ;;
     esac
 done
@@ -41,11 +41,16 @@ done
 # ── Prerequisites check ────────────────────────────────────────
 # Python is needed for JSON display/parsing (optional — falls back to cat)
 HAS_PYTHON=false
-if command -v python3 &>/dev/null; then
-    HAS_PYTHON=true
-elif command -v python &>/dev/null; then
-    # Alias python -> python3 if available
-    python3() { python "$@"; }
+_run_python() {
+    if command -v python3 &>/dev/null; then
+        python3 "$@"
+    elif command -v python &>/dev/null; then
+        python "$@"
+    else
+        return 1
+    fi
+}
+if command -v python3 &>/dev/null || command -v python &>/dev/null; then
     HAS_PYTHON=true
 fi
 
@@ -150,7 +155,7 @@ echo ""
 # ── Display summary ───────────────────────────────────────────
 echo "─── Hash Summary ─────────────────────────────────────"
 if [ "$HAS_PYTHON" = true ]; then
-    echo "${HASHES_JSON}" | python3 -m json.tool 2>/dev/null || cat "${HASH_FILE}"
+    _run_python -m json.tool 2>/dev/null < "${HASH_FILE}" || cat "${HASH_FILE}"
 else
     cat "${HASH_FILE}"
 fi
@@ -172,7 +177,7 @@ if [[ "${VERIFY}" == "true" ]]; then
         CURRENT_SHA=$(sha256sum "$wasm" | cut -d' ' -f1)
 
         if [ "$HAS_PYTHON" = true ]; then
-            STORED_SHA=$(python3 -c "import json; d=json.load(open('${HASH_FILE}')); print(d['contracts']['${NAME}']['sha256'])" 2>/dev/null || echo "")
+            STORED_SHA=$(_run_python -c "import json; d=json.load(open('${HASH_FILE}')); print(d['contracts']['${NAME}']['sha256'])" 2>/dev/null || echo "")
         else
             # Fallback: grep the raw JSON file
             STORED_SHA=$(grep -A2 "\"${NAME}\"" "${HASH_FILE}" 2>/dev/null | grep "sha256" | sed 's/.*"sha256": "\(.*\)".*/\1/' || echo "")
@@ -226,8 +231,7 @@ if [[ "${UPDATE_README}" == "true" ]]; then
 
         echo -e "${TABLE}"
         echo ""
-        echo "→ To add this table to your README, run with --update-readme"
-        echo "   or copy the table above manually."
+        echo "→ Copy the table above into your README."
     else
         echo "  ⚠  README not found at ${README}"
     fi
