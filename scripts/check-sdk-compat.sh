@@ -53,24 +53,38 @@ cd "${WORKSPACE_DIR}"
 # ── Helpers ────────────────────────────────────────────────────
 ver_compare() {
     # Returns 0 if $1 >= $2, 1 otherwise
-    python3 -c "
-import sys
-from packaging.version import Version
-a = Version('$1')
-b = Version('$2')
-sys.exit(0 if a >= b else 1)
-" 2>/dev/null || {
-        # Fallback if packaging not available
-        [ "$(printf '%s\n' "$1" "$2" | sort -V | tail -n1)" = "$1" ]
+    # Pure bash implementation — no Python needed
+    if [ "$1" = "$2" ]; then
+        return 0
+    fi
+    local sorted
+    sorted="$(printf '%s\n' "$1" "$2" | sort -V 2>/dev/null | head -n1)"
+    if [ "$sorted" = "$2" ]; then
+        return 0  # $1 >= $2
+    else
+        return 1  # $1 < $2
+    fi
+}
+
+# Fallback sort -V (for macOS which lacks GNU sort -V)
+# Uses awk to compare version segments
+ver_compare_fallback() {
+    awk -v a="$1" -v b="$2" '
+    function ver_to_num(v,   parts, n, i) {
+        n = split(v, parts, ".")
+        for (i = 1; i <= 3; i++) {
+            if (parts[i] == "") parts[i] = "0"
+        }
+        return parts[1]*1000000 + parts[2]*1000 + parts[3]
     }
+    BEGIN { exit (ver_to_num(a) >= ver_to_num(b) ? 0 : 1) }'
 }
 
 semver_parse() {
-    python3 -c "
-import json, sys
-parts = '$1'.split('.')
-print(json.dumps({'major': int(parts[0]), 'minor': int(parts[1]) if len(parts) > 1 else 0, 'patch': int(parts[2]) if len(parts) > 2 else 0}))
-"
+    # Returns major.minor.patch components separated by spaces
+    local parts
+    IFS='.' read -ra parts <<< "$1"
+    echo "${parts[0]:-0} ${parts[1]:-0} ${parts[2]:-0}"
 }
 
 echo "━━━ Oraculum — Soroban SDK Compatibility Check ━━━━━━━"
@@ -126,7 +140,17 @@ for entry in "${KNOWN_VERSIONS[@]}"; do
     fi
 done
 
-if ver_compare "$RUSTC_VERSION" "$MIN_RUSTC"; then
+# Try sort -V first, fall back to awk comparison
+if sort -V < /dev/null 2>/dev/null; then
+    VER_CMP="ver_compare"
+elif command -v awk &>/dev/null; then
+    VER_CMP="ver_compare_fallback"
+else
+    echo "  ⚠  No version comparison tool available — skipping check"
+    VER_CMP="true"  # Skip check
+fi
+
+if $VER_CMP "$RUSTC_VERSION" "$MIN_RUSTC"; then
     echo "  ✅ Rustc ${RUSTC_VERSION} meets minimum requirement ${MIN_RUSTC}"
 else
     echo "  ❌ Rustc ${RUSTC_VERSION} is below minimum ${MIN_RUSTC}"
@@ -192,12 +216,18 @@ echo ""
 # ── Check 5: Test suite compatibility ─────────────────────────
 echo "─── Check 5: Test Suite ───"
 cd "${CONTRACTS_DIR}"
-if cargo test --workspace --all-features 2>/dev/null; then
+TEST_LOG=$(mktemp)
+if cargo test --workspace --all-features > "${TEST_LOG}" 2>&1; then
     echo "  ✅ All tests pass with SDK ${TARGET_VERSION}"
+    rm -f "${TEST_LOG}"
 else
     echo "  ❌ Test failures detected with SDK ${TARGET_VERSION}"
     echo "     Some APIs may have changed behavior."
     echo "     Check Soroban SDK changelog for breaking changes."
+    echo ""
+    echo "  Test output (last 30 lines):"
+    tail -30 "${TEST_LOG}" | sed 's/^/    /'
+    rm -f "${TEST_LOG}"
 fi
 cd "${WORKSPACE_DIR}"
 echo ""
