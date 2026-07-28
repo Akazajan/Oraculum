@@ -964,6 +964,75 @@ impl AccessControlModule {
                     );
                 }
             }
+            ProposalAction::TransferAdmin(new_admin) => {
+                // Transfer admin ownership via multisig proposal.
+                if Self::is_multisig_enabled(env) {
+                    // In multisig mode, update the admins list: add new_admin
+                    // and remove the proposer from the multisig admin list.
+                    let mut multisig_config = Self::get_multisig_config(env)
+                        .ok_or(AccessControlError::MultisigNotEnabled)?;
+
+                    if multisig_config.admins.contains(&new_admin) {
+                        return Err(AccessControlError::DuplicateAdmin);
+                    }
+
+                    // Rebuild the admins list without the proposer
+                    let mut new_admins = Vec::new(env);
+                    for admin in multisig_config.admins.iter() {
+                        if admin != proposal.proposer {
+                            new_admins.push_back(admin);
+                        }
+                    }
+                    new_admins.push_back(new_admin.clone());
+                    multisig_config.admins = new_admins;
+
+                    if !multisig_config.validate() {
+                        return Err(AccessControlError::InvalidMultisigConfig);
+                    }
+
+                    env.storage()
+                        .persistent()
+                        .set(&DataKey::MultiSigConfig, &multisig_config);
+
+                    // Update roles
+                    env.storage()
+                        .persistent()
+                        .set(&DataKey::UserRole(new_admin.clone()), &UserRole::Admin);
+                    env.storage()
+                        .persistent()
+                        .set(
+                            &DataKey::UserRole(proposal.proposer.clone()),
+                            &UserRole::Guest,
+                        );
+                } else {
+                    // Single-admin mode: transfer ownership via DataKey::Admin
+                    let current_admin =
+                        Self::get_admin(env).ok_or(AccessControlError::AdminRequired)?;
+
+                    if current_admin == new_admin {
+                        return Err(AccessControlError::InvalidAddress);
+                    }
+
+                    // Update the admin address
+                    env.storage().persistent().set(&DataKey::Admin, &new_admin);
+
+                    // Update roles: new admin gets Admin, old admin gets Guest
+                    env.storage()
+                        .persistent()
+                        .set(&DataKey::UserRole(new_admin.clone()), &UserRole::Admin);
+                    env.storage()
+                        .persistent()
+                        .set(
+                            &DataKey::UserRole(current_admin.clone()),
+                            &UserRole::Guest,
+                        );
+                }
+
+                env.events().publish(
+                    (symbol_short!("adm_xfer"), new_admin.clone()),
+                    (proposal.proposer.clone(), new_admin.clone()),
+                );
+            }
             _ => return Err(AccessControlError::InvalidProposalType),
         }
 

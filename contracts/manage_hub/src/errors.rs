@@ -79,7 +79,6 @@ pub enum Error {
     /// Pagination parameters failed validation (e.g. limit = 0,
     /// limit > MAX_PAGE_SIZE).
     InvalidPaginationParams = 56,
-}
-    SubscriptionAlreadyRevoked = 51,
-    SubscriptionInvalid = 52,
+    /// Subscription has been marked as invalid.
+    SubscriptionInvalid = 57,
 }
