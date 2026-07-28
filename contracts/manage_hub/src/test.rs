@@ -4,7 +4,7 @@ extern crate alloc;
 use alloc::format;
 
 use super::*;
-use crate::membership_token::{DataKey, LegacyMembershipToken, MembershipToken};
+use crate::membership_token::{DataKey, MembershipToken};
 use crate::types::MembershipStatus;
 use crate::AttendanceAction;
 use soroban_sdk::map;
@@ -1790,7 +1790,10 @@ fn test_ct18_reactivate_tier_roundtrip() {
     let after_deactivate = client.get_tier(&tier_id);
     assert!(!after_deactivate.is_active);
     assert!(after_deactivate.deactivated_at.is_some());
-    assert_eq!(after_deactivate.deactivated_at, Some(env.ledger().timestamp()));
+    assert_eq!(
+        after_deactivate.deactivated_at,
+        Some(env.ledger().timestamp())
+    );
     // identity preserved
     assert_eq!(after_deactivate.id, tier_id);
     assert_eq!(after_deactivate.created_at, after_deactivate.created_at);
@@ -1885,9 +1888,7 @@ fn test_ct17_get_all_tiers_returns_sorted_by_id() {
 
     // Insert in non-alphabetical order so that incidental storage
     // ordering cannot accidentally produce the expected result.
-    let ids = [
-        "zebra", "apple", "mango", "banana", "kiwi",
-    ];
+    let ids = ["zebra", "apple", "mango", "banana", "kiwi"];
     for id in ids.iter() {
         let params = CreateTierParams {
             id: String::from_str(&env, id),
@@ -2255,8 +2256,6 @@ fn test_ct18_staking_reactivate_already_active_errors() {
     // Already active → reactivate must fail.
     client.reactivate_staking_tier(&admin, &tier_id);
 }
-
-
 
 #[test]
 fn test_approve_and_get_allowance() {
@@ -3487,12 +3486,18 @@ fn test_legacy_token_layout_migrates_on_read() {
 
     client.set_admin(&admin);
 
-    let legacy_token = LegacyMembershipToken {
+    let legacy_token = MembershipToken {
         id: token_id.clone(),
         user: user.clone(),
         status: MembershipStatus::Active,
         issue_date: 100,
         expiry_date: 200,
+        tier_id: None,
+        grace_period_entered_at: None,
+        grace_period_expires_at: None,
+        renewal_attempts: 0,
+        last_renewal_attempt_at: None,
+        current_version: 0,
     };
 
     env.as_contract(&contract_id, || {

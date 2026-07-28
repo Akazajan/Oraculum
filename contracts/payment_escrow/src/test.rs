@@ -37,7 +37,7 @@ fn init<'a>(
     token: &Address,
 ) -> PaymentEscrowContractClient<'a> {
     let client = PaymentEscrowContractClient::new(env, contract_id);
-    client.initialize(admin, token, &DISPUTE_WINDOW);
+    client.initialize(admin, token, &DISPUTE_WINDOW, admin, &250u32);
     client
 }
 
@@ -68,8 +68,8 @@ fn test_initialize_twice_fails() {
 
     env.mock_all_auths();
     let client = PaymentEscrowContractClient::new(&env, &contract_id);
-    client.initialize(&admin, &token, &DISPUTE_WINDOW);
-    client.initialize(&admin, &token, &DISPUTE_WINDOW);
+    client.initialize(&admin, &token, &DISPUTE_WINDOW, &admin, &250u32);
+    client.initialize(&admin, &token, &DISPUTE_WINDOW, &admin, &250u32);
 }
 
 // ── Escrow creation ───────────────────────────────────────────────────────────
@@ -360,7 +360,7 @@ fn test_raise_dispute_when_window_zero_fails() {
     let contract_id = setup_contract(&env);
     // Initialise with dispute window = 0 (disputes disabled)
     let client = PaymentEscrowContractClient::new(&env, &contract_id);
-    client.initialize(&admin, &token, &0u64);
+    client.initialize(&admin, &token, &0u64, &admin, &250u32);
 
     client.create_escrow(
         &depositor,
