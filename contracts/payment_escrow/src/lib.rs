@@ -418,12 +418,12 @@ impl PaymentEscrowContract {
         let token_client = token::Client::new(&env, &escrow.payment_token);
 
         if release_to_beneficiary {
-            // Transfer the fee, if any
+            // Add fee to treasury
             if escrow.fee_amount > 0 {
-                token_client.transfer(
-                    &env.current_contract_address(),
-                    &escrow.fee_recipient,
-                    &escrow.fee_amount,
+                let treasury = Self::get_treasury_amount(&env);
+                env.storage().instance().set(
+                    &DataKey::TreasuryAmount,
+                    &(treasury + escrow.fee_amount),
                 );
             }
 
@@ -561,5 +561,42 @@ impl PaymentEscrowContract {
     /// Return the current default dispute window in seconds.
     pub fn dispute_window(env: Env) -> u64 {
         Self::get_dispute_window(&env)
+    }
+
+    // ── Treasury ──────────────────────────────────────────────────────────────
+
+    /// Withdraw accumulated fees from the treasury.
+    pub fn withdraw_treasury(
+        env: Env,
+        caller: Address,
+        recipient: Address,
+        amount: i128,
+    ) -> Result<(), Error> {
+        Self::require_admin(&env, &caller)?;
+
+        let treasury = Self::get_treasury_amount(&env);
+        if amount > treasury {
+            return Err(Error::InsufficientBalance);
+        }
+
+        let payment_token = Self::get_payment_token(&env)?;
+        let token_client = token::Client::new(&env, &payment_token);
+
+        token_client.transfer(&env.current_contract_address(), &recipient, &amount);
+
+        env.storage()
+            .instance()
+            .set(&DataKey::TreasuryAmount, &(treasury - amount));
+
+        env.events().publish(
+            (symbol_short!("treasury_w"),),
+            (recipient, amount, env.ledger().timestamp()),
+        );
+        Ok(())
+    }
+
+    /// Return the current treasury balance.
+    pub fn treasury_balance(env: Env) -> i128 {
+        Self::get_treasury_amount(&env)
     }
 }
