@@ -146,4 +146,24 @@ impl IntoVal<soroban_sdk::Env, soroban_sdk::Error> for Error {
     fn into_val(&self, _env: &soroban_sdk::Env) -> soroban_sdk::Error {
         soroban_sdk::Error::from_contract_error(u32::from(*self))
     }
+    // -----------------------------------------------------------------
+    // Tier / Staking Tier active state & listing gas-optimisation errors
+    // (added for CT-15, CT-16, CT-17, CT-18)
+    // -----------------------------------------------------------------
+    /// Attempted to reactivate a tier that is already active.
+    TierAlreadyActive = 51,
+    /// Attempted to deactivate a tier that is already deactivated.
+    TierAlreadyDeactivated = 52,
+    /// Attempted to reactivate a staking tier that is already active.
+    StakingTierAlreadyActive = 53,
+    /// Attempted to deactivate a staking tier that is already deactivated.
+    StakingTierAlreadyDeactivated = 54,
+    /// Staking tier with the given ID does not exist (mirrors
+    /// `TierNotFound` for the staking-tier namespace).
+    StakingTierNotFound = 55,
+    /// Pagination parameters failed validation (e.g. limit = 0,
+    /// limit > MAX_PAGE_SIZE).
+    InvalidPaginationParams = 56,
+    /// Subscription has been marked as invalid.
+    SubscriptionInvalid = 57,
 }

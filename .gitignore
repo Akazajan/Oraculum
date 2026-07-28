@@ -7,3 +7,8 @@ Thumbs.db
 .idea/
 *.swp
 *.swo
+
+# Generated script artifacts
+scripts/wasm-hashes.json
+scripts/sdk-compat-*.md
+target/coverage/
