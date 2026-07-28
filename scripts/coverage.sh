@@ -7,7 +7,7 @@ set -euo pipefail
 # Prerequisites:
 #   cargo-tarpaulin  (install: cargo install cargo-tarpaulin)
 #   grcov            (install: cargo install grcov)
-#   rust-nightly     (for llvm-profiling with grcov)
+#   llvm-tools-preview  (for grcov profiling, install: rustup component add llvm-tools-preview)
 #
 # Usage:
 #   ./scripts/coverage.sh              # run all contracts with tarpaulin (default)
@@ -69,7 +69,7 @@ elif [[ "${ENGINE}" == "grcov" ]]; then
         exit 1
     fi
 
-    echo "→ Running tests with llvm profiling (requires nightly)…"
+    echo "→ Running tests with llvm profiling…"
     cd "${WORKSPACE_DIR}/contracts"
 
     export CARGO_INCREMENTAL=0
@@ -77,7 +77,16 @@ elif [[ "${ENGINE}" == "grcov" ]]; then
     export RUSTDOCFLAGS="-Cinstrument-coverage"
     export LLVM_PROFILE_FILE="${REPORT_DIR}/cargo-test-%p-%m.profraw"
 
-    cargo test --workspace --all-features
+    # Run tests — output is shown on failure for debugging
+    TEST_LOG=$(mktemp)
+    if cargo test --workspace --all-features > "${TEST_LOG}" 2>&1; then
+        echo "  ✓ All tests passed."
+    else
+        echo "  ⚠  Some tests failed. Coverage report will be incomplete."
+        echo "  Test output (last 20 lines):"
+        tail -20 "${TEST_LOG}" | sed 's/^/    /'
+    fi
+    rm -f "${TEST_LOG}"
 
     echo "→ Generating coverage with grcov…"
     grcov "${REPORT_DIR}" \
