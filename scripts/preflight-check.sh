@@ -21,7 +21,6 @@ set -euo pipefail
 MODE="full"
 WORKSPACE_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 CONTRACTS_DIR="${WORKSPACE_DIR}/contracts"
-TIMESTAMP="$(date +%s)"
 PASS=0
 FAIL=0
 
@@ -87,7 +86,7 @@ else
 fi
 echo ""
 
-if [[ "${MODE}" != "fast" ]]; then
+if [[ "${MODE}" != "fast" && "${MODE}" != "ci" ]]; then
     # ── 4. Release build (wasm target) ──────────────────────
     echo "─── Check 4: Release Build (wasm32) ───"
     if cargo build --all --release --verbose 2>&1; then
@@ -118,8 +117,10 @@ if [[ "${MODE}" != "fast" ]]; then
         fail
     fi
     echo ""
+fi
 
-    # ── 6. Dependency audit (if cargo-audit available) ──────
+# ── Dependency audit (skipped in ci/fast mode) ────────────────
+if [[ "${MODE}" == "deploy" || "${MODE}" == "full" ]]; then
     echo "─── Check 6: Dependency Audit ───"
     if command -v cargo-audit &>/dev/null; then
         if cargo audit 2>&1; then
@@ -135,15 +136,17 @@ if [[ "${MODE}" != "fast" ]]; then
     echo ""
 fi
 
-# ── 7. Release profile exists ───────────────────────────────
-echo "─── Check 7: Release Profile ───"
-if grep -q "\[profile\.release\]" Cargo.toml 2>/dev/null; then
-    echo "  ✓ Release profile configured"
-    pass
-else
-    echo "  ⚠  No release profile found in Cargo.toml."
-    echo "  → Add a [profile.release] section with appropriate settings."
-    fail
+# ── 7. Release profile exists (skipped in fast mode) ─────────
+if [[ "${MODE}" != "fast" ]]; then
+    echo "─── Check 7: Release Profile ───"
+    if grep -q "\[profile\.release\]" Cargo.toml 2>/dev/null; then
+        echo "  ✓ Release profile configured"
+        pass
+    else
+        echo "  ⚠  No release profile found in Cargo.toml."
+        echo "  → Add a [profile.release] section with appropriate settings."
+        fail
+    fi
 fi
 echo ""
 
