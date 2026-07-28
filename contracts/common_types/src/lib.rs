@@ -19,4 +19,5 @@ pub use types::{
 };
 
 #[cfg(test)]
+pub mod canonicalization;
 mod test_contract;

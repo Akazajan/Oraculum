@@ -79,6 +79,10 @@ mod types;
 mod upgrade;
 mod upgrade_errors;
 mod validation;
+pub mod timelock;
+pub mod audit_trail;
+#[cfg(test)]
+mod edge_case_tests;
 
 use attendance_log::{AttendanceLog, AttendanceLogModule};
 use batch::BatchModule;
