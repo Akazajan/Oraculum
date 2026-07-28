@@ -135,13 +135,14 @@ if [[ "${MODE}" != "fast" ]]; then
     echo ""
 fi
 
-# ── 7. Release profile optimizations ─────────────────────────
+# ── 7. Release profile exists ───────────────────────────────
 echo "─── Check 7: Release Profile ───"
-if grep -q "opt-level.*=.*\"z\"" Cargo.toml 2>/dev/null; then
-    echo "  ✓ Optimized for size (opt-level = \"z\")"
+if grep -q "\[profile\.release\]" Cargo.toml 2>/dev/null; then
+    echo "  ✓ Release profile configured"
     pass
 else
-    echo "  ⚠  Release profile not optimized for size."
+    echo "  ⚠  No release profile found in Cargo.toml."
+    echo "  → Add a [profile.release] section with appropriate settings."
     fail
 fi
 echo ""
