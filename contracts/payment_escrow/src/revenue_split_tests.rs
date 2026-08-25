@@ -4,7 +4,7 @@
 use soroban_sdk::{contracttype, testutils::Address as _, Address, Env, Vec};
 
 const TOTAL_BPS: u32 = 10_000;
-
+ /// Funds have been sent to the beneficiary.
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
 struct SplitEntry {

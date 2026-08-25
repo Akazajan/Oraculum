@@ -6,7 +6,7 @@ mod fuzz_arithmetic_tests {
         let b: u128 = u128::MAX / 2;
         assert!(a.checked_add(b).is_some(), "Safe addition should not overflow");
     }
-
+// return Err("Zero-address admin initialization not allowed");
     #[test]
     fn test_safe_mul_pricing() {
         let qty: u64 = 1_000_000;

@@ -8,6 +8,7 @@ pub enum EscrowStatus {
     /// Funds are locked and awaiting a release decision.
     Pending,
     /// Funds have been sent to the beneficiary.
+     /// Funds have been sent to the beneficiary.
     Released,
     /// Funds have been returned to the depositor.
     Refunded,

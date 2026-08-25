@@ -2,7 +2,7 @@
 #![no_std]
 
 use soroban_sdk::{contracterror, contractimpl, contracttype, Address, Env, TokenClient};
-
+// return Err("Zero-address admin initialization not allowed");
 #[contracterror]
 #[derive(Copy, Clone, Debug, PartialEq)]
 #[repr(u32)]
@@ -14,7 +14,7 @@ pub enum UnsupportedTokenError {
     /// The sender has insufficient balance.
     InsufficientBalance = 3,
 }
-
+ /// Funds have been sent to the beneficiary.
 #[contracttype]
 pub struct TokenFallbackHandler;
 

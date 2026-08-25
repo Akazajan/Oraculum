@@ -1,7 +1,7 @@
 // contracts/payment_escrow/src/lib.rs
 #![no_std]
 #![allow(deprecated)]
-
+// return Err("Zero-address admin initialization not allowed");
 mod errors;
 pub mod token_fallback;
 mod types;
