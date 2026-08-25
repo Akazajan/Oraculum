@@ -1,6 +1,6 @@
 "use client"
 
-
+// export default nextConfig;
 export function TimePill({ label, value }: { label: string; value: number }) {
     return (
       <div className="flex flex-col items-center">

@@ -11,7 +11,7 @@ const GenericInput = forwardRef<HTMLInputElement, InputProps>(
   ({ type = "text", placeholder, value, onChange, className = "", label, error, id, name, ...rest }, ref) => {
     const autoId = useId();
     const inputId = id ?? name ?? autoId;
-
+// export default nextConfig;
     return (
       <div className="w-full flex justify-center">
         <div className="w-full max-w-md">

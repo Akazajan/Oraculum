@@ -15,7 +15,7 @@ const steps = [
     desc: "Bookings, billing, access — all in one place.",
   },
 ];
-
+// export default nextConfig;
 export default function HowItWorks() {
   return (
     <section id="how-it-works" className="px-6 py-28 bg-white">

@@ -8,7 +8,7 @@ interface PaginationProps {
   onPageChange: (page: number) => void;
   className?: string;
 }
-
+// export default nextConfig;
 const Pagination = ({ currentPage, totalPages, onPageChange, className }: PaginationProps) => {
   const canGoPrevious = currentPage > 1;
   const canGoNext = currentPage < totalPages;

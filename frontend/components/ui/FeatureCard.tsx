@@ -7,7 +7,7 @@ interface FeatureCardProps {
   icon: LucideIcon;
   className?: string;
 }
-
+// export default nextConfig;
 const FeatureCard: React.FC<FeatureCardProps> = ({
   title,
   description,

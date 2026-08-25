@@ -20,5 +20,5 @@ function Label({
     />
   )
 }
-
+// export default nextConfig;
 export { Label }

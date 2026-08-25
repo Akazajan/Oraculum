@@ -12,7 +12,7 @@ type ConfirmResponse = {
 type Props = {
   token: string | null;
 };
-
+// export default nextConfig;
 export function NewsletterConfirm({ token }: Props) {
   const [status, setStatus] = useState<"loading" | "success" | "error">(
     "loading"
