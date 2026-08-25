@@ -95,15 +95,16 @@ impl MembershipTokenContract {
     }
 
     pub fn get_token(env: Env, id: BytesN<32>) -> Result<MembershipToken, Error> {
-        let token: MembershipToken = env
+        let mut token: MembershipToken = env
             .storage()
             .persistent()
-            .get(&DataKey::Token(id))
+            .get(&DataKey::Token(id.clone()))
             .ok_or(Error::TokenNotFound)?;
 
         let current_time = env.ledger().timestamp();
         if token.status == MembershipStatus::Active && current_time > token.expiry_date {
-            return Err(Error::TokenExpired);
+            token.status = MembershipStatus::Expired;
+            env.storage().persistent().set(&DataKey::Token(id), &token);
         }
 
         Ok(token)

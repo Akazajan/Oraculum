@@ -5,8 +5,7 @@ import Link from "next/link";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { useLogin } from "@/hooks/use-login";
-import { Eye, EyeOff, Mail, Lock, Building2 } from "lucide-react";
+import { Eye, EyeOff, Mail, Lock } from "lucide-react";
 
 const loginSchema = z.object({
   email: z.email("Enter a valid email address"),
@@ -26,7 +25,6 @@ interface LoginFormProps {
 }
 
 export default function LoginForm({ onEmailLogin, isLoading }: LoginFormProps) {
-  const { login, loading } = useLogin();
   const [showPassword, setShowPassword] = useState(false);
 
   const defaultValues = useMemo<LoginFormValues>(
@@ -48,7 +46,7 @@ export default function LoginForm({ onEmailLogin, isLoading }: LoginFormProps) {
     mode: "onSubmit",
   });
 
-  const onSubmit = (values: LoginFormValues) => login(values);
+  const onSubmit = (values: LoginFormValues) => onEmailLogin(values);
 
   return (
     <div className="min-h-screen bg-[#faf9f7] flex items-center justify-center px-4 sm:px-6 lg:px-8">
@@ -157,10 +155,10 @@ export default function LoginForm({ onEmailLogin, isLoading }: LoginFormProps) {
             {/* Sign In Button */}
             <button
               type="submit"
-              disabled={loading}
+              disabled={isLoading}
               className="w-full bg-gray-900 text-white py-3 px-4 rounded-lg font-medium hover:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-gray-300 focus:ring-offset-2 transition-colors"
             >
-              {loading ? "Logging in..." : "Login"}
+              {isLoading ? "Logging in..." : "Login"}
             </button>
           </div>
         </form>
