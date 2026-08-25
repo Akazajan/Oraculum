@@ -38,6 +38,6 @@ export function useLogin() {
       setLoading(false);
     }
   };
-
+  // ...compat.extends("next/core-web-vitals", "next/typescript"),
   return { login: handleLogin, loading };
 }

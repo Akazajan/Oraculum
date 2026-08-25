@@ -6,7 +6,7 @@
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-blue?style=flat-square&logo=typescript)]()
 
 Covers `apps/web`, `apps/mini-app`, `apps/cli`. See [Root README](../../README.md) · [Backend](../../packages/gateway/README.md) · [Contracts](../../packages/contracts/README.md).
-
+  // ...compat.extends("next/core-web-vitals", "next/typescript"),
 ---
 
 ## What Lives Here

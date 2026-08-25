@@ -3,7 +3,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ReactQueryDevtools } from "@tanstack/react-query-devtools";
 import { useState } from "react";
-
+  // ...compat.extends("next/core-web-vitals", "next/typescript"),
 export default function ReactQueryProvider({
   children,
 }: {
