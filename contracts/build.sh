@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================================
-# build.sh — Build all contracts, report WASM sizes, enforce size budget
+# build.sh — Build all contracts, report WASM sizes, enforce size budget, verify hashes
 # ============================================================================
 #
 # This script:
@@ -8,10 +8,12 @@
 #   2. Reports the byte size of each produced `.wasm` file
 #   3. Compares each size against a configurable per-contract budget
 #   4. Exits with a non-zero status if any contract exceeds its budget
+#   5. Verifies WASM hashes against stored values for supply-chain security
 #
 # Usage:
 #   ./build.sh                  # default budget: 650 KB per contract
 #   ./build.sh --budget 500000  # custom budget in bytes
+#   ./build.sh --skip-hash-verify  # skip hash verification
 #
 # Requirements:
 #   - `stellar contract build` (Soroban CLI) or `cargo build --target wasm32-unknown-unknown`
@@ -23,6 +25,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONTRACTS_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 WORKSPACE_DIR="$CONTRACTS_DIR"
+HASH_SCRIPT="${WORKSPACE_DIR}/scripts/generate-wasm-hash.sh"
 
 # ---------------------------------------------------------------------------
 # Defaults
@@ -31,6 +34,7 @@ DEFAULT_BUDGET=650000  # 650 KB in bytes
 BUDGET="$DEFAULT_BUDGET"
 WASM_DIR="$WORKSPACE_DIR/target/wasm32-unknown-unknown/release"
 EXIT_CODE=0
+SKIP_HASH_VERIFY=false
 
 # ---------------------------------------------------------------------------
 # Parse arguments
@@ -41,13 +45,18 @@ while [[ $# -gt 0 ]]; do
             BUDGET="$2"
             shift 2
             ;;
+        --skip-hash-verify)
+            SKIP_HASH_VERIFY=true
+            shift
+            ;;
         --help|-h)
-            echo "Usage: $0 [--budget <bytes>]"
+            echo "Usage: $0 [--budget <bytes>] [--skip-hash-verify]"
             echo ""
-            echo "Build all Soroban contracts, report WASM sizes, and enforce a size budget."
+            echo "Build all Soroban contracts, report WASM sizes, enforce a size budget, and verify WASM hashes."
             echo ""
             echo "Options:"
             echo "  --budget <bytes>  Maximum allowed size per contract (default: $DEFAULT_BUDGET)"
+            echo "  --skip-hash-verify  Skip WASM hash verification step"
             exit 0
             ;;
         *)
@@ -166,5 +175,62 @@ if [[ "$EXIT_CODE" -ne 0 ]]; then
     exit 1
 else
     echo "  ALL CONTRACTS PASS — within size budget."
-    exit 0
 fi
+
+# ---------------------------------------------------------------------------
+# Verify WASM hashes
+# ---------------------------------------------------------------------------
+if [[ "$SKIP_HASH_VERIFY" = false ]]; then
+    echo "============================================================================"
+    echo "  WASM Hash Verification"
+    echo "============================================================================"
+    echo ""
+
+    if [[ ! -f "$HASH_SCRIPT" ]]; then
+        echo "  WARNING: Hash verification script not found at $HASH_SCRIPT" >&2
+        echo "  Skipping hash verification." >&2
+        echo ""
+    else
+        # Check if hash file exists for verification
+        HASH_FILE="${WORKSPACE_DIR}/scripts/wasm-hashes.json"
+        if [[ ! -f "$HASH_FILE" ]]; then
+            echo "  NOTE: No existing hash file found at $HASH_FILE" >&2
+            echo "  Generating hashes for the first time..." >&2
+            echo ""
+            if "$HASH_SCRIPT"; then
+                echo "  Hashes generated. Commit the hash file to enable future verification." >&2
+                echo ""
+            else
+                echo "  WARNING: Hash generation failed" >&2
+                echo "  Skipping hash verification." >&2
+                echo ""
+            fi
+        else
+            # Verify hashes against stored values
+            echo "  Verifying hashes against stored values..."
+            echo ""
+
+            if "$HASH_SCRIPT" --verify; then
+                echo "  ✅ All WASM hashes verified successfully."
+                echo ""
+            else
+                echo "  ❌ HASH VERIFICATION FAILED" >&2
+                echo "" >&2
+                echo "  This indicates a potential supply-chain attack or dependency change." >&2
+                echo "  Review the changes and update the stored hashes if expected:" >&2
+                echo "    $HASH_SCRIPT" >&2
+                echo "" >&2
+                exit 1
+            fi
+        fi
+    fi
+else
+    echo "  Skipping WASM hash verification (--skip-hash-verify flag provided)."
+    echo ""
+fi
+
+echo "============================================================================"
+echo "  BUILD COMPLETE"
+echo "============================================================================"
+echo ""
+exit 0

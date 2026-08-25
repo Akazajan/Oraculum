@@ -953,6 +953,48 @@ fn test_proposal_rejection() {
 }
 
 #[test]
+fn test_rejected_proposal_cleanup_from_pending_list() {
+    let env = Env::default();
+    let contract_id = env.register(crate::AccessControl, ());
+    let admin1 = Address::generate(&env);
+    let admin2 = Address::generate(&env);
+    let admin3 = Address::generate(&env);
+
+    env.as_contract(&contract_id, || {
+        let admins = Vec::from_array(&env, [admin1.clone(), admin2.clone(), admin3.clone()]);
+        AccessControlModule::initialize_multisig(&env, admins, 2, None).unwrap();
+
+        let user = Address::generate(&env);
+        let action = ProposalAction::SetRole(user.clone(), UserRole::Member);
+        let proposal_id =
+            AccessControlModule::create_proposal(&env, admin1.clone(), action).unwrap();
+
+        // Verify proposal is in pending list
+        let pending_list = AccessControlModule::get_pending_proposals(&env);
+        assert!(pending_list.contains(&proposal_id));
+        assert_eq!(pending_list.len(), 1);
+
+        let stats = AccessControlModule::get_proposal_stats(&env);
+        assert_eq!(stats.pending_count, 1);
+
+        // Reject proposal until threshold is reached
+        AccessControlModule::reject_proposal(&env, admin2.clone(), proposal_id).unwrap();
+        let result = AccessControlModule::reject_proposal(&env, admin3.clone(), proposal_id);
+        assert_eq!(result.unwrap_err(), AccessControlError::ProposalRejected);
+
+        // Verify proposal is removed from pending list after rejection
+        let pending_list = AccessControlModule::get_pending_proposals(&env);
+        assert!(!pending_list.contains(&proposal_id));
+        assert_eq!(pending_list.len(), 0);
+
+        // Verify stats are updated correctly
+        let stats = AccessControlModule::get_proposal_stats(&env);
+        assert_eq!(stats.pending_count, 0);
+        assert_eq!(stats.total_rejected, 1);
+    });
+}
+
+#[test]
 fn test_proposal_cancellation() {
     let env = Env::default();
     let contract_id = env.register(crate::AccessControl, ());
