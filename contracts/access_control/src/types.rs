@@ -162,6 +162,7 @@ pub enum ProposalType {
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
+
 pub enum ProposalAction {
     SetRole(Address, UserRole),
     UpdateConfig(AccessControlConfig),
@@ -170,15 +171,11 @@ pub enum ProposalAction {
     Pause,
     Unpause,
     TransferAdmin(Address),
-    /// Critical operation: Update multisig configuration
     UpdateMultisigConfig(MultiSigConfig),
-    /// Critical operation: Emergency pause with reason
     EmergencyPause(String),
-    /// Critical operation: Blacklist multiple users
+    ClearEmergencyMode,
     BatchBlacklist(Vec<Address>),
-    /// Time-locked operation: Schedule contract upgrade
     ScheduleUpgrade(Address, u64),
-    /// Emergency operation: Force admin transfer
     EmergencyAdminTransfer(Address),
 }
 
