@@ -7,7 +7,7 @@ use super::*;
 use crate::membership_token::{DataKey, MembershipToken};
 use crate::types::MembershipStatus;
 use crate::AttendanceAction;
-use soroban_sdk::map;
+use soroban_sdk::{map, symbol_short};
 use soroban_sdk::{
     testutils::{Address as _, BytesN as BytesNTestUtils, Events, Ledger as LedgerTestUtils},
     Address, BytesN, Env, String,
@@ -3891,4 +3891,107 @@ fn test_transfer_with_royalty_events() {
     // Verify token ownership changed
     let token = client.get_token(&token_id);
     assert_eq!(token.user, new_user);
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Regression tests: manage_hub `issue_token` (protocol-safety)
+//
+// These guard the CI test gate for the contract's core minting path and cover
+// both the successful and invalid branches:
+//   - authorization  : an admin must be set and authorize the mint
+//   - ledger-time    : the expiry date must be strictly in the future
+//   - storage        : a token id is persisted and cannot be re-issued
+//   - emitted events : a `token_iss` event is published on success
+// ─────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn regression_issue_token_successful_path() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(Contract, ());
+    let client = ContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let user = Address::generate(&env);
+    let token_id = BytesN::<32>::random(&env);
+
+    client.set_admin(&admin);
+
+    let now = env.ledger().timestamp();
+    let expiry_date = now + 30 * 24 * 60 * 60; // ~30 days in the future
+
+    // Successful, authorized mint with a future expiry.
+    client.issue_token(&token_id, &user, &expiry_date);
+
+    // Storage/ABI: the token is persisted with the expected fields.
+    let token = client.get_token(&token_id).unwrap();
+    assert_eq!(token.user, user);
+    assert_eq!(token.status, MembershipStatus::Active);
+    assert_eq!(token.expiry_date, expiry_date);
+    assert_eq!(token.issue_date, now);
+
+    // Emitted events: a `token_iss` event must be published on success.
+    let issued = env.events().all().iter().any(|(_c, topics, _d)| {
+        topics.first() == Some(symbol_short!("token_iss").into())
+    });
+    assert!(issued, "token_iss event should be emitted on successful issuance");
+}
+
+#[test]
+#[should_panic(expected = "HostError: Error(Contract, #6)")]
+fn regression_issue_token_invalid_past_expiry() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(Contract, ());
+    let client = ContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let user = Address::generate(&env);
+    let token_id = BytesN::<32>::random(&env);
+
+    client.set_admin(&admin);
+
+    // Ledger-time check: an expiry date in the past must be rejected.
+    let expiry_date = env.ledger().timestamp() - 1;
+    client.issue_token(&token_id, &user, &expiry_date);
+}
+
+#[test]
+#[should_panic(expected = "HostError: Error(Contract, #1)")]
+fn regression_issue_token_admin_not_set() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(Contract, ());
+    let client = ContractClient::new(&env, &contract_id);
+
+    let user = Address::generate(&env);
+    let token_id = BytesN::<32>::random(&env);
+
+    // Authorization check: minting before an admin is configured must fail.
+    let expiry_date = env.ledger().timestamp() + 30 * 24 * 60 * 60;
+    client.issue_token(&token_id, &user, &expiry_date);
+}
+
+#[test]
+#[should_panic(expected = "HostError: Error(Contract, #2)")]
+fn regression_issue_token_already_issued() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(Contract, ());
+    let client = ContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let user = Address::generate(&env);
+    let token_id = BytesN::<32>::random(&env);
+
+    client.set_admin(&admin);
+
+    let expiry_date = env.ledger().timestamp() + 30 * 24 * 60 * 60;
+    // Storage/idempotency check: a duplicate mint of the same id must fail.
+    client.issue_token(&token_id, &user, &expiry_date);
+    client.issue_token(&token_id, &user, &expiry_date);
 }
