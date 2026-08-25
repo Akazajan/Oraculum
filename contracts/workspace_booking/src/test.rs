@@ -291,6 +291,136 @@ fn test_cancel_booking_refunds_member() {
 }
 
 #[test]
+fn test_cancel_booking_during_booking_partial_refund() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = setup_contract(&env);
+    let client = WorkspaceBookingContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let member = Address::generate(&env);
+    let token_address = setup_token(&env, &admin, &member, 10_000i128);
+
+    client.initialize(&admin, &token_address);
+    client.register_workspace(
+        &admin,
+        &String::from_str(&env, "ws-001"),
+        &String::from_str(&env, "Hot Desk"),
+        &WorkspaceType::HotDesk,
+        &1u32,
+        &2_000u128,
+    );
+
+    let now = env.ledger().timestamp();
+    let start = now + 60;
+    let end = start + 3_600; // 1 hour → cost 2000
+
+    client.book_workspace(
+        &member,
+        &String::from_str(&env, "booking-001"),
+        &String::from_str(&env, "ws-001"),
+        &start,
+        &end,
+    );
+
+    let balance_after_booking = TokenClient::new(&env, &token_address).balance(&member);
+    assert_eq!(balance_after_booking, 8_000i128);
+
+    // Advance time to the middle of the booking window.
+    advance_time(&env, 60 + 1_800); // now == start + 1800
+
+    client.cancel_booking(&member, &String::from_str(&env, "booking-001"));
+
+    // refund = 2000 * (end - now) / (end - start) = 2000 * 1800 / 3600 = 1000
+    let balance_after_cancel = TokenClient::new(&env, &token_address).balance(&member);
+    assert_eq!(balance_after_cancel, 9_000i128); // 8000 + 1000
+
+    let booking = client.get_booking(&String::from_str(&env, "booking-001"));
+    assert_eq!(booking.status, BookingStatus::Cancelled);
+}
+
+#[test]
+fn test_cancel_booking_after_end_no_refund() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = setup_contract(&env);
+    let client = WorkspaceBookingContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let member = Address::generate(&env);
+    let token_address = setup_token(&env, &admin, &member, 10_000i128);
+
+    client.initialize(&admin, &token_address);
+    client.register_workspace(
+        &admin,
+        &String::from_str(&env, "ws-001"),
+        &String::from_str(&env, "Hot Desk"),
+        &WorkspaceType::HotDesk,
+        &1u32,
+        &2_000u128,
+    );
+
+    let now = env.ledger().timestamp();
+    let start = now + 60;
+    let end = start + 3_600;
+
+    client.book_workspace(
+        &member,
+        &String::from_str(&env, "booking-001"),
+        &String::from_str(&env, "ws-001"),
+        &start,
+        &end,
+    );
+
+    let balance_after_booking = TokenClient::new(&env, &token_address).balance(&member);
+    assert_eq!(balance_after_booking, 8_000i128);
+
+    // Advance time past the booking end.
+    advance_time(&env, 60 + 3_600 + 10); // now > end
+
+    client.cancel_booking(&member, &String::from_str(&env, "booking-001"));
+
+    // No refund — balance unchanged.
+    let balance_after_cancel = TokenClient::new(&env, &token_address).balance(&member);
+    assert_eq!(balance_after_cancel, 8_000i128);
+
+    let booking = client.get_booking(&String::from_str(&env, "booking-001"));
+    assert_eq!(booking.status, BookingStatus::Cancelled);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #5)")]
+fn test_book_workspace_rejects_overlong_ids() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = setup_contract(&env);
+    let client = WorkspaceBookingContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let member = Address::generate(&env);
+    let token_address = setup_token(&env, &admin, &member, 50_000i128);
+
+    client.initialize(&admin, &token_address);
+
+    let now = env.ledger().timestamp();
+    let start = now + 60;
+    let end = start + 3_600;
+
+    // booking_id far exceeds MAX_ID_LEN (64) → StringTooLong (5)
+    let long_id = String::from_str(&env, "b_very_long_booking_id_exceeding_the_max_allowed_length_of_sixty_four_characters");
+    client.book_workspace(
+        &member,
+        &long_id,
+        &String::from_str(&env, "ws-001"),
+        &start,
+        &end,
+    );
+}
+
+#[test]
 fn test_complete_booking_by_admin() {
     let env = Env::default();
     env.mock_all_auths();

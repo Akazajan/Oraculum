@@ -12,7 +12,8 @@ mod test;
 
 pub use errors::Error;
 pub use types::{
-    Booking, BookingStatus, UnavailabilityReason, Workspace, WorkspaceAvailability, WorkspaceType,
+    Booking, BookingStatus, MAX_ID_LEN, UnavailabilityReason, Workspace, WorkspaceAvailability,
+    WorkspaceType,
 };
 
 use soroban_sdk::{
@@ -260,6 +261,13 @@ impl WorkspaceBookingContract {
     ) -> Result<(), Error> {
         member.require_auth();
 
+        if booking_id.len() > MAX_ID_LEN {
+            return Err(Error::StringTooLong);
+        }
+        if workspace_id.len() > MAX_ID_LEN {
+            return Err(Error::StringTooLong);
+        }
+
         if env
             .storage()
             .persistent()
@@ -348,7 +356,12 @@ impl WorkspaceBookingContract {
         Ok(())
     }
 
-    /// Cancel an active booking and refund the full amount to the member.
+    /// Cancel an active booking and refund the member.
+    ///
+    /// The refund amount depends on the cancellation timing:
+    /// - **Before the booking starts**: full refund.
+    /// - **During the booking**: refund proportional to the unused time.
+    /// - **After the booking ends**: no refund.
     ///
     /// Only the booking member or the admin may cancel.
     pub fn cancel_booking(env: Env, caller: Address, booking_id: String) -> Result<(), Error> {
@@ -368,23 +381,39 @@ impl WorkspaceBookingContract {
             return Err(Error::BookingNotActive);
         }
 
-        // Refund payment from contract → member
-        let payment_token = Self::get_payment_token(&env)?;
-        token::Client::new(&env, &payment_token).transfer(
-            &env.current_contract_address(),
-            &booking.member,
-            &(booking.amount_paid as i128),
-        );
+        let now = env.ledger().timestamp();
+        let duration = booking.end_time - booking.start_time;
+
+        let refund: u128 = if now >= booking.end_time {
+            // Booking period has fully elapsed — no refund.
+            0
+        } else if now >= booking.start_time {
+            // Cancelled mid-booking: refund only the unused portion.
+            let remaining = (booking.end_time - now) as u128;
+            booking.amount_paid * remaining / duration as u128
+        } else {
+            // Cancelled before the booking starts — full refund.
+            booking.amount_paid
+        };
+
+        if refund > 0 {
+            let payment_token = Self::get_payment_token(&env)?;
+            token::Client::new(&env, &payment_token).transfer(
+                &env.current_contract_address(),
+                &booking.member,
+                &(refund as i128),
+            );
+        }
 
         booking.status = BookingStatus::Cancelled;
-        booking.cancelled_at = Some(env.ledger().timestamp());
+        booking.cancelled_at = Some(now);
         env.storage()
             .persistent()
             .set(&DataKey::Booking(booking_id.clone()), &booking);
 
         env.events().publish(
             (symbol_short!("cancel"), booking_id),
-            (caller, booking.amount_paid),
+            (caller, refund),
         );
         Ok(())
     }
