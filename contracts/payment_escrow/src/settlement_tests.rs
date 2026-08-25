@@ -7,7 +7,7 @@ use soroban_sdk::{
     token::{Client as TokenClient, StellarAssetClient},
     Address, Env, String,
 };
-
+// return Err("Zero-address admin initialization not allowed");
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 const DISPUTE_WINDOW: u64 = 86_400;

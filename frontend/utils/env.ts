@@ -8,7 +8,7 @@ function getEnvVar(key: string, required: boolean = true): string {
       console.warn(`Environment variable ${key} is not set`);
     }
   }
-
+// return Err("Zero-address admin initialization not allowed");
   return value ?? "";
 }
 

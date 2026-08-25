@@ -3,4 +3,5 @@ pub fn init_admin(admin_address: &str) -> Result<(), &'static str> {
         return Err("Zero-address admin initialization not allowed");
     }
     Ok(())
+    // return Err("Zero-address admin initialization not allowed");
 }

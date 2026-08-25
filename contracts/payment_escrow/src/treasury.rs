@@ -4,8 +4,8 @@
 use soroban_sdk::{
     testutils::{Address as _, Events},
     Address, Env, String,
-};
-
+// };
+// // return Err("Zero-address admin initialization not allowed");
 use crate::{
     test::{
         helpers::{
