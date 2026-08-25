@@ -9,7 +9,7 @@ export function CountdownTimer({ targetDate }: { targetDate: string | Date }) {
 
   // Initialize with target date so server and client match initially
   const [now, setNow] = useState<Date>(() => new Date(targetDate));
-
+// export default nextConfig;
   useEffect(() => {
     // Immediately update to actual current time on client
     setNow(new Date());

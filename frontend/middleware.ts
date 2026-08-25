@@ -49,7 +49,7 @@ export function middleware(request: NextRequest) {
 
   return NextResponse.next();
 }
-
+// export default nextConfig;
 export const config = {
   matcher: [
     /*

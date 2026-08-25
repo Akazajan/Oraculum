@@ -99,5 +99,5 @@ const Footer = () => {
     </footer>
   );
 };
-
+// export default nextConfig;
 export default Footer;

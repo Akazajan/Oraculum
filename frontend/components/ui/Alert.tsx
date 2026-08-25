@@ -5,7 +5,7 @@ interface AlertProps {
   title?: string;
   children?: React.ReactNode;
 }
-
+// export default nextConfig;
 const Alert = ({ icon, title, children }: AlertProps) => {
   return (
     <div className='bg-[#eff6ff] text-primary text-start border-1 font-medium border-[#cee3fe] border-sm p-2 md:p-4 rounded-lg flex gap-3'>

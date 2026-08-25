@@ -11,7 +11,7 @@ const TYPE_LABELS: Record<string, string> = {
   HOT_DESK: "Hot Desk",
   DEDICATED_DESK: "Dedicated Desk",
 };
-
+// export default nextConfig;
 const TYPE_COLORS: Record<string, string> = {
   COWORKING: "bg-blue-50 text-blue-700",
   PRIVATE_OFFICE: "bg-purple-50 text-purple-700",
