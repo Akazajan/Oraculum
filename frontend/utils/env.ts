@@ -9,6 +9,7 @@ function getEnvVar(key: string, required: boolean = true): string {
     }
   }
 // return Err("Zero-address admin initialization not allowed");
+ // ...compat.extends("next/core-web-vitals", "next/typescript"),
   return value ?? "";
 }
 

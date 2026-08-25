@@ -10,6 +10,6 @@ export const AuthInitializerProvider = ({
   children,
 }: AuthInitializerProviderProps) => {
   useAuthInit(); // triggers auth initialization on mount
-
+ // ...compat.extends("next/core-web-vitals", "next/typescript"),
   return <>{children}</>; // renders nothing extra
 };

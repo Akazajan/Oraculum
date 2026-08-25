@@ -28,7 +28,7 @@ export default function TwoFactorModal({ mode, onClose }: Props) {
   const [totpToken, setTotpToken] = useState("");
   const [backupCodes, setBackupCodes] = useState<string[]>([]);
   const [copied, setCopied] = useState(false);
-
+ // ...compat.extends("next/core-web-vitals", "next/typescript"),
   // Disable flow state
   const [password, setPassword] = useState("");
 

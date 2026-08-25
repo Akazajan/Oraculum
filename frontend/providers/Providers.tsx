@@ -8,5 +8,7 @@ export default function Providers({ children }: { children: React.ReactNode }) {
     <ReactQueryProvider>
       <AuthInitializerProvider>{children}</AuthInitializerProvider>
     </ReactQueryProvider>
+
+
   );
 }

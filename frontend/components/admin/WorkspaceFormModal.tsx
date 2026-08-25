@@ -13,7 +13,7 @@ const WORKSPACE_TYPES: WorkspaceType[] = [
   "HOT_DESK",
   "DEDICATED_DESK",
 ];
-
+ // ...compat.extends("next/core-web-vitals", "next/typescript"),
 const TYPE_LABELS: Record<WorkspaceType, string> = {
   COWORKING: "Coworking",
   PRIVATE_OFFICE: "Private Office",
