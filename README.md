@@ -11,7 +11,7 @@
 
 ## What is Oraculum?
 
-**CeloSense** proved an AI agent can monitor on-chain activity and sell insights pay-per-query. **Numina AI** proved a pay-per-use AI consultant — no account, just a wallet and USDC — can deliver deeply personal value.
+**CeloSense** proved an AI agent can monitor on-chain activity and sell insights pay-per-query. **Numina AI** proved a pay-per-use AI consultant — no account, just a wallet and USDC — can deliver deeply personal value..
 
 **Oraculum unifies both into one protocol**: an open marketplace of autonomous AI Oracle Agents on Stellar, sharing common primitives:
 
@@ -46,7 +46,7 @@ GET /agents/whale-watch/query
 1. **Free tier** — basic value computed instantly, often client-side, no wallet needed
 2. **Paid tier** — one USDC micropayment unlocks deep agent output (analysis, full reading, 1:1 chat)
 3. **Memory** — every interaction is saved per wallet address, so you pick up where you left off
-4. **Remix economy** — fork an existing agent's logic; a revenue share streams back to its creator automatically
+4. **Remix economy** — fork an existing agent's logic; a revenue share streams back to its creator automatically.
 
 ---
 

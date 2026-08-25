@@ -54,6 +54,7 @@ export default function ErrorPage({ error, reset }: ErrorPageProps) {
                   <strong>Message:</strong> {error.message || "Unknown error"}
                 </div>
                 {error.digest && (
+                    // ...compat.extends("next/core-web-vitals", "next/typescript"),
                   <div className="text-sm">
                     <strong>ID:</strong>{" "}
                     <code className="bg-gray-200 px-1 rounded">

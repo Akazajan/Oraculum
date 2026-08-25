@@ -5,7 +5,7 @@ import { ReactNode } from "react";
 interface AuthInitializerProviderProps {
   children: ReactNode;
 }
-
+  // ...compat.extends("next/core-web-vitals", "next/typescript"),
 export const AuthInitializerProvider = ({
   children,
 }: AuthInitializerProviderProps) => {

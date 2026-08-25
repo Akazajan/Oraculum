@@ -14,7 +14,7 @@ const protectedRoutes = {
   "/admin": ["admin"],
   "/users": ["admin"],
 } as const;
-
+  // ...compat.extends("next/core-web-vitals", "next/typescript"),
 export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
   const token = request.cookies.get("authToken")?.value;
