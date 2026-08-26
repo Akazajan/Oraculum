@@ -447,6 +447,78 @@ impl WorkspaceBookingContract {
         Ok(())
     }
 
+    // ── ADDED BY FIX #267: NoShow and Expired status functions ──────────────
+
+    /// Mark an active booking as NoShow (admin only).
+    ///
+    /// Use this when the member fails to appear for their reservation.
+    /// The booking period must have started (start_time <= now).
+    pub fn mark_no_show(env: Env, caller: Address, booking_id: String) -> Result<(), Error> {
+        Self::require_admin(&env, &caller)?;
+
+        let mut booking: Booking = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Booking(booking_id.clone()))
+            .ok_or(Error::BookingNotFound)?;
+
+        if booking.status != BookingStatus::Active {
+            return Err(Error::BookingNotActive);
+        }
+
+        let now = env.ledger().timestamp();
+        if now < booking.start_time {
+            return Err(Error::BookingConflict); // Too early to mark no-show
+        }
+
+        booking.status = BookingStatus::NoShow;
+        booking.cancelled_at = Some(now);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Booking(booking_id.clone()), &booking);
+
+        env.events().publish(
+            (symbol_short!("noshow"), booking_id),
+            (booking.workspace_id, booking.member),
+        );
+        Ok(())
+    }
+
+    /// Expire an active booking whose end_time has passed (admin only).
+    ///
+    /// Use this for bookings that were neither completed nor cancelled
+    /// before their window closed.
+    pub fn expire_booking(env: Env, caller: Address, booking_id: String) -> Result<(), Error> {
+        Self::require_admin(&env, &caller)?;
+
+        let mut booking: Booking = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Booking(booking_id.clone()))
+            .ok_or(Error::BookingNotFound)?;
+
+        if booking.status != BookingStatus::Active {
+            return Err(Error::BookingNotActive);
+        }
+
+        let now = env.ledger().timestamp();
+        if now < booking.end_time {
+            return Err(Error::BookingConflict); // Booking hasn't ended yet
+        }
+
+        booking.status = BookingStatus::Expired;
+        booking.cancelled_at = Some(now);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Booking(booking_id.clone()), &booking);
+
+        env.events().publish(
+            (symbol_short!("expired"), booking_id),
+            (booking.workspace_id, booking.member),
+        );
+        Ok(())
+    }
+
     // ── Queries ───────────────────────────────────────────────────────────────
 
     /// Fetch a workspace record by ID.

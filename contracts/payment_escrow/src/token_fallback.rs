@@ -44,6 +44,11 @@ impl TokenFallbackHandler {
         to: &Address,
         amount: &i128,
     ) -> Result<(), UnsupportedTokenError> {
+        // ADDED BY FIX #266: Reject zero-amount transfers
+        if *amount <= 0 {
+            return Err(UnsupportedTokenError::TransferFailed);
+        }
+
         if !Self::is_token_supported(env, token) {
             return Err(UnsupportedTokenError::TokenNotSupported);
         }
@@ -158,8 +163,9 @@ mod tests {
         let to = Address::generate(&env);
         let token = setup_token(&env, &admin, &from, 1_000);
 
+        // FIX #266: Zero-amount transfers now fail
         let result =
             TokenFallbackHandler::try_transfer_with_fallback(&env, &token, &from, &to, &0);
-        assert_eq!(result, Ok(()));
+        assert_eq!(result, Err(UnsupportedTokenError::TransferFailed));
     }
 }

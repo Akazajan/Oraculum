@@ -11,6 +11,12 @@ use soroban_sdk::{Address, BytesN, Env, String, Vec};
 
 pub struct MigrationModule;
 
+// ADDED BY FIX #265: Configurable TTL for snapshots
+// At ~5 seconds per ledger, 100,000 ledgers ≈ ~5.8 days
+// 500,000 ledgers ≈ ~29 days — sufficient for rollback after upgrades
+const SNAPSHOT_MIN_TTL: u32 = 100_000;
+const SNAPSHOT_MAX_TTL: u32 = 500_000;
+
 impl MigrationModule {
     /// Check if a token exists in storage.
     pub fn token_exists(env: &Env, id: &BytesN<32>) -> bool {
@@ -32,7 +38,7 @@ impl MigrationModule {
             .set(&DataKey::Token(token_id.clone()), token);
         env.storage()
             .persistent()
-            .extend_ttl(&DataKey::Token(token_id.clone()), 100, 1000);
+            .extend_ttl(&DataKey::Token(token_id.clone()), SNAPSHOT_MIN_TTL, SNAPSHOT_MAX_TTL);
     }
 
     /// Capture a snapshot of the token's current state for rollback purposes.
