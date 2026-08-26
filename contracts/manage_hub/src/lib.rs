@@ -83,9 +83,6 @@ mod types;
 mod upgrade;
 mod upgrade_errors;
 mod validation;
-pub mod cross_contract_safety;
-pub mod timelock;
-pub mod audit_trail;
 #[cfg(test)]
 mod edge_case_tests;
 
@@ -97,13 +94,12 @@ use common_types::{
 };
 use errors::Error;
 use fractionalization::FractionalizationModule;
-use membership_token::{MembershipToken, MembershipTokenContract};
+use membership_token::{DataKey as MembershipDataKey, MembershipToken, MembershipTokenContract};
 use staking::StakingModule;
 use subscription::SubscriptionContract;
 use types::{
     AttendanceAction, AttendanceSummary, BatchItemResult, BatchMintParams, BatchTransferParams,
     BatchUpdateParams, BatchUpgradeResult, BillingCycle, CreatePromotionParams, CreateTierParams,
-    DividendDistribution, EmergencyPauseState, FractionHolder, MembershipStatus, PauseConfig,
     PauseHistoryEntry, PauseStats, StakeInfo, StakingConfig, StakingTier, Subscription,
     SubscriptionTier, TierAnalytics, TierFeature, TierPromotion, TokenAllowance, UpdateTierParams,
     UpgradeConfig, UpgradeRecord, UserSubscriptionInfo,
@@ -279,6 +275,16 @@ impl Contract {
     }
 
     pub fn set_admin(env: Env, admin: Address) -> Result<(), Error> {
+        if let Some(current_admin) = env
+            .storage()
+            .instance()
+            .get::<MembershipDataKey, Address>(&MembershipDataKey::Admin)
+        {
+            current_admin.require_auth();
+            if current_admin != admin {
+                return Err(Error::Unauthorized);
+            }
+        }
         MembershipTokenContract::set_admin(env, admin)?;
         Ok(())
     }
@@ -1212,7 +1218,7 @@ impl Contract {
     /// * `SubscriptionNotActive` - Staking is disabled
     /// * `TierNotFound` - Tier ID does not exist
     /// * `InvalidPaymentAmount` - Amount below tier minimum
-    /// * `Unauthorized` - Caller already has a stake in a different tier
+    /// * `TierMismatch` - Caller already has a stake in a different tier
     pub fn stake_tokens(
         env: Env,
         staker: Address,
@@ -1249,6 +1255,15 @@ impl Contract {
     /// * `TokenNotFound` - No active stake found
     pub fn emergency_unstake(env: Env, staker: Address) -> Result<(), Error> {
         StakingModule::emergency_unstake(env, staker)
+    }
+
+    /// Withdraw accumulated emergency-unstake penalties to the admin.
+    pub fn withdraw_penalty_pool(
+        env: Env,
+        admin: Address,
+        amount: i128,
+    ) -> Result<(), Error> {
+        StakingModule::withdraw_penalty_pool(env, admin, amount)
     }
 
     /// Get the active stake information for a staker.

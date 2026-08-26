@@ -272,7 +272,7 @@ impl StakingModule {
 
             // Require the existing stake to use the same tier.
             if existing.tier_id != tier_id {
-                return Err(Error::Unauthorized);
+                return Err(Error::TierMismatch);
             }
 
             // Pull tokens from user.
@@ -431,6 +431,39 @@ impl StakingModule {
         env.events().publish(
             (String::from_str(&env, "EmergencyUnstaked"), staker.clone()),
             (amount_returned, penalty),
+        );
+
+        Ok(())
+    }
+
+    /// Withdraw accumulated emergency-unstake penalties to the admin.
+    ///
+    /// The pool is the staking-token balance held by this contract.
+    pub fn withdraw_penalty_pool(env: Env, admin: Address, amount: i128) -> Result<(), Error> {
+        let stored_admin: Address = env
+            .storage()
+            .instance()
+            .get(&MembershipDataKey::Admin)
+            .ok_or(Error::AdminNotSet)?;
+        stored_admin.require_auth();
+        if stored_admin != admin {
+            return Err(Error::Unauthorized);
+        }
+        if amount <= 0 {
+            return Err(Error::InvalidPaymentAmount);
+        }
+
+        let config = Self::get_config(&env)?;
+        let token_client = token::Client::new(&env, &config.staking_token);
+        if token_client.balance(&env.current_contract_address()) < amount {
+            return Err(Error::InsufficientBalance);
+        }
+
+        token_client.transfer(&env.current_contract_address(), &admin, &amount);
+
+        env.events().publish(
+            (String::from_str(&env, "PenaltyPoolWithdrawn"), admin),
+            amount,
         );
 
         Ok(())

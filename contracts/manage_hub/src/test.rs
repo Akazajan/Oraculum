@@ -4039,3 +4039,89 @@ fn regression_issue_token_already_issued() {
     client.issue_token(&token_id, &user, &expiry_date);
     client.issue_token(&token_id, &user, &expiry_date);
 }
+
+#[test]
+fn regression_stake_different_tier_returns_tier_mismatch() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (client, admin, sac) = setup_staking_env(&env);
+    let silver = crate::types::StakingTier {
+        id: String::from_str(&env, "silver"),
+        name: String::from_str(&env, "Silver"),
+        min_stake_amount: 1_000,
+        lock_duration: 86_400,
+        reward_multiplier_bps: 12_000,
+        base_rate_bps: 600,
+        is_active: true,
+        deactivated_at: None,
+        reactivated_at: None,
+    };
+    client.create_staking_tier(&admin, &silver);
+
+    let staker = Address::generate(&env);
+    sac.mint(&staker, &10_000);
+    client.stake_tokens(&staker, &String::from_str(&env, "bronze"), &5_000);
+
+    let result = client.try_stake_tokens(&staker, &silver.id, &1_000);
+    assert_eq!(result, Err(Ok(Error::TierMismatch)));
+    assert_eq!(client.get_stake_info(&staker).unwrap().amount, 5_000);
+}
+
+#[test]
+fn regression_set_admin_rejects_unauthorized_replacement() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(Contract, ());
+    let client = ContractClient::new(&env, &contract_id);
+    let current_admin = Address::generate(&env);
+    let replacement = Address::generate(&env);
+
+    client.set_admin(&current_admin);
+    let result = client.try_set_admin(&replacement);
+
+    assert_eq!(result, Err(Ok(Error::Unauthorized)));
+    assert_eq!(
+        env.as_contract(&contract_id, || {
+            env.storage()
+                .instance()
+                .get::<crate::membership_token::DataKey, Address>(
+                    &crate::membership_token::DataKey::Admin,
+                )
+        }),
+        Some(current_admin)
+    );
+}
+
+#[test]
+fn regression_withdraw_penalty_pool_rejects_unauthorized_and_withdraws_penalty() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (client, admin, sac) = setup_staking_env(&env);
+    let staker = Address::generate(&env);
+    sac.mint(&staker, &5_000);
+    client.stake_tokens(&staker, &String::from_str(&env, "bronze"), &5_000);
+    client.emergency_unstake(&staker);
+
+    let stranger = Address::generate(&env);
+    let unauthorized = client.try_withdraw_penalty_pool(&stranger, &500);
+    assert_eq!(unauthorized, Err(Ok(Error::Unauthorized)));
+
+    let before_events = env.events().all().len();
+    client.withdraw_penalty_pool(&admin, &500);
+    assert_eq!(sac.balance(&admin), 500);
+    assert_eq!(sac.balance(&env.current_contract_address()), 0);
+    assert!(env.events().all().len() > before_events);
+}
+
+#[test]
+fn regression_withdraw_penalty_pool_rejects_excess_amount() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (client, admin, _sac) = setup_staking_env(&env);
+    let result = client.try_withdraw_penalty_pool(&admin, &1);
+    assert_eq!(result, Err(Ok(Error::InsufficientBalance)));
+}
