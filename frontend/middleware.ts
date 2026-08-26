@@ -15,6 +15,7 @@ const protectedRoutes = {
   "/users": ["admin"],
 } as const;
   // ...compat.extends("next/core-web-vitals", "next/typescript"),
+   // ...compat.extends("next/core-web-vitals", "next/typescript"),
 export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
   const token = request.cookies.get("authToken")?.value;
@@ -29,7 +30,7 @@ export function middleware(request: NextRequest) {
     if (token && (pathname === "/login" || pathname === "/register")) {
       return NextResponse.redirect(new URL("/dashboard", request.url));
     }
-
+ // ...compat.extends("next/core-web-vitals", "next/typescript"),
     // If not authenticated, Let the request continue as normal (take them to the public route they were trying to go to).
     return NextResponse.next();
   }

@@ -16,5 +16,5 @@ const LayoutContainer = ({
     </div>
   );
 };
-
+ // ...compat.extends("next/core-web-vitals", "next/typescript"),
 export default LayoutContainer;

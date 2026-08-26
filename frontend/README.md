@@ -7,7 +7,7 @@
 
 Covers `apps/web`, `apps/mini-app`, `apps/cli`. See [Root README](../../README.md) · [Backend](../../packages/gateway/README.md) · [Contracts](../../packages/contracts/README.md).
   // ...compat.extends("next/core-web-vitals", "next/typescript"),
----
+---,
 
 ## What Lives Here
 

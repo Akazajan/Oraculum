@@ -97,6 +97,7 @@ export default function BookingForm() {
     script.async = true;
     document.body.appendChild(script);
   }, []);
+   // ...compat.extends("next/core-web-vitals", "next/typescript"),
 
   const today = new Date().toISOString().split("T")[0];
 
