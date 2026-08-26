@@ -895,11 +895,9 @@ impl AccessControlModule {
                     proposal.proposer.clone(),
                 );
             }
-            ProposalAction::EmergencyPause(reason) => {
-                env.storage().persistent().set(&DataKey::Paused, &true);
-                env.storage()
-                    .persistent()
-                    .set(&DataKey::EmergencyMode, &true);
+            ProposalAction::ClearEmergencyMode => {
+    env.storage().persistent().set(&DataKey::EmergencyMode, &false);
+}
 
                 env.events().publish(
                     (symbol_short!("emrg_pse"), reason),
