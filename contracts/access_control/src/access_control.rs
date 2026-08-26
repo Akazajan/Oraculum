@@ -1104,28 +1104,8 @@ impl AccessControlModule {
         let rejection_threshold = (multisig_config.admins.len() / 3).max(1);
 
         if proposal.rejections.len() > rejection_threshold {
-            // Proposal rejected - clean it up
-            Self::remove_from_pending_list(env, proposal_id);
-            env.storage()
-                .persistent()
-                .remove(&DataKey::Proposal(proposal_id));
-
-            let mut stats: ProposalStats = env
-                .storage()
-                .persistent()
-                .get(&DataKey::ProposalStats)
-                .unwrap_or(ProposalStats {
-                    total_created: 0,
-                    total_executed: 0,
-                    total_rejected: 0,
-                    total_expired: 0,
-                    pending_count: 0,
-                });
-            stats.total_rejected += 1;
-            stats.pending_count = stats.pending_count.saturating_sub(1);
-            env.storage()
-                .persistent()
-                .set(&DataKey::ProposalStats, &stats);
+            // Proposal rejected - clean it up using the dedicated helper
+            Self::cleanup_rejected_proposal(env, proposal_id)?;
 
             env.events()
                 .publish((symbol_short!("rejected"), proposal_id), rejecter.clone());
@@ -1271,6 +1251,35 @@ impl AccessControlModule {
 
         env.events()
             .publish((symbol_short!("expired"), proposal_id), ());
+
+        Ok(())
+    }
+
+    fn cleanup_rejected_proposal(env: &Env, proposal_id: u64) -> AccessControlResult<()> {
+        Self::remove_from_pending_list(env, proposal_id);
+        env.storage()
+            .persistent()
+            .remove(&DataKey::Proposal(proposal_id));
+
+        let mut stats: ProposalStats = env
+            .storage()
+            .persistent()
+            .get(&DataKey::ProposalStats)
+            .unwrap_or(ProposalStats {
+                total_created: 0,
+                total_executed: 0,
+                total_rejected: 0,
+                total_expired: 0,
+                pending_count: 0,
+            });
+        stats.total_rejected += 1;
+        stats.pending_count = stats.pending_count.saturating_sub(1);
+        env.storage()
+            .persistent()
+            .set(&DataKey::ProposalStats, &stats);
+
+        env.events()
+            .publish((symbol_short!("rejected_cleanup"), proposal_id), ());
 
         Ok(())
     }

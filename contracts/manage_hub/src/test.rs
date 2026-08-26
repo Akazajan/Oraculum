@@ -540,6 +540,50 @@ fn test_cancel_subscription_success() {
 }
 
 #[test]
+fn test_cancel_subscription_emits_event() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(Contract, ());
+    let client = ContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let user = Address::generate(&env);
+    let payment_token = Address::generate(&env);
+    let subscription_id = String::from_str(&env, "sub_cancel_event_001");
+    let amount = 100_000i128;
+    let duration = 2_592_000u64;
+
+    // Setup and create subscription
+    client.set_usdc_contract(&admin, &payment_token);
+    client.create_subscription(&subscription_id, &user, &payment_token, &amount, &duration);
+
+    // Get initial event count
+    let initial_events = env.events().all().len();
+
+    // Cancel subscription
+    client.cancel_subscription(&subscription_id);
+
+    // Verify cancellation event was emitted
+    let events = env.events().all();
+    assert!(events.len() > initial_events, "Cancellation event should be emitted");
+
+    // Find the cancellation event
+    let cancellation_event = events.iter().find(|event| {
+        if let Some(topics) = event.topics {
+            if topics.len() >= 1 {
+                if let Some(topic) = topics.get(0) {
+                    return topic == &symbol_short!("sub_cancl").into_val(&env);
+                }
+            }
+        }
+        false
+    });
+
+    assert!(cancellation_event.is_some(), "Cancellation event with 'sub_cancl' topic should be emitted");
+}
+
+#[test]
 #[should_panic(expected = "HostError: Error(Contract, #10)")]
 fn test_cancel_subscription_not_found() {
     let env = Env::default();
