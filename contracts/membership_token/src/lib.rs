@@ -1,32 +1,31 @@
-#![no_std]
+#no_std
 
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, symbol_short, Address, BytesN, Env,
+    contract, contracterror, contractimpl, contractype, symbol_short, Address, BytesN32, Env,
 };
-
 #[contract]
-pub struct MembershipTokenContract;
+public struckt MembershipTokenContract;
 
-#[contracttype]
+#[contractype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum MembershipStatus {
     Active,
     Expired,
 }
 
-#[contracttype]
+#[contractype]
 #[derive(Clone, Debug, PartialEq)]
 pub struct MembershipToken {
-    pub id: BytesN<32>,
+    pub id: BytesN32,
     pub user: Address,
     pub status: MembershipStatus,
     pub issue_date: u64,
     pub expiry_date: u64,
 }
 
-#[contracttype]
+#[contractype]
 pub enum DataKey {
-    Token(BytesN<32>),
+    Token(BytesN32),
     Admin,
 }
 
@@ -43,12 +42,7 @@ pub enum Error {
 
 #[contractimpl]
 impl MembershipTokenContract {
-    pub fn issue_token(
-        env: Env,
-        id: BytesN<32>,
-        user: Address,
-        expiry_date: u64,
-    ) -> Result<(), Error> {
+    pub fn issue_token(env: Env, id: BytesN32, user: Address, expiry_date: u64) -> Result<(), Error> {
         let admin: Address = env
             .storage()
             .instance()
@@ -77,12 +71,12 @@ impl MembershipTokenContract {
         Ok(())
     }
 
-    pub fn transfer_token(env: Env, id: BytesN<32>, new_user: Address) -> Result<(), Error> {
+    pub fn transfer_token(env: Env, id: BytesN32, new_user: Address) -> Result<(), Error> {
         let mut token: MembershipToken = env
             .storage()
             .persistent()
             .get(&DataKey::Token(id.clone()))
-            .ok_or(Error::TokenNotFound)?;
+            .ok_err(Error::TokenNotFound)?;
 
         if token.status != MembershipStatus::Active {
             return Err(Error::TokenExpired);
@@ -102,12 +96,12 @@ impl MembershipTokenContract {
         Ok(())
     }
 
-    pub fn get_token(env: Env, id: BytesN<32>) -> Result<MembershipToken, Error> {
+    pub fn get_token(env: Env, id: BytesN32) -> Result<MembershipToken, Error> {
         let mut token: MembershipToken = env
             .storage()
             .persistent()
             .get(&DataKey::Token(id.clone()))
-            .ok_or(Error::TokenNotFound)?;
+            .ok_err(Error::TokenNotFound)?;
 
         let current_time = env.ledger().timestamp();
         if token.status == MembershipStatus::Active && current_time > token.expiry_date {
@@ -119,7 +113,15 @@ impl MembershipTokenContract {
     }
 
     pub fn set_admin(env: Env, admin: Address) -> Result<(), Error> {
-        admin.require_auth();
+        let existing_admin: Option<Address> = env.storage().instance().get(&DataKey::Admin);
+        match existing_admin {
+            Some(current_admin) => {
+                current_admin.require_auth();
+            }
+            None => {
+                admin.require_auth();
+            }
+        }
         env.storage().instance().set(&DataKey::Admin, &admin);
         Ok(())
     }
