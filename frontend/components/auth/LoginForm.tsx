@@ -6,14 +6,15 @@ import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Eye, EyeOff, Mail, Lock } from "lucide-react";
+import { loginSchema, type LoginSchema } from "@/lib/schemas/loginSchema";
 
-const loginSchema = z.object({
-  email: z.email("Enter a valid email address"),
-  password: z.string().min(6, "Password must be at least 6 characters"),
-  rememberMe: z.boolean(),
-});
+const loginFormSchema = loginSchema.and(
+  z.object({
+    rememberMe: z.boolean(),
+  }),
+);
 
-type LoginFormValues = z.infer<typeof loginSchema>;
+type LoginFormValues = LoginSchema & { rememberMe: boolean };
 
 interface LoginFormProps {
   onEmailLogin: (data: {
@@ -41,7 +42,7 @@ export default function LoginForm({ onEmailLogin, isLoading }: LoginFormProps) {
     handleSubmit,
     formState: { errors },
   } = useForm<LoginFormValues>({
-    resolver: zodResolver(loginSchema),
+    resolver: zodResolver(loginFormSchema),
     defaultValues,
     mode: "onSubmit",
   });
@@ -134,6 +135,7 @@ export default function LoginForm({ onEmailLogin, isLoading }: LoginFormProps) {
               <div className="flex items-center">
                 <input
                   type="checkbox"
+                  id="remember-me"
                   {...register("rememberMe")}
                   className="h-4 w-4 text-gray-900 focus:ring-gray-300 border-gray-300 rounded"
                 />
