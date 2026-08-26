@@ -1098,12 +1098,13 @@ impl AccessControlModule {
 
         proposal.rejections.push_back(rejecter.clone());
 
-        // Check if rejection threshold reached (e.g., if more than 1/3 reject, proposal fails)
+        // A proposal can be rejected once enough admins can block its approval threshold.
         let multisig_config =
             Self::get_multisig_config(env).ok_or(AccessControlError::MultisigNotEnabled)?;
-        let rejection_threshold = (multisig_config.admins.len() / 3).max(1);
+        let rejection_threshold =
+            multisig_config.admins.len() - proposal.required_signatures + 1;
 
-        if proposal.rejections.len() > rejection_threshold {
+        if proposal.rejections.len() >= rejection_threshold {
             // Proposal rejected - clean it up using the dedicated helper
             Self::cleanup_rejected_proposal(env, proposal_id)?;
 
