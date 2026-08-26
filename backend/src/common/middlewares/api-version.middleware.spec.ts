@@ -1,4 +1,10 @@
-import { ApiVersionMiddleware, CURRENT_API_VERSION, SUPPORTED_API_VERSIONS } from './api-version.middleware';
+import {
+  ApiVersionMiddleware,
+  CURRENT_API_VERSION,
+  DEPRECATED_API_VERSIONS,
+  SUNSET_DATE,
+  SUPPORTED_API_VERSIONS,
+} from './api-version.middleware';
 
 describe('ApiVersionMiddleware', () => {
   let middleware: ApiVersionMiddleware;
@@ -42,5 +48,31 @@ describe('ApiVersionMiddleware', () => {
     const headerNames = res.setHeader.mock.calls.map((c: any[]) => c[0]);
     expect(headerNames).not.toContain('Deprecation');
     expect(headerNames).not.toContain('Sunset');
+  });
+
+  it('sets deprecation headers for a deprecated version', () => {
+    const deprecatedVersion = '0';
+    DEPRECATED_API_VERSIONS.push(deprecatedVersion);
+    req.params.version = deprecatedVersion;
+
+    try {
+      middleware.use(req, res, nextFn);
+
+      expect(res.setHeader).toHaveBeenCalledWith('Deprecation', 'true');
+      expect(res.setHeader).toHaveBeenCalledWith(
+        'Sunset',
+        new Date(SUNSET_DATE).toUTCString(),
+      );
+      expect(res.setHeader).toHaveBeenCalledWith(
+        'X-API-Warn',
+        `Version ${deprecatedVersion} is deprecated. Migrate to v${CURRENT_API_VERSION} before ${SUNSET_DATE}.`,
+      );
+      expect(nextFn).toHaveBeenCalled();
+    } finally {
+      DEPRECATED_API_VERSIONS.splice(
+        DEPRECATED_API_VERSIONS.indexOf(deprecatedVersion),
+        1,
+      );
+    }
   });
 });
