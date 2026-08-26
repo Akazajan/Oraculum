@@ -101,8 +101,8 @@ use membership_token::{MembershipToken, MembershipTokenContract};
 use staking::StakingModule;
 use subscription::SubscriptionContract;
 use types::{
-    AttendanceAction, AttendanceSummary, BatchMintParams, BatchTransferParams, BatchUpdateParams,
-    BatchUpgradeResult, BillingCycle, CreatePromotionParams, CreateTierParams,
+    AttendanceAction, AttendanceSummary, BatchItemResult, BatchMintParams, BatchTransferParams,
+    BatchUpdateParams, BatchUpgradeResult, BillingCycle, CreatePromotionParams, CreateTierParams,
     DividendDistribution, EmergencyPauseState, FractionHolder, MembershipStatus, PauseConfig,
     PauseHistoryEntry, PauseStats, StakeInfo, StakingConfig, StakingTier, Subscription,
     SubscriptionTier, TierAnalytics, TierFeature, TierPromotion, TokenAllowance, UpdateTierParams,
@@ -120,17 +120,29 @@ impl Contract {
     }
 
     /// Mints multiple tokens in a single transaction.
-    pub fn batch_mint(env: Env, params: Vec<BatchMintParams>) -> Result<(), Error> {
+    /// Returns per-item outcomes so callers can identify which index failed.
+    pub fn batch_mint(
+        env: Env,
+        params: Vec<BatchMintParams>,
+    ) -> Result<Vec<BatchItemResult>, Error> {
         BatchModule::batch_mint(env, params)
     }
 
     /// Transfers multiple tokens in a single transaction.
-    pub fn batch_transfer(env: Env, params: Vec<BatchTransferParams>) -> Result<(), Error> {
+    /// Returns per-item outcomes so callers can identify which index failed.
+    pub fn batch_transfer(
+        env: Env,
+        params: Vec<BatchTransferParams>,
+    ) -> Result<Vec<BatchItemResult>, Error> {
         BatchModule::batch_transfer(env, params)
     }
 
     /// Updates metadata for multiple tokens in a single transaction.
-    pub fn batch_update(env: Env, params: Vec<BatchUpdateParams>) -> Result<(), Error> {
+    /// Returns per-item outcomes so callers can identify which index failed.
+    pub fn batch_update(
+        env: Env,
+        params: Vec<BatchUpdateParams>,
+    ) -> Result<Vec<BatchItemResult>, Error> {
         BatchModule::batch_update(env, params)
     }
 
@@ -704,6 +716,22 @@ impl Contract {
         attribute_value: MetadataValue,
     ) -> Vec<BytesN<32>> {
         MembershipTokenContract::query_tokens_by_attribute(env, attribute_key, attribute_value)
+    }
+
+    /// Paginated listing of membership tokens matching a metadata attribute.
+    /// Analogous to `get_staking_tiers_paginated` for large membership bases.
+    pub fn list_tokens(
+        env: Env,
+        attribute_key: String,
+        attribute_value: MetadataValue,
+        page: PageParams,
+    ) -> Vec<BytesN<32>> {
+        MembershipTokenContract::list_tokens_by_attribute(
+            env,
+            attribute_key,
+            attribute_value,
+            page,
+        )
     }
 
     // ============================================================================

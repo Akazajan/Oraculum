@@ -156,7 +156,7 @@ impl MembershipTokenContract {
     pub fn batch_issue_tokens(
         env: Env,
         params: Vec<crate::types::BatchMintParams>,
-    ) -> Result<(), Error> {
+    ) -> Result<Vec<crate::types::BatchItemResult>, Error> {
         PauseGuard::require_not_paused(&env)?;
 
         let admin: Address = env
@@ -166,11 +166,24 @@ impl MembershipTokenContract {
             .ok_or(Error::AdminNotSet)?;
         admin.require_auth();
 
+        let mut results: Vec<crate::types::BatchItemResult> = Vec::new(&env);
+        let mut index: u32 = 0;
         for p in params.iter() {
-            Self::internal_issue_token(&env, &admin, p.id, p.user, p.expiry_date)?;
+            let outcome = Self::internal_issue_token(&env, &admin, p.id.clone(), p.user, p.expiry_date);
+            let (success, error_code) = match outcome {
+                Ok(()) => (true, 0u32),
+                Err(e) => (false, u32::from(e)),
+            };
+            results.push_back(crate::types::BatchItemResult {
+                index,
+                token_id: p.id.clone(),
+                success,
+                error_code,
+            });
+            index = index.saturating_add(1);
         }
 
-        Ok(())
+        Ok(results)
     }
 
     pub fn transfer_token(env: Env, id: BytesN<32>, new_user: Address) -> Result<(), Error> {
@@ -253,14 +266,27 @@ impl MembershipTokenContract {
     pub fn batch_transfer_tokens(
         env: Env,
         params: Vec<crate::types::BatchTransferParams>,
-    ) -> Result<(), Error> {
+    ) -> Result<Vec<crate::types::BatchItemResult>, Error> {
         PauseGuard::require_not_paused(&env)?;
 
+        let mut results: Vec<crate::types::BatchItemResult> = Vec::new(&env);
+        let mut index: u32 = 0;
         for p in params.iter() {
-            Self::internal_transfer_token(&env, p.id, p.new_user)?;
+            let outcome = Self::internal_transfer_token(&env, p.id.clone(), p.new_user);
+            let (success, error_code) = match outcome {
+                Ok(()) => (true, 0u32),
+                Err(e) => (false, u32::from(e)),
+            };
+            results.push_back(crate::types::BatchItemResult {
+                index,
+                token_id: p.id.clone(),
+                success,
+                error_code,
+            });
+            index = index.saturating_add(1);
         }
 
-        Ok(())
+        Ok(results)
     }
 
     pub fn approve(
@@ -636,18 +662,37 @@ impl MembershipTokenContract {
     pub fn batch_set_token_metadata(
         env: Env,
         params: Vec<crate::types::BatchUpdateParams>,
-    ) -> Result<(), Error> {
+    ) -> Result<Vec<crate::types::BatchItemResult>, Error> {
         let admin: Address = env
             .storage()
             .instance()
             .get(&DataKey::Admin)
             .ok_or(Error::AdminNotSet)?;
 
+        let mut results: Vec<crate::types::BatchItemResult> = Vec::new(&env);
+        let mut index: u32 = 0;
         for p in params.iter() {
-            Self::internal_set_token_metadata(&env, &admin, p.id, p.description, p.attributes)?;
+            let outcome = Self::internal_set_token_metadata(
+                &env,
+                &admin,
+                p.id.clone(),
+                p.description,
+                p.attributes,
+            );
+            let (success, error_code) = match outcome {
+                Ok(()) => (true, 0u32),
+                Err(e) => (false, u32::from(e)),
+            };
+            results.push_back(crate::types::BatchItemResult {
+                index,
+                token_id: p.id.clone(),
+                success,
+                error_code,
+            });
+            index = index.saturating_add(1);
         }
 
-        Ok(())
+        Ok(results)
     }
 
     /// Gets metadata for a token.
@@ -894,6 +939,39 @@ impl MembershipTokenContract {
             .persistent()
             .get(&index_key)
             .unwrap_or_else(|| Vec::new(&env))
+    }
+
+    /// Paginated membership-token listing by metadata attribute.
+    ///
+    /// Analogous to `get_staking_tiers_paginated` / workspace listing helpers:
+    /// returns at most `page.limit` token ids starting at `page.offset` from the
+    /// attribute index, so large membership bases do not hit instruction limits.
+    ///
+    /// Invalid page params (limit == 0 or limit > MAX_PAGE_SIZE) yield an empty
+    /// vector rather than panicking, matching the staking pagination contract.
+    pub fn list_tokens_by_attribute(
+        env: Env,
+        attribute_key: String,
+        attribute_value: MetadataValue,
+        page: common_types::PageParams,
+    ) -> Vec<BytesN<32>> {
+        if common_types::validate_page_params(page.offset, page.limit).is_err() {
+            return Vec::new(&env);
+        }
+
+        let all: Vec<BytesN<32>> = Self::query_tokens_by_attribute(
+            env.clone(),
+            attribute_key,
+            attribute_value,
+        );
+        let total = all.len();
+        if page.offset >= total || page.limit == 0 {
+            return Vec::new(&env);
+        }
+        let remaining = total - page.offset;
+        let take = remaining.min(page.limit);
+        let end = page.offset + take;
+        all.slice(page.offset..end)
     }
 
     // ============================================================================

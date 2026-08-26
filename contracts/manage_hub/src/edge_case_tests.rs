@@ -9,7 +9,7 @@
 use super::*;
 use crate::membership_token::{DataKey as MembershipDataKey, MembershipTokenContract};
 use crate::types::MembershipStatus;
-use soroban_sdk::testutils::Address as _;
+use soroban_sdk::testutils::{Address as _, BytesN as _};
 use soroban_sdk::{map, Address, BytesN, Env, String};
 
 // ---------------------------------------------------------------------------
@@ -373,4 +373,135 @@ fn test_hello_with_empty_string() {
     let result = client.hello(&String::from_str(&env, ""));
     assert_eq!(result.len(), 1);
     assert_eq!(result.get(0).unwrap(), String::from_str(&env, ""));
+}
+
+// ---------------------------------------------------------------------------
+// #280 — Batch operations per-item error reporting
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_batch_mint_reports_per_item_success_and_failure() {
+    let (env, admin, contract_id) = setup_contract();
+    let client = ContractClient::new(&env, &contract_id);
+
+    let user = Address::generate(&env);
+    let expiry = env.ledger().timestamp() + 86_400;
+    let id_ok = BytesN::<32>::random(&env);
+    let id_dup = id_ok.clone();
+
+    // Pre-issue so the second batch entry collides.
+    client.issue_token(&id_ok, &user, &expiry);
+
+    let mut batch = soroban_sdk::Vec::new(&env);
+    let id_new = BytesN::<32>::random(&env);
+    batch.push_back(crate::types::BatchMintParams {
+        id: id_new.clone(),
+        user: user.clone(),
+        expiry_date: expiry,
+    });
+    batch.push_back(crate::types::BatchMintParams {
+        id: id_dup,
+        user: user.clone(),
+        expiry_date: expiry,
+    });
+
+    let results = client.batch_mint(&batch);
+    assert_eq!(results.len(), 2);
+    let first = results.get(0).unwrap();
+    assert_eq!(first.index, 0);
+    assert_eq!(first.token_id, id_new);
+    assert!(first.success);
+    assert_eq!(first.error_code, 0);
+
+    let second = results.get(1).unwrap();
+    assert_eq!(second.index, 1);
+    assert!(!second.success);
+    assert_eq!(second.error_code, u32::from(crate::errors::Error::TokenAlreadyIssued));
+}
+
+#[test]
+fn test_batch_transfer_reports_missing_token() {
+    let (env, _admin, contract_id) = setup_contract();
+    let client = ContractClient::new(&env, &contract_id);
+
+    let missing = BytesN::<32>::random(&env);
+    let recipient = Address::generate(&env);
+    let mut batch = soroban_sdk::Vec::new(&env);
+    batch.push_back(crate::types::BatchTransferParams {
+        id: missing.clone(),
+        new_user: recipient,
+    });
+
+    let results = client.batch_transfer(&batch);
+    assert_eq!(results.len(), 1);
+    let item = results.get(0).unwrap();
+    assert!(!item.success);
+    assert_eq!(item.token_id, missing);
+    assert_eq!(item.error_code, u32::from(crate::errors::Error::TokenNotFound));
+}
+
+// ---------------------------------------------------------------------------
+// #282 — Paginated list_tokens
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_list_tokens_paginated_success_and_invalid_page() {
+    let (env, admin, contract_id) = setup_contract();
+    let client = ContractClient::new(&env, &contract_id);
+
+    let user = Address::generate(&env);
+    let expiry = env.ledger().timestamp() + 86_400;
+    let key = String::from_str(&env, "tier");
+    let value = common_types::MetadataValue::Text(String::from_str(&env, "gold"));
+
+    // Issue three tokens and tag them with the same attribute.
+    let mut ids = soroban_sdk::Vec::new(&env);
+    for _ in 0..3 {
+        let tid = BytesN::<32>::random(&env);
+        client.issue_token(&tid, &user, &expiry);
+        let mut attrs = soroban_sdk::Map::new(&env);
+        attrs.set(key.clone(), value.clone());
+        client.set_token_metadata(
+            &tid,
+            &String::from_str(&env, "gold member"),
+            &attrs,
+        );
+        ids.push_back(tid);
+    }
+
+    // Full query should see all three.
+    let all = client.query_tokens_by_attribute(&key, &value);
+    assert_eq!(all.len(), 3);
+
+    // Page size 2, first page.
+    let page0 = client.list_tokens(
+        &key,
+        &value,
+        &common_types::PageParams { offset: 0, limit: 2 },
+    );
+    assert_eq!(page0.len(), 2);
+
+    // Second page.
+    let page1 = client.list_tokens(
+        &key,
+        &value,
+        &common_types::PageParams { offset: 2, limit: 2 },
+    );
+    assert_eq!(page1.len(), 1);
+
+    // Invalid limit (> MAX_PAGE_SIZE) returns empty.
+    let invalid = client.list_tokens(
+        &key,
+        &value,
+        &common_types::PageParams { offset: 0, limit: 10_000 },
+    );
+    assert_eq!(invalid.len(), 0);
+
+    // Offset past end returns empty.
+    let past = client.list_tokens(
+        &key,
+        &value,
+        &common_types::PageParams { offset: 99, limit: 10 },
+    );
+    assert_eq!(past.len(), 0);
 }
