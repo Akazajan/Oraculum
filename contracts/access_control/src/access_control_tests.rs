@@ -942,9 +942,18 @@ fn test_proposal_rejection() {
     let admin1 = Address::generate(&env);
     let admin2 = Address::generate(&env);
     let admin3 = Address::generate(&env);
+    let admin4 = Address::generate(&env);
 
     env.as_contract(&contract_id, || {
-        let admins = Vec::from_array(&env, [admin1.clone(), admin2.clone(), admin3.clone()]);
+        let admins = Vec::from_array(
+            &env,
+            [
+                admin1.clone(),
+                admin2.clone(),
+                admin3.clone(),
+                admin4.clone(),
+            ],
+        );
         AccessControlModule::initialize_multisig(&env, admins, 2, None).unwrap();
 
         let user = Address::generate(&env);
@@ -952,16 +961,26 @@ fn test_proposal_rejection() {
         let proposal_id =
             AccessControlModule::create_proposal(&env, admin1.clone(), action).unwrap();
 
-        // Reject proposal
+        let non_admin = Address::generate(&env);
+        let result = AccessControlModule::reject_proposal(&env, non_admin, proposal_id);
+        assert_eq!(result.unwrap_err(), AccessControlError::AdminRequired);
+
+        // Three of four admins are required to block a two-signature proposal.
         let result = AccessControlModule::reject_proposal(&env, admin2.clone(), proposal_id);
         assert!(result.is_ok());
 
         let proposal = AccessControlModule::get_proposal(&env, proposal_id).unwrap();
         assert_eq!(proposal.rejections.len(), 1);
 
-        // Another rejection should trigger rejection threshold
+        AccessControlModule::reject_proposal(&env, admin3.clone(), proposal_id).unwrap();
+        let proposal = AccessControlModule::get_proposal(&env, proposal_id).unwrap();
+        assert_eq!(proposal.rejections.len(), 2);
+
+        // The third rejection reaches total_admins - required_signatures + 1.
         let result = AccessControlModule::reject_proposal(&env, admin3.clone(), proposal_id);
-        // This should fail with ProposalRejected and clean up the proposal
+        assert_eq!(result.unwrap_err(), AccessControlError::AlreadyRejected);
+
+        let result = AccessControlModule::reject_proposal(&env, admin4.clone(), proposal_id);
         assert_eq!(result.unwrap_err(), AccessControlError::ProposalRejected);
 
         // Proposal should be removed
