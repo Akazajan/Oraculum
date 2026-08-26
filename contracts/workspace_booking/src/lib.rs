@@ -137,6 +137,9 @@ impl WorkspaceBookingContract {
     ) -> Result<(), Error> {
         Self::require_admin(&env, &caller)?;
 
+        if name.len() > types::MAX_NAME_LEN {
+            return Err(Error::StringTooLong);
+        }
         if capacity == 0 {
             return Err(Error::InvalidCapacity);
         }

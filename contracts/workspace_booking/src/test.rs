@@ -98,6 +98,30 @@ fn test_register_workspace_success() {
 }
 
 #[test]
+#[should_panic(expected = "Error(Contract, #5)")]
+fn test_register_workspace_name_too_long_fails() {
+    let env = Env::default();
+    let contract_id = setup_contract(&env);
+    let client = WorkspaceBookingContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let token = Address::generate(&env);
+
+    env.mock_all_auths();
+    client.initialize(&admin, &token);
+
+    let oversized_name = "x".repeat((types::MAX_NAME_LEN + 1) as usize);
+    client.register_workspace(
+        &admin,
+        &String::from_str(&env, "ws-oversized-name"),
+        &String::from_str(&env, &oversized_name),
+        &WorkspaceType::HotDesk,
+        &1u32,
+        &500u128,
+    );
+}
+
+#[test]
 #[should_panic(expected = "Error(Contract, #201)")]
 fn test_register_workspace_duplicate_id_fails() {
     let env = Env::default();
