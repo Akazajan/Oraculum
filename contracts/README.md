@@ -5,7 +5,7 @@
 [![Soroban](https://img.shields.io/badge/Platform-Soroban-7D00FF?style=flat-square)](https://soroban.stellar.org)
 [![Rust](https://img.shields.io/badge/Rust-1.75+-orange?style=flat-square&logo=rust)]()
 
-Covers `contracts/`. See [Root README](../README.md) · [Backend](../backend/README.md) · [Frontend](../frontend/README.md).
+Covers `contracts/`. See [Root README](../README.md) · [Backend](../backend/README.md) · [Frontend](../frontend/README.md)..
 
 ---
 
@@ -20,9 +20,9 @@ Covers `contracts/`. See [Root README](../README.md) · [Backend](../backend/REA
 | `membership_token` | Simple membership NFT with issuance and transfer |
 | `manage_hub` | Hub orchestration: membership tokens, staking tiers, subscription plans, fractionalization, royalty, allowances, upgrades, batch ops |
 
-All written in Rust via the Soroban SDK, settling in **USDC** through Stellar's native Stellar Asset Contract (SAC).
+All written in Rust via the Soroban SDK, settling in **USDC** through Stellar's native Stellar Asset Contract (SAC)..
 
-```
+```,
 contracts/
 ├── access_control/src/
 ├── common_types/src/

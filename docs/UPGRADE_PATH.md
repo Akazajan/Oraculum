@@ -7,7 +7,7 @@ This document describes how to safely upgrade the Soroban SDK version used by th
 - Rust toolchain (minimum 1.75.0)
 - `wasm32-unknown-unknown` target installed
 - Git commit containing all current changes
-
+.
 ## Quick Start
 
 ```bash

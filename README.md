@@ -7,8 +7,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue?style=flat-square)](LICENSE)
 [![Status](https://img.shields.io/badge/Status-Active%20Development-green?style=flat-square)]()
 
----
-
+---..
 ## What is Oraculum?
 
 **CeloSense** proved an AI agent can monitor on-chain activity and sell insights pay-per-query. **Numina AI** proved a pay-per-use AI consultant — no account, just a wallet and USDC — can deliver deeply personal value..
