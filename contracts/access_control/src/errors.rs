@@ -73,6 +73,8 @@ pub enum AccessControlError {
     NotMultisigAdmin = 132,
     /// Proposal rejection threshold reached
     ProposalRejected = 133,
+    /// ADDED BY FIX #270: User is blacklisted and cannot be elevated to admin
+    UserBlacklisted = 134,
 }
 
 impl AccessControlError {
@@ -119,6 +121,7 @@ impl AccessControlError {
             AccessControlError::DuplicateAdmin => "Duplicate admin address",
             AccessControlError::NotMultisigAdmin => "Not authorized as multisig admin",
             AccessControlError::ProposalRejected => "Proposal rejection threshold reached",
+            AccessControlError::UserBlacklisted => "User is blacklisted and cannot be elevated to admin",
         }
     }
 
