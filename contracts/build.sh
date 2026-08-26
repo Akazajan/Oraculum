@@ -9,7 +9,7 @@
 #   3. Compares each size against a configurable per-contract budget
 #   4. Exits with a non-zero status if any contract exceeds its budget
 #   5. Verifies WASM hashes against stored values for supply-chain security
-#
+#..
 # Usage:
 #   ./build.sh                  # default budget: 650 KB per contract
 #   ./build.sh --budget 500000  # custom budget in bytes
