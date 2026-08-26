@@ -1,7 +1,53 @@
 #![cfg(test)]
 
 use super::*;
-use soroban_sdk::{testutils::Address as _, Address, Env, String};
+use soroban_sdk::{
+    testutils::{Address as _, Events},
+    Address, Env, String,
+};
+
+#[test]
+fn test_transfer_token_emits_event_on_success() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(MembershipTokenContract, ());
+    let client = MembershipTokenContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let old_user = Address::generate(&env);
+    let new_user = Address::generate(&env);
+    let token_id = BytesN::from_array(&env, &[1; 32]);
+
+    client.set_admin(&admin);
+    client.issue_token(&token_id, &old_user, &(env.ledger().timestamp() + 1_000));
+    let events_before = env.events().all().len();
+
+    client.transfer_token(&token_id, &new_user);
+
+    let events = env.events().all();
+    assert_eq!(events.len(), events_before + 1);
+    let event = events.get(events.len() - 1).unwrap();
+    assert_eq!(event.1, (symbol_short!("token_xfr"), token_id, new_user));
+    assert_eq!(event.2, (old_user, env.ledger().timestamp()));
+}
+
+#[test]
+fn test_transfer_token_does_not_emit_event_on_invalid_transfer() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(MembershipTokenContract, ());
+    let client = MembershipTokenContractClient::new(&env, &contract_id);
+    let token_id = BytesN::from_array(&env, &[2; 32]);
+    let new_user = Address::generate(&env);
+    let events_before = env.events().all().len();
+
+    assert_eq!(
+        client.try_transfer_token(&token_id, &new_user),
+        Err(Ok(Error::TokenNotFound))
+    );
+    assert_eq!(env.events().all().len(), events_before);
+}
 
 #[test]
 fn test_initialize() {

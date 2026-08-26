@@ -1,6 +1,8 @@
 #![no_std]
 
-use soroban_sdk::{contract, contracterror, contractimpl, contracttype, Address, BytesN, Env};
+use soroban_sdk::{
+    contract, contracterror, contractimpl, contracttype, symbol_short, Address, BytesN, Env,
+};
 
 #[contract]
 pub struct MembershipTokenContract;
@@ -88,8 +90,14 @@ impl MembershipTokenContract {
 
         token.user.require_auth();
 
-        token.user = new_user;
-        env.storage().persistent().set(&DataKey::Token(id), &token);
+        let old_user = token.user.clone();
+        token.user = new_user.clone();
+        env.storage().persistent().set(&DataKey::Token(id.clone()), &token);
+
+        env.events().publish(
+            (symbol_short!("token_xfr"), id, new_user),
+            (old_user, env.ledger().timestamp()),
+        );
 
         Ok(())
     }
