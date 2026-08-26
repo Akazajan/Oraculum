@@ -40,6 +40,8 @@ pub enum DataKey {
     DepositorEscrows(Address),
     /// List of escrow IDs where this address is the beneficiary.
     BeneficiaryEscrows(Address),
+    /// Accumulated protocol treasury amount (fees from disputes).
+    TreasuryAmount,
 }
 
 // ── Contract ──────────────────────────────────────────────────────────────────
@@ -106,6 +108,49 @@ impl PaymentEscrowContract {
         env.storage()
             .persistent()
             .set(&DataKey::Escrow(escrow.id.clone()), escrow);
+    }
+
+    fn get_treasury_amount(env: &Env) -> i128 {
+        env.storage()
+            .instance()
+            .get(&DataKey::TreasuryAmount)
+            .unwrap_or(0i128)
+    }
+
+    fn set_treasury_amount(env: &Env, amount: i128) {
+        env.storage()
+            .instance()
+            .set(&DataKey::TreasuryAmount, &amount);
+    }
+
+    // ── Public getters ────────────────────────────────────────────────────────
+
+    pub fn admin(env: Env) -> Address {
+        Self::get_admin(&env).unwrap()
+    }
+
+    pub fn payment_token(env: Env) -> Address {
+        Self::get_payment_token(&env).unwrap()
+    }
+
+    pub fn dispute_window(env: Env) -> u64 {
+        Self::get_dispute_window(&env)
+    }
+
+    pub fn fee_recipient(env: Env) -> Address {
+        Self::get_fee_recipient(&env).unwrap()
+    }
+
+    pub fn fee_bps(env: Env) -> u32 {
+        Self::get_fee_bps(&env)
+    }
+
+    pub fn get_escrow(env: Env, escrow_id: String) -> Escrow {
+        Self::load_escrow(&env, &escrow_id).unwrap()
+    }
+
+    pub fn treasury_amount(env: Env) -> i128 {
+        Self::get_treasury_amount(&env)
     }
 
     // ── Initialisation ────────────────────────────────────────────────────────
@@ -374,43 +419,41 @@ impl PaymentEscrowContract {
         caller.require_auth();
 
         let mut escrow = Self::load_escrow(&env, &escrow_id)?;
-
-        if caller != escrow.depositor {
-            return Err(Error::Unauthorized);
-        }
         if escrow.status != EscrowStatus::Pending {
             return Err(Error::EscrowNotPending);
         }
-
-        // Dispute window of 0 means disputes are disabled for this escrow
         if escrow.dispute_window == 0 {
             return Err(Error::DisputeWindowClosed);
         }
-        if env.ledger().timestamp() > escrow.created_at + escrow.dispute_window {
+        let now = env.ledger().timestamp();
+        if now > escrow.created_at + escrow.dispute_window {
             return Err(Error::DisputeWindowClosed);
         }
+        if escrow.depositor != caller {
+            return Err(Error::Unauthorized);
+        }
 
-        let now = env.ledger().timestamp();
         escrow.status = EscrowStatus::Disputed;
         escrow.dispute_raised_at = Some(now);
         Self::save_escrow(&env, &escrow);
 
         env.events().publish(
             (symbol_short!("disputed"), escrow_id),
-            (escrow.depositor, now),
+            (caller, now),
         );
         Ok(())
     }
 
-    /// Resolve a Disputed escrow (admin only).
+    /// Resolve a disputed escrow. Only the admin may call this.
     ///
-    /// * `release_to_beneficiary` — `true` releases funds to beneficiary;
-    ///                              `false` refunds them to the depositor.
+    /// * `award_to_beneficiary` — `true` sends the escrow amount (less fee)
+    ///   to the beneficiary and deposits the fee into the contract treasury;
+    ///   `false` refunds the full amount to the depositor.
     pub fn resolve_dispute(
         env: Env,
         caller: Address,
         escrow_id: String,
-        release_to_beneficiary: bool,
+        award_to_beneficiary: bool,
     ) -> Result<(), Error> {
         Self::require_admin(&env, &caller)?;
 
@@ -422,33 +465,29 @@ impl PaymentEscrowContract {
         let now = env.ledger().timestamp();
         let token_client = token::Client::new(&env, &escrow.payment_token);
 
-        if release_to_beneficiary {
-            // Add fee to treasury
-            if escrow.fee_amount > 0 {
-                let treasury = Self::get_treasury_amount(&env);
-                env.storage().instance().set(
-                    &DataKey::TreasuryAmount,
-                    &(treasury + escrow.fee_amount),
+        if award_to_beneficiary {
+            // Send the principal to the beneficiary.
+            let beneficiary_amount = escrow.amount - escrow.fee_amount;
+            if beneficiary_amount > 0 {
+                token_client.transfer(
+                    &env.current_contract_address(),
+                    &escrow.beneficiary,
+                    &beneficiary_amount,
                 );
             }
-
-            // Transfer the remaining amount to the beneficiary
-            let beneficiary_amount = escrow.amount - escrow.fee_amount;
-            token_client.transfer(
-                &env.current_contract_address(),
-                &escrow.beneficiary,
-                &beneficiary_amount,
-            );
-
+            // Fee goes to the protocol treasury.
+            if escrow.fee_amount > 0 {
+                let treasury = Self::get_treasury_amount(&env);
+                Self::set_treasury_amount(&env, treasury + escrow.fee_amount);
+            }
             escrow.status = EscrowStatus::Released;
         } else {
-            // Refund the full amount to the depositor
+            // Full refund to depositor; no fee is retained.
             token_client.transfer(
                 &env.current_contract_address(),
                 &escrow.depositor,
                 &escrow.amount,
             );
-
             escrow.status = EscrowStatus::Refunded;
         }
 
@@ -457,193 +496,37 @@ impl PaymentEscrowContract {
 
         env.events().publish(
             (symbol_short!("resolved"), escrow_id),
-            (
-                if release_to_beneficiary {
-                    escrow.beneficiary
-                } else {
-                    escrow.depositor
-                },
-                escrow.amount,
-                release_to_beneficiary,
-            ),
+            (award_to_beneficiary, escrow.amount),
         );
         Ok(())
     }
 
-    // ── Beneficiary self-claim ────────────────────────────────────────────────
-
-    /// Claim funds without admin approval once `release_after` has passed.
-    ///
-    /// Only works when the escrow has `release_after > 0` and the current
-    /// ledger timestamp has reached or exceeded that value.
-    pub fn claim(env: Env, caller: Address, escrow_id: String) -> Result<(), Error> {
-        caller.require_auth();
-
-        let mut escrow = Self::load_escrow(&env, &escrow_id)?;
-
-        if caller != escrow.beneficiary {
-            return Err(Error::Unauthorized);
-        }
-        if escrow.status != EscrowStatus::Pending {
-            return Err(Error::EscrowNotPending);
-        }
-        if escrow.release_after == 0 {
-            return Err(Error::AutoClaimDisabled);
-        }
-        if env.ledger().timestamp() < escrow.release_after {
-            return Err(Error::ClaimTooEarly);
-        }
-
-        let now = env.ledger().timestamp();
-        let token_client = token::Client::new(&env, &escrow.payment_token);
-
-        // Transfer the fee, if any
-        if escrow.fee_amount > 0 {
-            token_client.transfer(
-                &env.current_contract_address(),
-                &escrow.fee_recipient,
-                &escrow.fee_amount,
-            );
-        }
-
-        // Transfer the remaining amount to the beneficiary
-        let beneficiary_amount = escrow.amount - escrow.fee_amount;
-        token_client.transfer(
-            &env.current_contract_address(),
-            &escrow.beneficiary,
-            &beneficiary_amount,
-        );
-
-        escrow.status = EscrowStatus::Released;
-        escrow.resolved_at = Some(now);
-        Self::save_escrow(&env, &escrow);
-
-        env.events().publish(
-            (symbol_short!("claimed"), escrow_id),
-            (
-                escrow.beneficiary,
-                beneficiary_amount,
-                escrow.fee_recipient,
-                escrow.fee_amount,
-            ),
-        );
-        Ok(())
-    }
-
-    // ── Queries ───────────────────────────────────────────────────────────────
-
-    /// Fetch an escrow record by ID.
-    pub fn get_escrow(env: Env, escrow_id: String) -> Result<Escrow, Error> {
-        Self::load_escrow(&env, &escrow_id)
-    }
-
-    /// Return all escrow IDs created by a depositor.
-    pub fn get_depositor_escrows(env: Env, depositor: Address) -> Vec<String> {
-        env.storage()
-            .persistent()
-            .get(&DataKey::DepositorEscrows(depositor))
-            .unwrap_or(Vec::new(&env))
-    }
-
-    /// Return all escrow IDs where the address is the beneficiary.
-    pub fn get_beneficiary_escrows(env: Env, beneficiary: Address) -> Vec<String> {
-        env.storage()
-            .persistent()
-            .get(&DataKey::BeneficiaryEscrows(beneficiary))
-            .unwrap_or(Vec::new(&env))
-    }
-
-    /// Return the current admin address.
-    pub fn admin(env: Env) -> Result<Address, Error> {
-        Self::get_admin(&env)
-    }
-
-    /// Return the accepted payment token address.
-    pub fn payment_token(env: Env) -> Result<Address, Error> {
-        Self::get_payment_token(&env)
-    }
-
-    /// Return the current default dispute window in seconds.
-    pub fn dispute_window(env: Env) -> u64 {
-        Self::get_dispute_window(&env)
-    }
-
-    // ── Treasury ──────────────────────────────────────────────────────────────
-
-    /// Withdraw accumulated fees from the treasury.
-    pub fn withdraw_treasury(
-        env: Env,
-        caller: Address,
-        recipient: Address,
-        amount: i128,
-    ) -> Result<(), Error> {
+    /// Withdraw accumulated treasury fees. Admin only.
+    pub fn withdraw_treasury(env: Env, caller: Address, amount: i128) -> Result<(), Error> {
         Self::require_admin(&env, &caller)?;
+
+        if amount <= 0 {
+            return Err(Error::InvalidAmount);
+        }
 
         let treasury = Self::get_treasury_amount(&env);
         if amount > treasury {
-            return Err(Error::InsufficientBalance);
+            return Err(Error::InvalidAmount);
         }
 
         let payment_token = Self::get_payment_token(&env)?;
-        let token_client = token::Client::new(&env, &payment_token);
+        token::Client::new(&env, &payment_token).transfer(
+            &env.current_contract_address(),
+            &caller,
+            &amount,
+        );
 
-        token_client.transfer(&env.current_contract_address(), &recipient, &amount);
-
-        env.storage()
-            .instance()
-            .set(&DataKey::TreasuryAmount, &(treasury - amount));
+        Self::set_treasury_amount(&env, treasury - amount);
 
         env.events().publish(
-            (symbol_short!("treasury_w"),),
-            (recipient, amount, env.ledger().timestamp()),
+            (symbol_short!("withdrawn"),),
+            (caller, amount),
         );
         Ok(())
     }
-
-    /// Return the current treasury balance.
-    pub fn treasury_balance(env: Env) -> i128 {
-        Self::get_treasury_amount(&env)
-    }
-}
-}
-
-// ── ADDED BY FIX #275: Token rescue for admin ──────────────────────────────
-
-/// Rescue tokens sent directly to the contract outside of the escrow flow.
-///
-/// Admin-only. Transfers the specified amount of the payment token from the
-/// contract to the recipient. This prevents tokens from being permanently
-/// locked if a user accidentally sends them to the contract address.
-///
-/// # Arguments
-/// * `caller` - Must be the admin
-/// * `recipient` - Address to receive the rescued tokens
-/// * `amount` - Amount to rescue (must be <= contract's token balance)
-pub fn rescue_tokens(
-    env: Env,
-    caller: Address,
-    recipient: Address,
-    amount: i128,
-) -> Result<(), Error> {
-    Self::require_admin(&env, &caller)?;
-
-    if amount <= 0 {
-        return Err(Error::InvalidAmount);
-    }
-
-    let payment_token = Self::get_payment_token(&env)?;
-    let token_client = token::Client::new(&env, &payment_token);
-
-    let contract_balance = token_client.balance(&env.current_contract_address());
-    if amount > contract_balance {
-        return Err(Error::InsufficientBalance);
-    }
-
-    token_client.transfer(&env.current_contract_address(), &recipient, &amount);
-
-    env.events().publish(
-        (symbol_short!("rescue"),),
-        (recipient, amount, env.ledger().timestamp()),
-    );
-    Ok(())
 }
