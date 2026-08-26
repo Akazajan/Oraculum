@@ -917,6 +917,11 @@ impl AccessControlModule {
                 );
             }
             ProposalAction::AddAdmin(new_admin) => {
+                // ADDED BY FIX #270: Prevent blacklisted users from being elevated to admin
+                if Self::is_blacklisted(env, &new_admin) {
+                    return Err(AccessControlError::UserBlacklisted);
+                }
+
                 if let Some(mut multisig_config) = Self::get_multisig_config(env) {
                     if multisig_config.admins.contains(&new_admin) {
                         return Err(AccessControlError::DuplicateAdmin);

@@ -237,3 +237,95 @@ fn test_auto_claim_after_release_time() {
     let escrow = client.get_escrow(&esc_id(&env, "auto-001"));
     assert_eq!(escrow.status, EscrowStatus::Released);
 }
+
+// ── FIX #271: Full escrow lifecycle integration test ────────────────────────
+
+#[test]
+fn test_full_escrow_lifecycle_create_dispute_resolve_to_beneficiary() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let depositor = Address::generate(&env);
+    let beneficiary = Address::generate(&env);
+    let fee_recipient = Address::generate(&env);
+    let token = setup_token(&env, &admin, &depositor, 50_000);
+
+    let contract_id = setup_contract(&env);
+    let client = init(&env, &contract_id, &admin, &token);
+
+    // Set fee config
+    client.set_fee_config(&admin, &fee_recipient, &500); // 5% fee
+
+    let amount: i128 = 10_000;
+
+    // Step 1: Create escrow
+    let escrow_id = esc_id(&env, "lifecycle-001");
+    client.create_escrow(
+        &depositor,
+        &escrow_id,
+        &beneficiary,
+        &amount,
+        &(DISPUTE_WINDOW + 100),
+    );
+
+    let escrow = client.get_escrow(&escrow_id);
+    assert_eq!(escrow.status, EscrowStatus::Pending);
+
+    // Step 2: Raise dispute
+    client.raise_dispute(&depositor, &escrow_id);
+    let escrow = client.get_escrow(&escrow_id);
+    assert_eq!(escrow.status, EscrowStatus::Disputed);
+
+    // Step 3: Resolve to beneficiary
+    client.resolve_dispute(&admin, &escrow_id, &true);
+    let escrow = client.get_escrow(&escrow_id);
+    assert_eq!(escrow.status, EscrowStatus::Released);
+
+    // Verify balances
+    let fee_amount = amount * 500 / 10_000; // 500
+    let beneficiary_amount = amount - fee_amount; // 9500
+    assert_eq!(token_client.balance(&beneficiary), beneficiary_amount);
+    assert_eq!(token_client.balance(&fee_recipient), fee_amount);
+}
+
+#[test]
+fn test_full_escrow_lifecycle_create_dispute_resolve_to_depositor() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let depositor = Address::generate(&env);
+    let beneficiary = Address::generate(&env);
+    let fee_recipient = Address::generate(&env);
+    let token = setup_token(&env, &admin, &depositor, 50_000);
+
+    let contract_id = setup_contract(&env);
+    let client = init(&env, &contract_id, &admin, &token);
+
+    client.set_fee_config(&admin, &fee_recipient, &250); // 2.5% fee
+
+    let amount: i128 = 20_000;
+
+    // Create
+    let escrow_id = esc_id(&env, "lifecycle-002");
+    client.create_escrow(
+        &depositor,
+        &escrow_id,
+        &beneficiary,
+        &amount,
+        &(DISPUTE_WINDOW + 100),
+    );
+
+    // Dispute
+    client.raise_dispute(&beneficiary, &escrow_id);
+
+    // Resolve to depositor (refund)
+    client.resolve_dispute(&admin, &escrow_id, &false);
+    let escrow = client.get_escrow(&escrow_id);
+    assert_eq!(escrow.status, EscrowStatus::Refunded);
+
+    // Depositor should get full amount back
+    // (depositor had 50_000, spent 20_000, got back 20_000 = 50_000)
+    assert_eq!(token_client.balance(&depositor), 50_000);
+}

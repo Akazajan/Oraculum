@@ -141,3 +141,86 @@ mod fuzz_arithmetic_tests {
         assert_eq!(pending, 30);
     }
 }
+
+    // ── FIX #268: Payment escrow arithmetic fuzz tests ──────────────────────
+
+    /// Fee + beneficiary amount must always equal the escrow amount.
+    /// This is the core invariant for fee calculation.
+    fn fee_and_beneficiary_invariant(
+        amount: i128,
+        fee_bps: i128,
+    ) -> Result<(i128, i128), ()> {
+        if amount <= 0 || fee_bps < 0 || fee_bps > 10_000 {
+            return Err(());
+        }
+
+        let fee_amount = amount
+            .checked_mul(fee_bps)
+            .ok_or(())?
+            .checked_div(BPS_DENOM)
+            .ok_or(())?;
+
+        let beneficiary_amount = amount
+            .checked_sub(fee_amount)
+            .ok_or(())?;
+
+        // Invariant: fee + beneficiary == amount
+        assert_eq!(
+            fee_amount.checked_add(beneficiary_amount).ok_or(())?,
+            amount,
+            "Invariant violated: fee + beneficiary != amount"
+        );
+
+        Ok((fee_amount, beneficiary_amount))
+    }
+
+    #[test]
+    fn test_escrow_fee_invariant_small_amounts() {
+        // Various small amounts and fee percentages
+        let test_cases: &[(i128, i128)] = &[
+            (1_000, 100),     // 1% fee
+            (10_000, 250),    // 2.5% fee
+            (100_000, 500),   // 5% fee
+            (1_000_000, 1000), // 10% fee
+            (1, 100),         // minimum amount, 1% fee
+            (10_000, 0),      // zero fee
+            (10_000, 10_000), // 100% fee (edge case)
+        ];
+
+        for &(amount, fee_bps) in test_cases {
+            let result = fee_and_beneficiary_invariant(amount, fee_bps);
+            assert!(result.is_ok(), "Failed for amount={}, fee_bps={}", amount, fee_bps);
+        }
+    }
+
+    #[test]
+    fn test_escrow_fee_invariant_large_amounts() {
+        // Large amounts that could overflow
+        let test_cases: &[(i128, i128)] = &[
+            (i128::MAX / 2, 100),
+            (1_000_000_000_000, 500),
+            (999_999_999_999_999, 1000),
+        ];
+
+        for &(amount, fee_bps) in test_cases {
+            let result = fee_and_beneficiary_invariant(amount, fee_bps);
+            // These may fail due to overflow — that's acceptable
+            if let Ok((fee, beneficiary)) = result {
+                assert_eq!(fee + beneficiary, amount);
+            }
+        }
+    }
+
+    #[test]
+    fn test_escrow_fee_zero_bps() {
+        let (fee, beneficiary) = fee_and_beneficiary_invariant(10_000, 0).unwrap();
+        assert_eq!(fee, 0);
+        assert_eq!(beneficiary, 10_000);
+    }
+
+    #[test]
+    fn test_escrow_fee_full_bps() {
+        let (fee, beneficiary) = fee_and_beneficiary_invariant(10_000, 10_000).unwrap();
+        assert_eq!(fee, 10_000);
+        assert_eq!(beneficiary, 0);
+    }

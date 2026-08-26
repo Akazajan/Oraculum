@@ -115,9 +115,6 @@ pub struct Contract;
 
 #[contractimpl]
 impl Contract {
-    pub fn hello(env: Env, to: String) -> Vec<String> {
-        vec![&env, String::from_str(&env, "Hello"), to]
-    }
 
     /// Mints multiple tokens in a single transaction.
     /// Returns per-item outcomes so callers can identify which index failed.
