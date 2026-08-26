@@ -33,6 +33,7 @@ ENV_FILE="$SCRIPT_DIR/../.env.deployed"
 NETWORK="testnet"
 SOROBAN_RPC_URL="${SOROBAN_RPC_URL:-https://soroban-testnet.stellar.org}"
 ADMIN_ADDRESS="${ADMIN_ADDRESS:-}"
+FORCE_REDEPLOY=0
 CONTRACTS=(
     "access_control"
     "manage_hub"
@@ -61,8 +62,12 @@ while [[ $# -gt 0 ]]; do
             SOROBAN_RPC_URL="$2"
             shift 2
             ;;
+        --force)
+            FORCE_REDEPLOY=1
+            shift
+            ;;
         --help|-h)
-            echo "Usage: $0 [--admin <address>] [--network <network>] [--rpc-url <url>]"
+            echo "Usage: $0 [--admin <address>] [--network <network>] [--rpc-url <url>] [--force]"
             echo ""
             echo "Deploy all Oraculum contracts to Stellar testnet."
             echo ""
@@ -169,10 +174,30 @@ for contract in "${CONTRACTS[@]}"; do
         continue
     fi
 
-    # Check if already deployed (idempotent)
-    if [[ -n "${DEPLOYED_ADDRESSES[$env_key]:-}" ]]; then
-        echo "  SKIP: $contract already deployed at ${DEPLOYED_ADDRESSES[$env_key]}"
-        continue
+    # Idempotency: skip when we already recorded an address unless --force is set.
+    # Optionally verify the account still hosts WASM on-chain to avoid stale .env entries.
+    if [[ -n "${DEPLOYED_ADDRESSES[$env_key]:-}" && "$FORCE_REDEPLOY" -eq 0 ]]; then
+        existing="${DEPLOYED_ADDRESSES[$env_key]}"
+        on_chain_ok=0
+        if command -v stellar >/dev/null 2>&1; then
+            if stellar contract info interface                 --contract-id "$existing"                 --network "$NETWORK"                 --rpc-url "$SOROBAN_RPC_URL"                 >/dev/null 2>&1; then
+                on_chain_ok=1
+            fi
+        else
+            # stellar CLI unavailable — trust the recorded address
+            on_chain_ok=1
+        fi
+
+        if [[ "$on_chain_ok" -eq 1 ]]; then
+            echo "  SKIP: $contract already deployed at $existing (idempotent)"
+            continue
+        else
+            echo "  WARN: recorded address $existing for $contract is not live; redeploying"
+        fi
+    fi
+
+    if [[ -n "${DEPLOYED_ADDRESSES[$env_key]:-}" && "$FORCE_REDEPLOY" -eq 1 ]]; then
+        echo "  FORCE: redeploying $contract (was ${DEPLOYED_ADDRESSES[$env_key]})"
     fi
 
     echo "  Deploying $contract..."

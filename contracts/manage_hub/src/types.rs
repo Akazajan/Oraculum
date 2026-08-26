@@ -30,6 +30,22 @@ pub struct BatchUpdateParams {
     pub attributes: soroban_sdk::Map<String, MetadataValue>,
 }
 
+/// Per-item outcome for batch mint / transfer / update operations.
+/// Mirrors [`BatchUpgradeResult`] so callers can see which index failed
+/// without the whole transaction reverting on the first error.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct BatchItemResult {
+    /// Zero-based index of the item in the input vector.
+    pub index: u32,
+    /// Token id associated with this item (when available).
+    pub token_id: BytesN<32>,
+    /// Whether the operation succeeded for this item.
+    pub success: bool,
+    /// Error code (as u32) when `success` is false; 0 on success.
+    pub error_code: u32,
+}
+
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
 pub enum AttendanceAction {
