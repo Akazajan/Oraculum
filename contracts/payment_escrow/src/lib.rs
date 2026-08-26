@@ -40,7 +40,7 @@ pub enum DataKey {
     DepositorEscrows(Address),
     /// List of escrow IDs where this address is the beneficiary.
     BeneficiaryEscrows(Address),
-    /// Cumulative fees held in the contract treasury.
+    /// Accumulated protocol treasury amount (fees from disputes).
     TreasuryAmount,
 }
 
@@ -97,6 +97,19 @@ impl PaymentEscrowContract {
             .unwrap_or(0u32)
     }
 
+    fn load_escrow(env: &Env, escrow_id: &String) -> Result<Escrow, Error> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Escrow(escrow_id.clone()))
+            .ok_or(Error::EscrowNotFound)
+    }
+
+    fn save_escrow(env: &Env, escrow: &Escrow) {
+        env.storage()
+            .persistent()
+            .set(&DataKey::Escrow(escrow.id.clone()), escrow);
+    }
+
     fn get_treasury_amount(env: &Env) -> i128 {
         env.storage()
             .instance()
@@ -110,17 +123,34 @@ impl PaymentEscrowContract {
             .set(&DataKey::TreasuryAmount, &amount);
     }
 
-    fn load_escrow(env: &Env, escrow_id: &String) -> Result<Escrow, Error> {
-        env.storage()
-            .persistent()
-            .get(&DataKey::Escrow(escrow_id.clone()))
-            .ok_or(Error::EscrowNotFound)
+    // ── Public getters ────────────────────────────────────────────────────────
+
+    pub fn admin(env: Env) -> Address {
+        Self::get_admin(&env).unwrap()
     }
 
-    fn save_escrow(env: &Env, escrow: &Escrow) {
-        env.storage()
-            .persistent()
-            .set(&DataKey::Escrow(escrow.id.clone()), escrow);
+    pub fn payment_token(env: Env) -> Address {
+        Self::get_payment_token(&env).unwrap()
+    }
+
+    pub fn dispute_window(env: Env) -> u64 {
+        Self::get_dispute_window(&env)
+    }
+
+    pub fn fee_recipient(env: Env) -> Address {
+        Self::get_fee_recipient(&env).unwrap()
+    }
+
+    pub fn fee_bps(env: Env) -> u32 {
+        Self::get_fee_bps(&env)
+    }
+
+    pub fn get_escrow(env: Env, escrow_id: String) -> Escrow {
+        Self::load_escrow(&env, &escrow_id).unwrap()
+    }
+
+    pub fn treasury_amount(env: Env) -> i128 {
+        Self::get_treasury_amount(&env)
     }
 
     // ── Initialisation ────────────────────────────────────────────────────────
@@ -392,10 +422,15 @@ impl PaymentEscrowContract {
         if escrow.status != EscrowStatus::Pending {
             return Err(Error::EscrowNotPending);
         }
-
-        let now = env.ledger().timestamp();
-        if escrow.dispute_window == 0 || now > escrow.created_at + escrow.dispute_window {
+        if escrow.dispute_window == 0 {
             return Err(Error::DisputeWindowClosed);
+        }
+        let now = env.ledger().timestamp();
+        if now > escrow.created_at + escrow.dispute_window {
+            return Err(Error::DisputeWindowClosed);
+        }
+        if escrow.depositor != caller {
+            return Err(Error::Unauthorized);
         }
 
         escrow.status = EscrowStatus::Disputed;
@@ -404,20 +439,21 @@ impl PaymentEscrowContract {
 
         env.events().publish(
             (symbol_short!("disputed"), escrow_id),
-            (escrow.depositor, escrow.beneficiary),
+            (caller, now),
         );
         Ok(())
     }
 
-    /// Resolve a disputed escrow. Admin only.
+    /// Resolve a disputed escrow. Only the admin may call this.
     ///
-    /// * `favor_beneficiary` — `true` releases funds to the beneficiary,
-    ///   `false` refunds the depositor (minus fee, which goes to the treasury).
+    /// * `award_to_beneficiary` — `true` sends the escrow amount (less fee)
+    ///   to the beneficiary and deposits the fee into the contract treasury;
+    ///   `false` refunds the full amount to the depositor.
     pub fn resolve_dispute(
         env: Env,
         caller: Address,
         escrow_id: String,
-        favor_beneficiary: bool,
+        award_to_beneficiary: bool,
     ) -> Result<(), Error> {
         Self::require_admin(&env, &caller)?;
 
@@ -429,36 +465,29 @@ impl PaymentEscrowContract {
         let now = env.ledger().timestamp();
         let token_client = token::Client::new(&env, &escrow.payment_token);
 
-        if favor_beneficiary {
-            // Beneficiary receives amount minus fee; fee goes to the fee recipient.
-            if escrow.fee_amount > 0 {
-                token_client.transfer(
-                    &env.current_contract_address(),
-                    &escrow.fee_recipient,
-                    &escrow.fee_amount,
-                );
-            }
+        if award_to_beneficiary {
+            // Send the principal to the beneficiary.
             let beneficiary_amount = escrow.amount - escrow.fee_amount;
-            token_client.transfer(
-                &env.current_contract_address(),
-                &escrow.beneficiary,
-                &beneficiary_amount,
-            );
-            escrow.status = EscrowStatus::Released;
-        } else {
-            // Depositor receives amount minus fee; fee is retained as treasury.
-            let refund_amount = escrow.amount - escrow.fee_amount;
-            if refund_amount > 0 {
+            if beneficiary_amount > 0 {
                 token_client.transfer(
                     &env.current_contract_address(),
-                    &escrow.depositor,
-                    &refund_amount,
+                    &escrow.beneficiary,
+                    &beneficiary_amount,
                 );
             }
+            // Fee goes to the protocol treasury.
             if escrow.fee_amount > 0 {
                 let treasury = Self::get_treasury_amount(&env);
                 Self::set_treasury_amount(&env, treasury + escrow.fee_amount);
             }
+            escrow.status = EscrowStatus::Released;
+        } else {
+            // Full refund to depositor; no fee is retained.
+            token_client.transfer(
+                &env.current_contract_address(),
+                &escrow.depositor,
+                &escrow.amount,
+            );
             escrow.status = EscrowStatus::Refunded;
         }
 
@@ -467,27 +496,22 @@ impl PaymentEscrowContract {
 
         env.events().publish(
             (symbol_short!("resolved"), escrow_id),
-            (
-                escrow.beneficiary,
-                escrow.depositor,
-                favor_beneficiary,
-                escrow.fee_recipient,
-                escrow.fee_amount,
-            ),
+            (award_to_beneficiary, escrow.amount),
         );
         Ok(())
     }
 
-    /// Admin can withdraw accumulated treasury funds.
+    /// Withdraw accumulated treasury fees. Admin only.
     pub fn withdraw_treasury(env: Env, caller: Address, amount: i128) -> Result<(), Error> {
         Self::require_admin(&env, &caller)?;
 
         if amount <= 0 {
             return Err(Error::InvalidAmount);
         }
+
         let treasury = Self::get_treasury_amount(&env);
         if amount > treasury {
-            return Err(Error::InsufficientTreasury);
+            return Err(Error::InvalidAmount);
         }
 
         let payment_token = Self::get_payment_token(&env)?;
@@ -496,40 +520,13 @@ impl PaymentEscrowContract {
             &caller,
             &amount,
         );
+
         Self::set_treasury_amount(&env, treasury - amount);
 
-        env.events()
-            .publish((symbol_short!("treasury"),), (caller, amount));
+        env.events().publish(
+            (symbol_short!("withdrawn"),),
+            (caller, amount),
+        );
         Ok(())
-    }
-
-    // ── View functions ────────────────────────────────────────────────────────
-
-    pub fn admin(env: Env) -> Result<Address, Error> {
-        Self::get_admin(&env)
-    }
-
-    pub fn payment_token(env: Env) -> Result<Address, Error> {
-        Self::get_payment_token(&env)
-    }
-
-    pub fn dispute_window(env: Env) -> u64 {
-        Self::get_dispute_window(&env)
-    }
-
-    pub fn fee_recipient(env: Env) -> Result<Address, Error> {
-        Self::get_fee_recipient(&env)
-    }
-
-    pub fn fee_bps(env: Env) -> u32 {
-        Self::get_fee_bps(&env)
-    }
-
-    pub fn treasury_amount(env: Env) -> i128 {
-        Self::get_treasury_amount(&env)
-    }
-
-    pub fn get_escrow(env: Env, escrow_id: String) -> Result<Escrow, Error> {
-        Self::load_escrow(&env, &escrow_id)
     }
 }
