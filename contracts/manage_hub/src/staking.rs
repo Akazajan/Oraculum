@@ -61,6 +61,13 @@ impl StakingModule {
             return Err(Error::InvalidPaymentAmount);
         }
 
+        // ADDED BY FIX #274: Cap lock_duration to prevent permanent fund locking.
+        // 2 years in ledgers: ~63,072,000 seconds / 5s per ledger ≈ 12,614,400 ledgers
+        const MAX_LOCK_DURATION_LEDGERS: u64 = 12_614_400;
+        if config.lock_duration > MAX_LOCK_DURATION_LEDGERS {
+            return Err(Error::InvalidPaymentAmount);
+        }
+
         env.storage()
             .instance()
             .set(&StakingDataKey::Config, &config);

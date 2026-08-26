@@ -606,3 +606,44 @@ impl PaymentEscrowContract {
     }
 }
 }
+
+// ── ADDED BY FIX #275: Token rescue for admin ──────────────────────────────
+
+/// Rescue tokens sent directly to the contract outside of the escrow flow.
+///
+/// Admin-only. Transfers the specified amount of the payment token from the
+/// contract to the recipient. This prevents tokens from being permanently
+/// locked if a user accidentally sends them to the contract address.
+///
+/// # Arguments
+/// * `caller` - Must be the admin
+/// * `recipient` - Address to receive the rescued tokens
+/// * `amount` - Amount to rescue (must be <= contract's token balance)
+pub fn rescue_tokens(
+    env: Env,
+    caller: Address,
+    recipient: Address,
+    amount: i128,
+) -> Result<(), Error> {
+    Self::require_admin(&env, &caller)?;
+
+    if amount <= 0 {
+        return Err(Error::InvalidAmount);
+    }
+
+    let payment_token = Self::get_payment_token(&env)?;
+    let token_client = token::Client::new(&env, &payment_token);
+
+    let contract_balance = token_client.balance(&env.current_contract_address());
+    if amount > contract_balance {
+        return Err(Error::InsufficientBalance);
+    }
+
+    token_client.transfer(&env.current_contract_address(), &recipient, &amount);
+
+    env.events().publish(
+        (symbol_short!("rescue"),),
+        (recipient, amount, env.ledger().timestamp()),
+    );
+    Ok(())
+}

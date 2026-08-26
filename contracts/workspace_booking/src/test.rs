@@ -729,3 +729,52 @@ fn test_hourly_rate_update_applies_to_future_bookings() {
     let booking = client.get_booking(&String::from_str(&env, "bk-001"));
     assert_eq!(booking.amount_paid, 2_000u128); // new rate applied
 }
+
+// ── FIX #273: Concurrent booking conflict test ──────────────────────────────
+
+#[test]
+fn test_concurrent_booking_conflict_same_slot() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = setup_contract(&env);
+    let client = WorkspaceBookingContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let member1 = Address::generate(&env);
+    let member2 = Address::generate(&env);
+    let token_address = setup_token(&env, &admin, &member1, 100_000i128);
+
+    client.initialize(&admin, &token_address);
+    client.register_workspace(
+        &admin,
+        &String::from_str(&env, "ws-001"),
+        &String::from_str(&env, "Meeting Room"),
+        &WorkspaceType::MeetingRoom,
+        &1u32,
+        &1_000u128,
+    );
+
+    let now = env.ledger().timestamp();
+    let start = now + 60;
+    let end = start + 3_600;
+
+    // First booking succeeds
+    client.book_workspace(
+        &member1,
+        &String::from_str(&env, "bk-001"),
+        &String::from_str(&env, "ws-001"),
+        &start,
+        &end,
+    );
+
+    // Second booking for the same slot must fail with BookingConflict
+    let result = client.try_book_workspace(
+        &member2,
+        &String::from_str(&env, "bk-002"),
+        &String::from_str(&env, "ws-001"),
+        &start,
+        &end,
+    );
+    assert_eq!(result, Err(Ok(Error::BookingConflict)));
+}
