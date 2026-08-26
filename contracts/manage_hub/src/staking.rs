@@ -450,8 +450,13 @@ impl StakingModule {
     /// Return all available staking tiers in deterministic ascending
     /// order of tier id.
     ///
+    /// **DEPRECATED (FIX #264):** This function loads all tiers from storage
+    /// unconditionally and can exceed Soroban instruction limits with enough
+    /// tiers. Use [`Self::get_staking_tiers_paginated`] instead.
+    ///
     /// Preserves pre-CT-15 behaviour (returns the full list); for large
     /// datasets prefer [`Self::get_staking_tiers_paginated`].
+    #[deprecated(note = "Use get_staking_tiers_paginated to avoid instruction limit issues")]
     pub fn get_staking_tiers(env: Env) -> Vec<StakingTier> {
         let mut list: Vec<String> = env
             .storage()
