@@ -1,4 +1,4 @@
-use crate::access_control::AccessControlModule;
+use crate::access_control::{AccessControlModule, DataKey};
 use crate::errors::AccessControlError;
 use crate::types::{AccessControlConfig, ProposalAction, ProposalType, UserRole};
 use soroban_sdk::{
@@ -8,6 +8,7 @@ use soroban_sdk::{
 
 fn setup_test_env() -> (Env, Address, Address, Address, Address) {
     let env = Env::default();
+    env.mock_all_auths();
     let contract_id = env.register(crate::AccessControl, ());
     let admin = Address::generate(&env);
     let user1 = Address::generate(&env);
@@ -484,6 +485,7 @@ fn test_non_admin_cannot_blacklist() {
 #[test]
 fn test_multisig_initialization() {
     let env = Env::default();
+    env.mock_all_auths();
     let contract_id = env.register(crate::AccessControl, ());
     let admin1 = Address::generate(&env);
     let admin2 = Address::generate(&env);
@@ -517,6 +519,7 @@ fn test_multisig_initialization() {
 #[test]
 fn test_multisig_proposal_creation_and_approval() {
     let env = Env::default();
+    env.mock_all_auths();
     let contract_id = env.register(crate::AccessControl, ());
     let admin1 = Address::generate(&env);
     let admin2 = Address::generate(&env);
@@ -587,6 +590,7 @@ fn test_admin_transfer_cancellation() {
 #[test]
 fn test_multisig_prevents_direct_operations() {
     let env = Env::default();
+    env.mock_all_auths();
     let contract_id = env.register(crate::AccessControl, ());
     let admin1 = Address::generate(&env);
     let admin2 = Address::generate(&env);
@@ -596,8 +600,15 @@ fn test_multisig_prevents_direct_operations() {
         AccessControlModule::initialize_multisig(&env, admins, 2, None).unwrap();
 
         let config = AccessControlConfig::default();
-        let result = AccessControlModule::update_config(&env, admin1.clone(), config);
-        assert_eq!(result.unwrap_err(), AccessControlError::AdminRequired);
+        AccessControlModule::update_config(&env, admin1.clone(), config.clone()).unwrap();
+        let pending = AccessControlModule::get_pending_proposals(&env);
+        assert_eq!(pending.len(), 1);
+        assert_eq!(
+            AccessControlModule::get_proposal(&env, pending.get(0).unwrap())
+                .unwrap()
+                .action,
+            ProposalAction::UpdateConfig(config)
+        );
 
         let result = AccessControlModule::pause(&env, admin1.clone());
         assert_eq!(result.unwrap_err(), AccessControlError::AdminRequired);
@@ -607,6 +618,7 @@ fn test_multisig_prevents_direct_operations() {
 #[test]
 fn test_insufficient_multisig_approvals() {
     let env = Env::default();
+    env.mock_all_auths();
     let contract_id = env.register(crate::AccessControl, ());
     let admin1 = Address::generate(&env);
     let admin2 = Address::generate(&env);
@@ -657,6 +669,7 @@ fn test_initialize_event_emitted() {
 #[test]
 fn test_initialize_multisig_event_emitted() {
     let env = Env::default();
+    env.mock_all_auths();
     let contract_id = env.register(crate::AccessControl, ());
     let admin1 = Address::generate(&env);
     let admin2 = Address::generate(&env);
@@ -762,6 +775,7 @@ fn test_proposal_events_emitted() {
 #[test]
 fn test_enhanced_multisig_with_thresholds() {
     let env = Env::default();
+    env.mock_all_auths();
     let contract_id = env.register(crate::AccessControl, ());
     let admin1 = Address::generate(&env);
     let admin2 = Address::generate(&env);
@@ -816,6 +830,7 @@ fn test_proposal_type_classification() {
 #[test]
 fn test_critical_proposal_requires_higher_threshold() {
     let env = Env::default();
+    env.mock_all_auths();
     let contract_id = env.register(crate::AccessControl, ());
     let admin1 = Address::generate(&env);
     let admin2 = Address::generate(&env);
@@ -874,6 +889,7 @@ fn test_critical_proposal_requires_higher_threshold() {
 #[test]
 fn test_emergency_proposal_requires_all_signatures() {
     let env = Env::default();
+    env.mock_all_auths();
     let contract_id = env.register(crate::AccessControl, ());
     let admin1 = Address::generate(&env);
     let admin2 = Address::generate(&env);
@@ -921,6 +937,7 @@ fn test_emergency_proposal_requires_all_signatures() {
 #[test]
 fn test_proposal_rejection() {
     let env = Env::default();
+    env.mock_all_auths();
     let contract_id = env.register(crate::AccessControl, ());
     let admin1 = Address::generate(&env);
     let admin2 = Address::generate(&env);
@@ -955,6 +972,7 @@ fn test_proposal_rejection() {
 #[test]
 fn test_rejected_proposal_cleanup_from_pending_list() {
     let env = Env::default();
+    env.mock_all_auths();
     let contract_id = env.register(crate::AccessControl, ());
     let admin1 = Address::generate(&env);
     let admin2 = Address::generate(&env);
@@ -997,6 +1015,7 @@ fn test_rejected_proposal_cleanup_from_pending_list() {
 #[test]
 fn test_proposal_cancellation() {
     let env = Env::default();
+    env.mock_all_auths();
     let contract_id = env.register(crate::AccessControl, ());
     let admin1 = Address::generate(&env);
     let admin2 = Address::generate(&env);
@@ -1021,6 +1040,7 @@ fn test_proposal_cancellation() {
 #[test]
 fn test_non_proposer_cannot_cancel() {
     let env = Env::default();
+    env.mock_all_auths();
     let contract_id = env.register(crate::AccessControl, ());
     let admin1 = Address::generate(&env);
     let admin2 = Address::generate(&env);
@@ -1043,6 +1063,7 @@ fn test_non_proposer_cannot_cancel() {
 #[test]
 fn test_proposal_expiration_cleanup() {
     let env = Env::default();
+    env.mock_all_auths();
     env.ledger().set(LedgerInfo {
         timestamp: 1000,
         protocol_version: 23,
@@ -1500,6 +1521,7 @@ fn test_multisig_transfer_admin_to_self_fails() {
 #[test]
 fn test_multisig_prevents_direct_admin_transfer() {
     let env = Env::default();
+    env.mock_all_auths();
     let contract_id = env.register(crate::AccessControl, ());
     let admin1 = Address::generate(&env);
     let admin2 = Address::generate(&env);
@@ -1518,6 +1540,7 @@ fn test_multisig_prevents_direct_admin_transfer() {
 #[test]
 fn test_get_pending_proposals_list() {
     let env = Env::default();
+    env.mock_all_auths();
     let contract_id = env.register(crate::AccessControl, ());
     let admin1 = Address::generate(&env);
     let admin2 = Address::generate(&env);
@@ -1545,5 +1568,74 @@ fn test_get_pending_proposals_list() {
         let pending = AccessControlModule::get_pending_proposals(&env);
         assert_eq!(pending.len(), 1);
         assert!(pending.contains(id2));
+    });
+}
+
+#[test]
+fn test_multisig_admin_requires_authentication() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(crate::AccessControl, ());
+    let admin1 = Address::generate(&env);
+    let admin2 = Address::generate(&env);
+    let outsider = Address::generate(&env);
+
+    env.as_contract(&contract_id, || {
+        let admins = Vec::from_array(&env, [admin1.clone(), admin2.clone()]);
+        AccessControlModule::initialize_multisig(&env, admins, 2, None).unwrap();
+
+        assert_eq!(
+            AccessControlModule::require_admin(&env, &outsider).unwrap_err(),
+            AccessControlError::AdminRequired
+        );
+        assert!(AccessControlModule::require_admin(&env, &admin1).is_ok());
+    });
+}
+
+#[test]
+fn test_admin_transfer_requires_proposed_admin_authentication() {
+    let (env, contract_id, admin, user1, user2) = setup_initialized_env();
+
+    env.as_contract(&contract_id, || {
+        AccessControlModule::propose_admin_transfer(&env, admin.clone(), user1.clone()).unwrap();
+
+        assert_eq!(
+            AccessControlModule::accept_admin_transfer(&env, user2),
+            Err(AccessControlError::Unauthorized)
+        );
+
+        env.mock_all_auths();
+        AccessControlModule::accept_admin_transfer(&env, user1.clone()).unwrap();
+        assert!(AccessControlModule::is_admin(&env, user1));
+    });
+}
+
+#[test]
+fn test_successful_access_does_not_persist_attempt() {
+    let (env, contract_id, _admin, user1, _) = setup_initialized_env();
+
+    env.as_contract(&contract_id, || {
+        assert!(AccessControlModule::check_access(&env, user1.clone(), UserRole::Guest).unwrap());
+        assert_eq!(
+            env.storage()
+                .persistent()
+                .get::<DataKey, u32>(&DataKey::AccessAttempts(user1)),
+            None
+        );
+    });
+}
+
+#[test]
+fn test_failed_access_persists_attempt() {
+    let (env, contract_id, _admin, user1, _) = setup_initialized_env();
+
+    env.as_contract(&contract_id, || {
+        assert!(!AccessControlModule::check_access(&env, user1.clone(), UserRole::Admin).unwrap());
+        assert_eq!(
+            env.storage()
+                .persistent()
+                .get::<DataKey, u32>(&DataKey::AccessAttempts(user1)),
+            Some(1)
+        );
     });
 }

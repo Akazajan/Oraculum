@@ -218,17 +218,14 @@ impl AccessControlModule {
         let has_access = user_role.has_access(&required_role);
 
         if !has_access {
-            Self::log_access_attempt(env, &user, &required_role, false);
+            Self::log_access_attempt(env, &user, &required_role);
             return Ok(false);
         }
 
         match Self::validate_membership_access(env, &user, &required_role) {
-            Ok(_) => {
-                Self::log_access_attempt(env, &user, &required_role, true);
-                Ok(true)
-            }
+            Ok(_) => Ok(true),
             Err(_) => {
-                Self::log_access_attempt(env, &user, &required_role, false);
+                Self::log_access_attempt(env, &user, &required_role);
                 Ok(false)
             }
         }
@@ -256,6 +253,7 @@ impl AccessControlModule {
     pub fn require_admin(env: &Env, caller: &Address) -> AccessControlResult<()> {
         if let Some(multisig_config) = Self::get_multisig_config(env) {
             if multisig_config.admins.contains(caller) {
+                caller.require_auth();
                 return Ok(());
             }
         } else if Self::is_admin(env, caller.clone()) {
@@ -311,7 +309,8 @@ impl AccessControlModule {
         config: AccessControlConfig,
     ) -> AccessControlResult<()> {
         if Self::is_multisig_enabled(env) {
-            return Err(AccessControlError::AdminRequired);
+            Self::create_proposal(env, caller, ProposalAction::UpdateConfig(config))?;
+            return Ok(());
         }
 
         Self::require_admin(env, &caller)?;
@@ -486,6 +485,8 @@ impl AccessControlModule {
             return Err(AccessControlError::InvalidAddress);
         }
 
+        new_admin.require_auth();
+
         let old_admin = Self::get_admin(env).ok_or(AccessControlError::AdminRequired)?;
 
         env.storage().persistent().set(&DataKey::Admin, &new_admin);
@@ -610,7 +611,7 @@ impl AccessControlModule {
         Ok(())
     }
 
-    fn log_access_attempt(env: &Env, user: &Address, required_role: &UserRole, success: bool) {
+    fn log_access_attempt(env: &Env, user: &Address, required_role: &UserRole) {
         let current_attempts: u32 = env
             .storage()
             .persistent()
@@ -628,7 +629,7 @@ impl AccessControlModule {
                 user.clone(),
                 required_role.clone(),
             ),
-            (success, current_attempts + 1),
+            (false, current_attempts + 1),
         );
     }
 
