@@ -93,3 +93,67 @@ fn test_multiple_mints_and_spends() {
     assert_eq!(client.total_supply(), 250u128);
     assert_eq!(client.balance(&member), 250u128);
 }
+
+// ── FIX #254: mint_credits auth-before-amount reordering ────────────────────
+
+#[test]
+fn test_mint_non_admin_gets_unauthorized_even_with_zero_amount() {
+    let (env, _admin, _token, client) = setup();
+    let non_admin = Address::generate(&env);
+    let recipient = Address::generate(&env);
+
+    // Authorization is checked before amount validation, so a non-admin caller
+    // must receive `Unauthorized`, not a descriptive `InvalidAmount`.
+    let result = client.try_mint_credits(&non_admin, &recipient, &0u128);
+    assert_eq!(result, Err(Ok(super::Error::Unauthorized)));
+}
+
+#[test]
+fn test_mint_non_admin_gets_unauthorized() {
+    let (env, _admin, _token, client) = setup();
+    let non_admin = Address::generate(&env);
+    let recipient = Address::generate(&env);
+
+    let result = client.try_mint_credits(&non_admin, &recipient, &100u128);
+    assert_eq!(result, Err(Ok(super::Error::Unauthorized)));
+    assert_eq!(client.total_supply(), 0u128);
+    assert_eq!(client.balance(&recipient), 0u128);
+}
+
+#[test]
+fn test_mint_zero_amount_from_admin_returns_invalid_amount() {
+    let (env, admin, _token, client) = setup();
+    let recipient = Address::generate(&env);
+
+    let result = client.try_mint_credits(&admin, &recipient, &0u128);
+    assert_eq!(result, Err(Ok(super::Error::InvalidAmount)));
+    assert_eq!(client.total_supply(), 0u128);
+}
+
+// ── FIX #255: total supply overflow guard when minting large amounts ────────
+
+#[test]
+fn test_mint_success_updates_supply_and_balance() {
+    let (env, admin, _token, client) = setup();
+    let recipient = Address::generate(&env);
+
+    client.mint_credits(&admin, &recipient, &1_000u128);
+    assert_eq!(client.total_supply(), 1_000u128);
+    assert_eq!(client.balance(&recipient), 1_000u128);
+}
+
+#[test]
+fn test_mint_total_supply_overflow_rejected() {
+    let (env, admin, _token, client) = setup();
+    let recipient = Address::generate(&env);
+
+    // Fill total supply up to the maximum.
+    client.mint_credits(&admin, &recipient, &u128::MAX);
+    assert_eq!(client.total_supply(), u128::MAX);
+
+    // A further mint would overflow arithmetic; it must be rejected and leave
+    // supply uncorrupted.
+    let result = client.try_mint_credits(&admin, &recipient, &1u128);
+    assert_eq!(result, Err(Ok(super::Error::Overflow)));
+    assert_eq!(client.total_supply(), u128::MAX);
+}
