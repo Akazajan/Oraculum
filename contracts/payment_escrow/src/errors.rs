@@ -2,35 +2,19 @@
 use soroban_sdk::contracterror;
 
 #[contracterror]
-#[derive(Copy, Clone, Debug, PartialEq)]
-#[repr(u32)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 pub enum Error {
-    /// No admin has been set on the contract.
-    AdminNotSet = 1,
-    /// Caller is not authorised to perform this action.
+    AdminNotSet = 0,
+    PaymentTokenNotSet = 1,
     Unauthorized = 2,
-    /// Contract has already been initialised.
     AlreadyInitialized = 3,
-    /// Escrow ID does not exist.
     EscrowNotFound = 4,
-    /// An escrow with this ID already exists.
     EscrowAlreadyExists = 5,
-    /// Action requires the escrow to have Pending status.
     EscrowNotPending = 6,
-    /// resolve_dispute requires the escrow to have Disputed status.
-    EscrowNotDisputed = 7,
-    /// Dispute window has closed — too late to raise a dispute.
+    FeeRecipientNotSet = 7,
     DisputeWindowClosed = 8,
-    /// release_after timestamp has not been reached yet.
-    ClaimTooEarly = 9,
-    /// Auto-claim is disabled for this escrow (release_after == 0).
-    AutoClaimDisabled = 10,
-    /// Escrow amount must be greater than zero.
+    NotDepositor = 9,
+    EscrowNotDisputed = 10,
     InvalidAmount = 11,
-    /// Payment token address has not been set.
-    PaymentTokenNotSet = 12,
-    /// Fee recipient address has not been set.
-    FeeRecipientNotSet = 13,
-    InsufficientBalance = 14,
-}
+    DepositorIsBeneficiary = 12,
 }
