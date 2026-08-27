@@ -34,21 +34,40 @@ const ContactUsPage = () => {
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [isSubmitted, setIsSubmitted] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [validationSummary, setValidationSummary] = useState<string[]>([]);
 
   const handleInputChange = (field: string, value: string) => {
     setFormData((prev) => ({ ...prev, [field]: value }));
     if (errors[field]) {
-      setErrors((prev) => {
-        const newErrors = { ...prev };
-        delete newErrors[field];
-        return newErrors;
-      });
+      const newErrors = { ...errors };
+      delete newErrors[field];
+      setErrors(newErrors);
+    }
+    // Keep the summary in sync when a previously-invalid field is corrected.
+    if (validationSummary.length > 0 && errors[field]) {
+      setValidationSummary((prev) => prev.filter((m) => !m.includes(field)));
+      if (Object.keys(errors).filter((k) => k !== field).length === 0) {
+        setValidationSummary([]);
+      }
     }
   };
 
-  const validateForm = () => {
-    const newErrors: Record<string, string> = {};
+  // Field id -> human-readable label map for building the summary and focus.
+  const fieldLabels: Record<string, string> = {
+    fullName: "Full name",
+    email: "Email address",
+    subject: "Subject",
+    message: "Message",
+    phone: "Phone number",
+    company: "Company / organization",
+  };
 
+  /**
+   * Computes and stores field-level errors, returning the errors object.
+   * The fullName/email/subject/message checks mirror the existing rules.
+   */
+  const computeErrors = (): Record<string, string> => {
+    const newErrors: Record<string, string> = {};
     if (!formData.fullName.trim()) newErrors.fullName = "Full name is required";
     if (!formData.email.trim()) newErrors.email = "Email is required";
     else if (!/\S+@\S+\.\S+/.test(formData.email))
@@ -57,13 +76,46 @@ const ContactUsPage = () => {
     if (!formData.message.trim()) newErrors.message = "Message is required";
     else if (formData.message.trim().length < 10)
       newErrors.message = "Message must be at least 10 characters";
+    return newErrors;
+  };
 
-    setErrors(newErrors);
-    return Object.keys(newErrors).length === 0;
+  /**
+   * Renders a concise, form-level validation summary (issue #357). The
+   * summary is announced on submit so users don't miss field errors that sit
+   * below the fold, and the first invalid field is moved into view & focus.
+   */
+  const announceValidationSummary = (fieldErrors: Record<string, string>) => {
+    const messages = Object.entries(fieldErrors).map(
+      ([field, message]) => `${fieldLabels[field] ?? field}: ${message}`,
+    );
+    setValidationSummary([
+      `Please fix the following ${messages.length} ${
+        messages.length === 1 ? "field" : "fields"
+      }: ${messages.join(" · ")}`,
+    ]);
+
+    const firstInvalid = Object.keys(fieldErrors)[0];
+    if (firstInvalid) {
+      const el = document.getElementById(firstInvalid);
+      if (el) {
+        el.scrollIntoView({ behavior: "smooth", block: "center" });
+        (el as HTMLElement).focus({ preventScroll: true });
+      }
+    }
   };
 
   const handleSubmit = async () => {
-    if (!validateForm()) return;
+    // Clear the previous summary so it doesn't linger after a successful pass.
+    setValidationSummary([]);
+
+    const fieldErrors = computeErrors();
+    setErrors(fieldErrors);
+
+    // If any field failed, announce a concise summary and stop submission.
+    if (Object.keys(fieldErrors).length > 0) {
+      announceValidationSummary(fieldErrors);
+      return;
+    }
 
     setIsLoading(true);
     try {
@@ -401,6 +453,25 @@ const ContactUsPage = () => {
                     {formData.message.length} characters
                   </p>
                 </div>
+
+                {/* Form-level validation summary */}
+                {validationSummary.length > 0 && (
+                  <div
+                    role="alert"
+                    aria-live="assertive"
+                    className="bg-red-50 border border-red-200 rounded-lg p-4 text-sm text-red-700 flex items-start gap-2"
+                  >
+                    <AlertCircle className="h-5 w-5 text-red-500 mt-0.5 shrink-0" />
+                    <div>
+                      <p className="font-medium">Your message wasn't sent yet</p>
+                      {validationSummary.map((line, idx) => (
+                        <p key={idx} className="mt-1">
+                          {line}
+                        </p>
+                      ))}
+                    </div>
+                  </div>
+                )}
 
                 {/* Submit Button */}
                 <button

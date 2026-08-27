@@ -236,15 +236,21 @@ export default function ProfilePage() {
             </div>
 
             {message && (
-              <p
-                className={`text-sm ${
+              <div
+                role={message.type === "error" ? "alert" : "status"}
+                className={`text-sm rounded-lg px-4 py-3 ${
                   message.type === "success"
-                    ? "text-emerald-600"
-                    : "text-red-500"
+                    ? "text-emerald-700 bg-emerald-50 border border-emerald-100"
+                    : "text-red-700 bg-red-50 border border-red-100"
                 }`}
               >
                 {message.text}
-              </p>
+                {message.type === "error" && (
+                  <span className="block mt-1 text-xs">
+                    Your changes are still here — please review and try again.
+                  </span>
+                )}
+              </div>
             )}
 
             <button

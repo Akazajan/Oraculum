@@ -19,7 +19,7 @@ import {
   Bell,
   BarChart3,
 } from "lucide-react";
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useAuthState, useAuthActions } from "@/lib/store/authStore";
 import NotificationBell from "@/components/notifications/NotificationBell";
 
@@ -48,6 +48,36 @@ export default function DashboardSidebar() {
   const { logout } = useAuthActions();
   const [mobileOpen, setMobileOpen] = useState(false);
   const isAdmin = user?.role === "admin";
+  const openButtonRef = useRef<HTMLButtonElement>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+
+  const closeMenu = () => setMobileOpen(false);
+
+  // Issue #359: support Escape to close the mobile nav, and prevent the
+  // background content from scrolling/being obscured while the drawer is open.
+  useEffect(() => {
+    if (!mobileOpen) return;
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setMobileOpen(false);
+        openButtonRef.current?.focus();
+      }
+    };
+
+    document.addEventListener("keydown", onKeyDown);
+
+    // Prevent background scroll while the drawer is open on small screens.
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    // Move focus into the drawer so keyboard/screen-reader users land on it.
+    closeButtonRef.current?.focus();
+
+    return () => {
+      document.removeEventListener("keydown", onKeyDown);
+      document.body.style.overflow = prevOverflow;
+    };
+  }, [mobileOpen]);
 
   const handleLogout = () => {
     logout();
@@ -76,7 +106,7 @@ export default function DashboardSidebar() {
             <Link
               key={item.href}
               href={item.href}
-              onClick={() => setMobileOpen(false)}
+              onClick={closeMenu}
               className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
                 active
                   ? "bg-gray-900 text-white"
@@ -102,7 +132,7 @@ export default function DashboardSidebar() {
                 <Link
                   key={item.label}
                   href={item.href}
-                  onClick={() => setMobileOpen(false)}
+                  onClick={closeMenu}
                   className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
                     active
                       ? "bg-gray-900 text-white"
@@ -151,9 +181,12 @@ export default function DashboardSidebar() {
     <>
       {/* Mobile hamburger */}
       <button
+        ref={openButtonRef}
         onClick={() => setMobileOpen(true)}
+        aria-expanded={mobileOpen}
+        aria-controls="mobile-drawer"
         className="lg:hidden fixed top-4 left-4 z-50 p-2 bg-white rounded-lg shadow-md border border-gray-200"
-        aria-label="Open menu"
+        aria-label={mobileOpen ? "Close menu" : "Open menu"}
       >
         <Menu className="w-5 h-5 text-gray-700" />
       </button>
@@ -162,18 +195,24 @@ export default function DashboardSidebar() {
       {mobileOpen && (
         <div
           className="lg:hidden fixed inset-0 z-40 bg-black/30"
-          onClick={() => setMobileOpen(false)}
+          onClick={closeMenu}
+          aria-hidden="true"
         />
       )}
 
       {/* Mobile drawer */}
       <div
+        id="mobile-drawer"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Navigation menu"
         className={`lg:hidden fixed inset-y-0 left-0 z-50 w-64 bg-white transform transition-transform duration-200 ${
           mobileOpen ? "translate-x-0" : "-translate-x-full"
         }`}
       >
         <button
-          onClick={() => setMobileOpen(false)}
+          ref={closeButtonRef}
+          onClick={closeMenu}
           className="absolute top-4 right-4 p-1"
           aria-label="Close menu"
         >
