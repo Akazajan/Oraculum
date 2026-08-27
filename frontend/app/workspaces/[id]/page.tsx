@@ -10,6 +10,8 @@ import {
   MapPin,
   CheckCircle2,
   CalendarPlus,
+  AlertCircle,
+  RefreshCcw,
 } from "lucide-react";
 
 const TYPE_LABELS: Record<string, string> = {
@@ -26,7 +28,7 @@ export default function WorkspaceDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = use(params);
-  const { data, isLoading, isError } = useGetWorkspaceById(id);
+  const { data, isLoading, isError, refetch } = useGetWorkspaceById(id);
   const workspace = data?.data;
 
   const hourlyNaira = workspace
@@ -54,13 +56,34 @@ export default function WorkspaceDetailPage({
           <div className="bg-white rounded-xl border border-gray-100 h-72 animate-pulse" />
           <div className="bg-white rounded-xl border border-gray-100 h-48 animate-pulse" />
         </div>
-      ) : isError || !workspace ? (
+      ) : isError ? (
+        <div className="text-center py-20">
+          <AlertCircle className="w-10 h-10 mx-auto mb-3 text-red-400" />
+          <p className="font-medium text-gray-900 mb-1">Failed to load workspace</p>
+          <p className="text-sm text-gray-500 mb-6">There was an error loading the workspace details.</p>
+          <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
+            <button
+              onClick={() => refetch()}
+              className="inline-flex items-center gap-2 px-4 py-2 bg-gray-900 text-white text-sm font-medium rounded-lg hover:bg-gray-700 transition-colors"
+            >
+              <RefreshCcw className="w-4 h-4" />
+              Retry
+            </button>
+            <Link
+              href="/workspaces"
+              className="text-sm text-gray-500 hover:text-gray-900 underline transition-colors"
+            >
+              Back to workspaces
+            </Link>
+          </div>
+        </div>
+      ) : !workspace ? (
         <div className="text-center py-20 text-gray-500">
           <MapPin className="w-10 h-10 mx-auto mb-3 text-gray-300" />
-          <p className="font-medium">Workspace not found</p>
+          <p className="font-medium text-gray-900">Workspace not found</p>
           <Link
             href="/workspaces"
-            className="text-sm text-gray-500 underline mt-2 inline-block"
+            className="text-sm text-gray-500 underline mt-2 inline-block hover:text-gray-900"
           >
             Browse all workspaces
           </Link>

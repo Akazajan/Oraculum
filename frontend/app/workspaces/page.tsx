@@ -9,6 +9,7 @@ import {
   Search,
   SlidersHorizontal,
   Building2,
+  X,
 } from "lucide-react";
 
 const WORKSPACE_TYPES: { label: string; value: WorkspaceType | "" }[] = [
@@ -22,7 +23,7 @@ const WORKSPACE_TYPES: { label: string; value: WorkspaceType | "" }[] = [
 
 export default function WorkspacesPage() {
   const [search, setSearch] = useState("");
-  const [type, setType] = useState<WorkspaceType | "">("");
+  const [type, setType] = useState<WorkspaceType | "">"");
   const [page, setPage] = useState(1);
 
   const { data, isLoading, isError } = useGetWorkspaces({
@@ -35,9 +36,17 @@ export default function WorkspacesPage() {
   const workspaces = data?.data ?? [];
   const meta = data?.meta;
 
+  const hasActiveFilters = search !== "" || type !== "";
+
+  const handleClearFilters = () => {
+    setSearch("");
+    setType("");
+    setPage(1);
+  };
+
   return (
     <DashboardLayout>
-      {/* Header */}
+      <!-- Header -->
       <div className="mb-8">
         <h1 className="text-2xl font-bold text-gray-900">Workspaces</h1>
         <p className="text-gray-500 mt-1 text-sm">
@@ -45,7 +54,7 @@ export default function WorkspacesPage() {
         </p>
       </div>
 
-      {/* Filters */}
+      <!-- Filters -->
       <div className="bg-white rounded-xl border border-gray-100 p-4 mb-6 flex flex-col sm:flex-row gap-3">
         <div className="relative flex-1">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
@@ -71,9 +80,19 @@ export default function WorkspacesPage() {
             ))}
           </select>
         </div>
+        {hasActiveFilters && (
+          <button
+            type="button"
+            onClick={handleClearFilters}
+            className="inline-flex items-center gap-1 px-3 py-2 text-sm text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50"
+          >
+            <X className="w-4 h-4" />
+            Clear Filters
+          </button>
+        )}
       </div>
 
-      {/* Content */}
+      <!-- Content -->
       {isLoading ? (
         <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-5">
           {[1, 2, 3, 4, 5, 6].map((i) => (
@@ -103,11 +122,11 @@ export default function WorkspacesPage() {
             ))}
           </div>
 
-          {/* Pagination */}
+          <!-- Pagination -->
           {meta && meta.totalPages > 1 && (
             <div className="flex items-center justify-between mt-8">
               <p className="text-sm text-gray-500">
-                Showing {(page - 1) * 9 + 1}–
+                Showing {(page - 1) * 9 + 1}-
                 {Math.min(page * 9, meta.total)} of {meta.total}
               </p>
               <div className="flex gap-2">
