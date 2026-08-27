@@ -363,6 +363,28 @@ export class EmailService {
     return this.send(email, 'Booking Created — Oraculum', html);
   }
 
+  async sendBookingReminderEmail(
+    email: string,
+    fullName: string,
+    data: {
+      bookingId: string;
+      workspaceName: string;
+      planType: string;
+      startDate: string;
+      endDate: string;
+      seatCount: number;
+      totalAmountNaira: string;
+    },
+    locale?: string,
+  ): Promise<boolean> {
+    const html = this.compileTemplate(
+      'booking-created',
+      { fullName, ...data },
+      locale,
+    );
+    return this.send(email, 'Booking Reminder — Oraculum', html);
+  }
+
   async sendPaymentSuccessEmail(
     email: string,
     fullName: string,
