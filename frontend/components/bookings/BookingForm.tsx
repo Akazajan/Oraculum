@@ -8,6 +8,7 @@ import { useGetWorkspaces } from "@/lib/react-query/hooks/workspaces/useGetWorks
 import { useCreateBooking } from "@/lib/react-query/hooks/bookings/useCreateBooking";
 import { usePriceEstimate } from "@/lib/react-query/hooks/bookings/usePriceEstimate";
 import { useInitializePayment } from "@/lib/react-query/hooks/payments/useInitializePayment";
+import { useAuthState } from "@/lib/store/authStore";
 import { PlanType } from "@/lib/types/booking";
 import {
   ArrowLeft,
@@ -48,6 +49,7 @@ declare global {
 }
 
 export default function BookingForm() {
+  const { user } = useAuthState();
   const searchParams = useSearchParams();
   const router = useRouter();
   const preselectedId = searchParams.get("workspaceId") ?? "";
@@ -136,7 +138,7 @@ export default function BookingForm() {
 
       const handler = window.PaystackPop.setup({
         key: process.env.NEXT_PUBLIC_PAYSTACK_PUBLIC_KEY!,
-        email: "", // filled by Paystack via access_code
+        email: user?.email || "",
         amount: totalAmount,
         ref: reference,
         onClose: () => toast.info("Payment window closed"),

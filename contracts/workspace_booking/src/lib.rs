@@ -20,6 +20,8 @@ use soroban_sdk::{
     contract, contractimpl, contracttype, symbol_short, token, Address, Env, String, Vec,
 };
 
+const ADMIN_TRANSFER_TTL: u64 = 86_400;
+
 // ── Storage keys ──────────────────────────────────────────────────────────────
 
 #[contracttype]
@@ -38,6 +40,16 @@ pub enum DataKey {
     MemberBookings(Address),
     /// List of booking IDs associated with a workspace.
     WorkspaceBookings(String),
+    /// Pending two-step admin transfer.
+    PendingAdminTransfer,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PendingAdminTransfer {
+    pub proposed_admin: Address,
+    pub proposer: Address,
+    pub expiry: u64,
 }
 
 // ── Contract ──────────────────────────────────────────────────────────────────
@@ -117,6 +129,94 @@ impl WorkspaceBookingContract {
         Ok(())
     }
 
+    /// Propose transferring admin control to `new_admin`.
+    ///
+    /// The proposed admin must accept before the transfer takes effect.
+    pub fn propose_admin_transfer(
+        env: Env,
+        current_admin: Address,
+        new_admin: Address,
+    ) -> Result<(), Error> {
+        Self::require_admin(&env, &current_admin)?;
+
+        if current_admin == new_admin {
+            return Err(Error::InvalidAdminTransfer);
+        }
+
+        let pending_transfer = PendingAdminTransfer {
+            proposed_admin: new_admin.clone(),
+            proposer: current_admin.clone(),
+            expiry: env.ledger().timestamp() + ADMIN_TRANSFER_TTL,
+        };
+
+        env.storage()
+            .instance()
+            .set(&DataKey::PendingAdminTransfer, &pending_transfer);
+
+        env.events().publish(
+            (symbol_short!("adm_prop"), new_admin.clone()),
+            current_admin,
+        );
+        Ok(())
+    }
+
+    /// Accept a pending admin transfer as the proposed admin.
+    pub fn accept_admin_transfer(env: Env, new_admin: Address) -> Result<(), Error> {
+        let pending_transfer: PendingAdminTransfer = env
+            .storage()
+            .instance()
+            .get(&DataKey::PendingAdminTransfer)
+            .ok_or(Error::InvalidAdminTransfer)?;
+
+        if pending_transfer.proposed_admin != new_admin {
+            return Err(Error::Unauthorized);
+        }
+
+        if env.ledger().timestamp() > pending_transfer.expiry {
+            return Err(Error::AdminTransferExpired);
+        }
+
+        new_admin.require_auth();
+
+        let old_admin = Self::get_admin(&env)?;
+        env.storage().instance().set(&DataKey::Admin, &new_admin);
+        env.storage()
+            .instance()
+            .remove(&DataKey::PendingAdminTransfer);
+
+        env.events()
+            .publish((symbol_short!("adm_xfer"), new_admin), old_admin);
+        Ok(())
+    }
+
+    /// Cancel a pending admin transfer before it is accepted.
+    pub fn cancel_admin_transfer(env: Env, current_admin: Address) -> Result<(), Error> {
+        Self::require_admin(&env, &current_admin)?;
+
+        let pending_transfer: PendingAdminTransfer = env
+            .storage()
+            .instance()
+            .get(&DataKey::PendingAdminTransfer)
+            .ok_or(Error::InvalidAdminTransfer)?;
+
+        if pending_transfer.proposer != current_admin {
+            return Err(Error::Unauthorized);
+        }
+
+        env.storage()
+            .instance()
+            .remove(&DataKey::PendingAdminTransfer);
+
+        env.events().publish(
+            (
+                symbol_short!("adm_canc"),
+                pending_transfer.proposed_admin.clone(),
+            ),
+            current_admin,
+        );
+        Ok(())
+    }
+
     // ── Workspace management (admin-only) ─────────────────────────────────────
 
     /// Register a new bookable workspace.
@@ -170,11 +270,11 @@ impl WorkspaceBookingContract {
 
         let mut list: Vec<String> = env
             .storage()
-            .instance()
+            .persistent()
             .get(&DataKey::WorkspaceList)
             .unwrap_or(Vec::new(&env));
         list.push_back(id.clone());
-        env.storage().instance().set(&DataKey::WorkspaceList, &list);
+        env.storage().persistent().set(&DataKey::WorkspaceList, &list);
 
         env.events().publish(
             (symbol_short!("ws_reg"), id),
@@ -543,7 +643,7 @@ impl WorkspaceBookingContract {
     /// Return all registered workspace IDs (in registration order).
     pub fn get_all_workspaces(env: Env) -> Vec<String> {
         env.storage()
-            .instance()
+            .persistent()
             .get(&DataKey::WorkspaceList)
             .unwrap_or(Vec::new(&env))
     }
@@ -592,6 +692,11 @@ impl WorkspaceBookingContract {
     /// Return the current admin address.
     pub fn admin(env: Env) -> Result<Address, Error> {
         Self::get_admin(&env)
+    }
+
+    /// Return the pending admin transfer, if one exists.
+    pub fn get_pending_admin_transfer(env: Env) -> Option<PendingAdminTransfer> {
+        env.storage().instance().get(&DataKey::PendingAdminTransfer)
     }
 
     /// Return the payment token address.

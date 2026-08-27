@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { HttpModule } from '@nestjs/axios';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { JwtModule } from '@nestjs/jwt';
 import { BullModule } from '@nestjs/bull';
@@ -9,19 +10,17 @@ import { NotificationsController } from './notifications.controller';
 import { NotificationsGateway } from './gateway/notifications.gateway';
 import { CreateNotificationProvider } from './providers/create-notification.provider';
 import { FindNotificationsProvider } from './providers/find-notifications.provider';
+import { NotificationQueueProcessor } from './processors/notification-queue.processor';
 import { NotificationPreferencesModule } from '../notification-preferences/notification-preferences.module';
+import { DeadLetterModule } from '../common/dead-letter/dead-letter.module';
+import { WebhookService } from './services/webhook.service';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([Notification]),
     NotificationPreferencesModule,
-import { NotificationQueueProcessor } from './processors/notification-queue.processor';
-import { DeadLetterJob } from '../common/entities/dead-letter-job.entity';
-import { DeadLetterProvider } from '../common/providers/dead-letter.provider';
-
-@Module({
-  imports: [
-    TypeOrmModule.forFeature([Notification, DeadLetterJob]),
+    HttpModule,
+    DeadLetterModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],
       useFactory: (configService: ConfigService) => ({
@@ -29,16 +28,14 @@ import { DeadLetterProvider } from '../common/providers/dead-letter.provider';
       }),
       inject: [ConfigService],
     }),
-    BullModule.registerQueue(
-      {
-        name: 'notification',
-        defaultJobOptions: {
-          attempts: 3,
-          backoff: { type: 'exponential', delay: 2000 },
-          removeOnComplete: true,
-        },
+    BullModule.registerQueue({
+      name: 'notification',
+      defaultJobOptions: {
+        attempts: 3,
+        backoff: { type: 'exponential', delay: 2000 },
+        removeOnComplete: true,
       },
-    ),
+    }),
   ],
   controllers: [NotificationsController],
   providers: [
@@ -47,7 +44,7 @@ import { DeadLetterProvider } from '../common/providers/dead-letter.provider';
     CreateNotificationProvider,
     FindNotificationsProvider,
     NotificationQueueProcessor,
-    DeadLetterProvider,
+    WebhookService,
   ],
   exports: [NotificationsService],
 })

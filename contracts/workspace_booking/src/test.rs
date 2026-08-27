@@ -66,6 +66,105 @@ fn test_initialize_twice_fails() {
 }
 
 #[test]
+fn test_admin_transfer_success_rotates_admin() {
+    let env = Env::default();
+    let contract_id = setup_contract(&env);
+    let client = WorkspaceBookingContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let new_admin = Address::generate(&env);
+    let token = Address::generate(&env);
+
+    env.mock_all_auths();
+    client.initialize(&admin, &token);
+
+    let proposed_at = env.ledger().timestamp();
+    client.propose_admin_transfer(&admin, &new_admin);
+
+    let pending = client.get_pending_admin_transfer().unwrap();
+    assert_eq!(pending.proposed_admin, new_admin);
+    assert_eq!(pending.proposer, admin);
+    assert_eq!(pending.expiry, proposed_at + ADMIN_TRANSFER_TTL);
+
+    client.accept_admin_transfer(&new_admin);
+
+    assert_eq!(client.admin(), new_admin);
+    assert!(client.get_pending_admin_transfer().is_none());
+
+    let old_admin_result = client.try_register_workspace(
+        &admin,
+        &String::from_str(&env, "ws-old-admin"),
+        &String::from_str(&env, "Old Admin Desk"),
+        &WorkspaceType::HotDesk,
+        &1u32,
+        &500u128,
+    );
+    assert_eq!(old_admin_result, Err(Ok(Error::Unauthorized)));
+
+    client.register_workspace(
+        &new_admin,
+        &String::from_str(&env, "ws-new-admin"),
+        &String::from_str(&env, "New Admin Desk"),
+        &WorkspaceType::HotDesk,
+        &1u32,
+        &500u128,
+    );
+}
+
+#[test]
+fn test_admin_transfer_rejects_invalid_paths() {
+    let env = Env::default();
+    let contract_id = setup_contract(&env);
+    let client = WorkspaceBookingContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let non_admin = Address::generate(&env);
+    let new_admin = Address::generate(&env);
+    let wrong_acceptor = Address::generate(&env);
+    let token = Address::generate(&env);
+
+    env.mock_all_auths();
+    client.initialize(&admin, &token);
+
+    let non_admin_result = client.try_propose_admin_transfer(&non_admin, &new_admin);
+    assert_eq!(non_admin_result, Err(Ok(Error::Unauthorized)));
+
+    let self_transfer_result = client.try_propose_admin_transfer(&admin, &admin);
+    assert_eq!(self_transfer_result, Err(Ok(Error::InvalidAdminTransfer)));
+
+    client.propose_admin_transfer(&admin, &new_admin);
+
+    let wrong_acceptor_result = client.try_accept_admin_transfer(&wrong_acceptor);
+    assert_eq!(wrong_acceptor_result, Err(Ok(Error::Unauthorized)));
+    assert_eq!(client.admin(), admin);
+    assert!(client.get_pending_admin_transfer().is_some());
+}
+
+#[test]
+fn test_admin_transfer_expiry_and_cancel() {
+    let env = Env::default();
+    let contract_id = setup_contract(&env);
+    let client = WorkspaceBookingContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let new_admin = Address::generate(&env);
+    let token = Address::generate(&env);
+
+    env.mock_all_auths();
+    client.initialize(&admin, &token);
+
+    client.propose_admin_transfer(&admin, &new_admin);
+    advance_time(&env, ADMIN_TRANSFER_TTL + 1);
+
+    let expired_result = client.try_accept_admin_transfer(&new_admin);
+    assert_eq!(expired_result, Err(Ok(Error::AdminTransferExpired)));
+    assert_eq!(client.admin(), admin);
+
+    client.cancel_admin_transfer(&admin);
+    assert!(client.get_pending_admin_transfer().is_none());
+}
+
+#[test]
 fn test_register_workspace_success() {
     let env = Env::default();
     let contract_id = setup_contract(&env);
@@ -802,3 +901,46 @@ fn test_concurrent_booking_conflict_same_slot() {
     );
     assert_eq!(result, Err(Ok(Error::BookingConflict)));
 }
+
+// ── FIX #248: Regression tests for persistent workspace list storage ────────
+
+#[test]
+fn test_get_all_workspaces_persistent_storage() {
+    let env = Env::default();
+    let contract_id = setup_contract(&env);
+    let client = WorkspaceBookingContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let token = Address::generate(&env);
+
+    env.mock_all_auths();
+    client.initialize(&admin, &token);
+
+    // Verify empty list initially
+    let initial_workspaces = client.get_all_workspaces();
+    assert_eq!(initial_workspaces.len(), 0u32);
+
+    // Register multiple workspaces to verify persistent accumulation and order
+    let ws_ids = ["ws-001", "ws-002", "ws-003", "ws-004", "ws-005"];
+    for ws_id in ws_ids.iter() {
+        client.register_workspace(
+            &admin,
+            &String::from_str(&env, ws_id),
+            &String::from_str(&env, "Workspace Name"),
+            &WorkspaceType::DedicatedDesk,
+            &4u32,
+            &250u128,
+        );
+    }
+
+    let all_workspaces = client.get_all_workspaces();
+    assert_eq!(all_workspaces.len(), 5u32);
+
+    for (i, expected_id) in ws_ids.iter().enumerate() {
+        assert_eq!(
+            all_workspaces.get(i as u32).unwrap(),
+            String::from_str(&env, expected_id)
+        );
+    }
+}
+

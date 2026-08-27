@@ -1,0 +1,1 @@
+require('http').createServer((q,r)=>r.end('<button aria-label="Search" title="Search">&#128269;</button><button aria-label="Settings" title="Settings">#9881;</button>')).listen(000)

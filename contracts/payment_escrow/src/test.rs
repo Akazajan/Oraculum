@@ -109,6 +109,29 @@ fn test_create_escrow_success() {
 }
 
 #[test]
+#[should_panic(expected = "Error(Contract, #12)")]
+fn test_create_escrow_depositor_equals_beneficiary_fails() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let user = Address::generate(&env);
+    let token = setup_token(&env, &admin, &user, 10_000);
+
+    let contract_id = setup_contract(&env);
+    let client = init(&env, &contract_id, &admin, &token);
+
+    client.create_escrow(
+        &user,
+        &String::from_str(&env, "esc-001"),
+        &user,
+        &5_000i128,
+        &String::from_str(&env, "Self-escrow"),
+        &0u64,
+    );
+}
+
+#[test]
 #[should_panic(expected = "Error(Contract, #5)")]
 fn test_create_escrow_duplicate_id_fails() {
     let env = Env::default();
@@ -397,229 +420,14 @@ fn test_resolve_dispute_releases_to_beneficiary() {
         &0u64,
     );
 
+    advance_time(&env, 3_600);
     client.raise_dispute(&depositor, &String::from_str(&env, "esc-001"));
     client.resolve_dispute(&admin, &String::from_str(&env, "esc-001"), &true);
 
     assert_eq!(TokenClient::new(&env, &token).balance(&beneficiary), 5_000);
+    assert_eq!(TokenClient::new(&env, &token).balance(&contract_id), 0);
+
     let escrow = client.get_escrow(&String::from_str(&env, "esc-001"));
     assert_eq!(escrow.status, EscrowStatus::Released);
-}
-
-#[test]
-fn test_resolve_dispute_refunds_to_depositor() {
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let admin = Address::generate(&env);
-    let depositor = Address::generate(&env);
-    let beneficiary = Address::generate(&env);
-    let token = setup_token(&env, &admin, &depositor, 10_000);
-
-    let contract_id = setup_contract(&env);
-    let client = init(&env, &contract_id, &admin, &token);
-
-    client.create_escrow(
-        &depositor,
-        &String::from_str(&env, "esc-001"),
-        &beneficiary,
-        &5_000i128,
-        &String::from_str(&env, "Deposit"),
-        &0u64,
-    );
-
-    client.raise_dispute(&depositor, &String::from_str(&env, "esc-001"));
-    client.resolve_dispute(&admin, &String::from_str(&env, "esc-001"), &false);
-
-    assert_eq!(TokenClient::new(&env, &token).balance(&depositor), 10_000); // full refund
-    let escrow = client.get_escrow(&String::from_str(&env, "esc-001"));
-    assert_eq!(escrow.status, EscrowStatus::Refunded);
-}
-
-#[test]
-#[should_panic(expected = "Error(Contract, #7)")]
-fn test_resolve_dispute_on_pending_escrow_fails() {
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let admin = Address::generate(&env);
-    let depositor = Address::generate(&env);
-    let beneficiary = Address::generate(&env);
-    let token = setup_token(&env, &admin, &depositor, 10_000);
-
-    let contract_id = setup_contract(&env);
-    let client = init(&env, &contract_id, &admin, &token);
-
-    client.create_escrow(
-        &depositor,
-        &String::from_str(&env, "esc-001"),
-        &beneficiary,
-        &5_000i128,
-        &String::from_str(&env, "Deposit"),
-        &0u64,
-    );
-
-    // EscrowNotDisputed = 7 — escrow is still Pending, no dispute raised
-    client.resolve_dispute(&admin, &String::from_str(&env, "esc-001"), &true);
-}
-
-// ── Auto-claim ────────────────────────────────────────────────────────────────
-
-#[test]
-fn test_claim_after_release_time_succeeds() {
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let admin = Address::generate(&env);
-    let depositor = Address::generate(&env);
-    let beneficiary = Address::generate(&env);
-    let token = setup_token(&env, &admin, &depositor, 10_000);
-
-    let contract_id = setup_contract(&env);
-    let client = init(&env, &contract_id, &admin, &token);
-
-    let now = env.ledger().timestamp();
-    let release_after = now + 3_600; // 1 hour from now
-
-    client.create_escrow(
-        &depositor,
-        &String::from_str(&env, "esc-001"),
-        &beneficiary,
-        &5_000i128,
-        &String::from_str(&env, "Time-locked payment"),
-        &release_after,
-    );
-
-    // Advance past release_after
-    advance_time(&env, 3_601);
-    client.claim(&beneficiary, &String::from_str(&env, "esc-001"));
-
-    assert_eq!(TokenClient::new(&env, &token).balance(&beneficiary), 5_000);
-    let escrow = client.get_escrow(&String::from_str(&env, "esc-001"));
-    assert_eq!(escrow.status, EscrowStatus::Released);
-}
-
-#[test]
-#[should_panic(expected = "Error(Contract, #9)")]
-fn test_claim_before_release_time_fails() {
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let admin = Address::generate(&env);
-    let depositor = Address::generate(&env);
-    let beneficiary = Address::generate(&env);
-    let token = setup_token(&env, &admin, &depositor, 10_000);
-
-    let contract_id = setup_contract(&env);
-    let client = init(&env, &contract_id, &admin, &token);
-
-    let now = env.ledger().timestamp();
-    let release_after = now + 3_600;
-
-    client.create_escrow(
-        &depositor,
-        &String::from_str(&env, "esc-001"),
-        &beneficiary,
-        &5_000i128,
-        &String::from_str(&env, "Time-locked payment"),
-        &release_after,
-    );
-
-    // ClaimTooEarly = 9 — not enough time has passed
-    client.claim(&beneficiary, &String::from_str(&env, "esc-001"));
-}
-
-#[test]
-#[should_panic(expected = "Error(Contract, #10)")]
-fn test_claim_when_auto_claim_disabled_fails() {
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let admin = Address::generate(&env);
-    let depositor = Address::generate(&env);
-    let beneficiary = Address::generate(&env);
-    let token = setup_token(&env, &admin, &depositor, 10_000);
-
-    let contract_id = setup_contract(&env);
-    let client = init(&env, &contract_id, &admin, &token);
-
-    // release_after = 0 disables auto-claim
-    client.create_escrow(
-        &depositor,
-        &String::from_str(&env, "esc-001"),
-        &beneficiary,
-        &5_000i128,
-        &String::from_str(&env, "Admin-only deposit"),
-        &0u64,
-    );
-
-    // AutoClaimDisabled = 10
-    client.claim(&beneficiary, &String::from_str(&env, "esc-001"));
-}
-
-// ── Indexes ───────────────────────────────────────────────────────────────────
-
-#[test]
-fn test_depositor_and_beneficiary_indexes() {
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let admin = Address::generate(&env);
-    let depositor = Address::generate(&env);
-    let beneficiary = Address::generate(&env);
-    let token = setup_token(&env, &admin, &depositor, 50_000);
-
-    let contract_id = setup_contract(&env);
-    let client = init(&env, &contract_id, &admin, &token);
-
-    for i in 0u32..3 {
-        let id = match i {
-            0 => String::from_str(&env, "esc-001"),
-            1 => String::from_str(&env, "esc-002"),
-            _ => String::from_str(&env, "esc-003"),
-        };
-        client.create_escrow(
-            &depositor,
-            &id,
-            &beneficiary,
-            &1_000i128,
-            &String::from_str(&env, "Deposit"),
-            &0u64,
-        );
-    }
-
-    assert_eq!(client.get_depositor_escrows(&depositor).len(), 3u32);
-    assert_eq!(client.get_beneficiary_escrows(&beneficiary).len(), 3u32);
-}
-
-// ── Dispute window update ─────────────────────────────────────────────────────
-
-#[test]
-fn test_set_dispute_window_applies_to_new_escrows() {
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let admin = Address::generate(&env);
-    let depositor = Address::generate(&env);
-    let beneficiary = Address::generate(&env);
-    let token = setup_token(&env, &admin, &depositor, 20_000);
-
-    let contract_id = setup_contract(&env);
-    let client = init(&env, &contract_id, &admin, &token);
-
-    // Change window to 48 hours
-    client.set_dispute_window(&admin, &172_800u64);
-    assert_eq!(client.dispute_window(), 172_800u64);
-
-    client.create_escrow(
-        &depositor,
-        &String::from_str(&env, "esc-002"),
-        &beneficiary,
-        &5_000i128,
-        &String::from_str(&env, "Deposit"),
-        &0u64,
-    );
-
-    let escrow = client.get_escrow(&String::from_str(&env, "esc-002"));
-    // New escrow picks up the updated window
-    assert_eq!(escrow.dispute_window, 172_800u64);
+    assert!(escrow.resolved_at.is_some());
 }

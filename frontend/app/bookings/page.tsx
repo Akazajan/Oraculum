@@ -3,9 +3,11 @@
 import { useState } from "react";
 import Link from "next/link";
 import DashboardLayout from "@/components/dashboard/DashboardLayout";
+import { submitCancelAction } from "@/lib/booking-cancel";
 import { useGetMyBookings } from "@/lib/react-query/hooks/bookings/useGetMyBookings";
 import { useCancelBooking } from "@/lib/react-query/hooks/bookings/useCancelBooking";
 import { useInitializePayment } from "@/lib/react-query/hooks/payments/useInitializePayment";
+import { useAuthState } from "@/lib/store/authStore";
 import { Booking, BookingStatus } from "@/lib/types/booking";
 import {
   CalendarPlus,
@@ -39,6 +41,7 @@ declare global {
 }
 
 function BookingRow({ booking, onCancelled }: { booking: Booking; onCancelled: () => void }) {
+  const { user } = useAuthState();
   const { mutateAsync: cancel, isPending: cancelling } = useCancelBooking();
   const { mutateAsync: initPayment, isPending: paying } = useInitializePayment();
   const [confirmCancel, setConfirmCancel] = useState(false);
@@ -49,10 +52,15 @@ function BookingRow({ booking, onCancelled }: { booking: Booking; onCancelled: (
   });
 
   async function handleCancel() {
-    if (!confirmCancel) { setConfirmCancel(true); return; }
-    await cancel(booking.id);
-    setConfirmCancel(false);
-    onCancelled();
+    await submitCancelAction({
+      confirmCancel,
+      isPending: cancelling,
+      cancel: async () => {
+        await cancel(booking.id);
+      },
+      setConfirmCancel,
+      onCancelled,
+    });
   }
 
   async function handlePay() {
@@ -67,7 +75,7 @@ function BookingRow({ booking, onCancelled }: { booking: Booking; onCancelled: (
       void accessCode;
       const handler = window.PaystackPop.setup({
         key: process.env.NEXT_PUBLIC_PAYSTACK_PUBLIC_KEY!,
-        email: "",
+        email: user?.email || "",
         amount: booking.totalAmount,
         ref: reference,
         onClose: () => toast.info("Payment window closed"),
@@ -154,7 +162,8 @@ function BookingRow({ booking, onCancelled }: { booking: Booking; onCancelled: (
           {confirmCancel && (
             <button
               onClick={() => setConfirmCancel(false)}
-              className="px-3 py-1.5 text-xs text-gray-500 hover:text-gray-700"
+              disabled={cancelling}
+              className="px-3 py-1.5 text-xs text-gray-500 hover:text-gray-700 disabled:opacity-40"
             >
               Keep
             </button>
