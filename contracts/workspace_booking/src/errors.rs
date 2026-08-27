@@ -36,6 +36,12 @@ pub enum Error {
     /// Invalid booking time window.
     InvalidTimeRange = 8,
 
+    /// Admin transfer proposal is invalid.
+    InvalidAdminTransfer = 9,
+
+    /// Admin transfer proposal has expired.
+    AdminTransferExpired = 10,
+
     // -----------------------------
     // Booking Errors (100–199)
     // -----------------------------
