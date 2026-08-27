@@ -7,6 +7,7 @@ import { submitCancelAction } from "@/lib/booking-cancel";
 import { useGetMyBookings } from "@/lib/react-query/hooks/bookings/useGetMyBookings";
 import { useCancelBooking } from "@/lib/react-query/hooks/bookings/useCancelBooking";
 import { useInitializePayment } from "@/lib/react-query/hooks/payments/useInitializePayment";
+import { useAuthState } from "@/lib/store/authStore";
 import { Booking, BookingStatus } from "@/lib/types/booking";
 import {
   CalendarPlus,
@@ -40,6 +41,7 @@ declare global {
 }
 
 function BookingRow({ booking, onCancelled }: { booking: Booking; onCancelled: () => void }) {
+  const { user } = useAuthState();
   const { mutateAsync: cancel, isPending: cancelling } = useCancelBooking();
   const { mutateAsync: initPayment, isPending: paying } = useInitializePayment();
   const [confirmCancel, setConfirmCancel] = useState(false);
@@ -73,7 +75,7 @@ function BookingRow({ booking, onCancelled }: { booking: Booking; onCancelled: (
       void accessCode;
       const handler = window.PaystackPop.setup({
         key: process.env.NEXT_PUBLIC_PAYSTACK_PUBLIC_KEY!,
-        email: "",
+        email: user?.email || "",
         amount: booking.totalAmount,
         ref: reference,
         onClose: () => toast.info("Payment window closed"),
