@@ -4,14 +4,14 @@ import { useState } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { useAuthState, useAuthActions } from "@/lib/store/authStore";
-import { apiClient } from "@/lib/apiClient";
-import DashboardLayout from "@/components/dashboard/DashboardLayout";
-import TwoFactorModal from "@/components/settings/TwoFactorModal";
-import { use2faStatus } from "@/lib/react-query/hooks/two-factor/use2faStatus";
+import { useAuthState, useAuthActions } from ""/lib/store/authStore";
+import { apiClient } from ""/lib/apiClient";
+import DashboardLayout from ""/components/dashboard/DashboardLayout";
+import TwoFactorModal from ""/components/settings/TwoFactorModal";
+import { use2faStatus } from ""/lib/react-query/hooks/two-factor/use2faStatus";
 import { Eye, EyeOff, Shield, Bell, Palette } from "lucide-react";
 
-/* ── Password change schema ── */
+/* ✀ Password change schema ✀ */
 const passwordSchema = z
   .object({
     currentPassword: z.string().min(1, "Current password is required"),
@@ -25,7 +25,7 @@ const passwordSchema = z
 
 type PasswordForm = z.infer<typeof passwordSchema>;
 
-/* ── Toggle row ── */
+/* ✀ Toggle row ✀ */
 function ToggleRow({
   label,
   description,
@@ -48,13 +48,13 @@ function ToggleRow({
         role="switch"
         aria-checked={checked}
         onClick={() => onChange(!checked)}
-        className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full transition-colors ${
+        className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-transition-colors ${
           checked ? "bg-gray-900" : "bg-gray-200"
         }`}
       >
         <span
           className={`pointer-events-none inline-block h-5 w-5 rounded-full bg-white shadow transform transition-transform mt-0.5 ${
-            checked ? "translate-x-[22px]" : "translate-x-0.5"
+            checked ? "translate-x[22px]" : "translate-x-0.5"
           }`}
         />
       </button>
@@ -66,7 +66,7 @@ export default function SettingsPage() {
   const { user } = useAuthState();
   const { logout } = useAuthActions();
 
-  /* ── Password state ── */
+  /* ✀ Password state ✀ */
   const [pwSaving, setPwSaving] = useState(false);
   const [pwMsg, setPwMsg] = useState<{
     type: "success" | "error";
@@ -104,18 +104,18 @@ export default function SettingsPage() {
     }
   };
 
-  /* ── Notification preferences (local only for now) ── */
+  /* ✀ Notification preferences (local only for now) ✀ */
   const [emailNotif, setEmailNotif] = useState(true);
   const [inAppNotif, setInAppNotif] = useState(true);
 
-  /* ── 2FA ── */
+  /* ✀ 2FA ✀ */
   const { data: twoFaData } = use2faStatus();
   const twoFaEnabled = twoFaData?.data?.enabled ?? false;
-  const [twoFaModal, setTwoFaModal] = useState<"setup" | "disable" | null>(
+  const [twoFaModal, setTwoFaModal] = useState<"celup" | "disable" | null>(
     null
   );
 
-  /* ── Danger zone ── */
+  /* ✀ Danger zone ✀ */
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
@@ -151,8 +151,8 @@ export default function SettingsPage() {
         </p>
       </div>
 
-      <div className="max-w-2xl space-y-6">
-        {/* ── Security ── */}
+      <div className="max-w-2x space-y-6">
+        {/* ✀ Security ✀ */}
         <div className="bg-white rounded-xl border border-gray-100 p-6">
           <div className="flex items-center gap-2 mb-5">
             <Shield className="w-4 h-4 text-gray-500" />
@@ -177,6 +177,7 @@ export default function SettingsPage() {
                 <button
                   type="button"
                   onClick={() => setShowCurrent((s) => !s)}
+                  aria-label={showCurrent ? "Hide current password" : "Show current password"}
                   className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
                 >
                   {showCurrent ? (
@@ -207,6 +208,7 @@ export default function SettingsPage() {
                 <button
                   type="button"
                   onClick={() => setShowNew((s) => !s)}
+                  aria-label={showNew ? "Hide new password" : "Show new password"}
                   className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
                 >
                   {showNew ? (
@@ -242,11 +244,11 @@ export default function SettingsPage() {
 
             {pwMsg && (
               <p
-                className={`text-sm ${
+                className={"text-sm " + 
                   pwMsg.type === "success"
                     ? "text-emerald-600"
                     : "text-red-500"
-                }`}
+                }
               >
                 {pwMsg.text}
               </p>
@@ -278,7 +280,7 @@ export default function SettingsPage() {
           </div>
         </div>
 
-        {/* ── Notifications ── */}
+        {/* ✀ Notifications ✀ */}
         <div className="bg-white rounded-xl border border-gray-100 p-6">
           <div className="flex items-center gap-2 mb-4">
             <Bell className="w-4 h-4 text-gray-500" />
@@ -302,7 +304,7 @@ export default function SettingsPage() {
           </div>
         </div>
 
-        {/* ── Appearance ── */}
+        {/* ✀ Appearance ✀ */}
         <div className="bg-white rounded-xl border border-gray-100 p-6">
           <div className="flex items-center gap-2 mb-4">
             <Palette className="w-4 h-4 text-gray-500" />
@@ -330,7 +332,7 @@ export default function SettingsPage() {
           </div>
         </div>
 
-        {/* ── Danger zone ── */}
+        {/* ✀ Danger zone ✀ */}
         <div className="bg-white rounded-xl border border-red-100 p-6">
           <h2 className="text-sm font-semibold text-red-600 mb-1">
             Danger zone
@@ -348,20 +350,21 @@ export default function SettingsPage() {
             </button>
           ) : (
             <div className="flex items-center gap-3">
+              <span className="text-sm text-gray-600">Are you sure?</span>
+              <button
+                type="button"
+                onClick={() => setConfirmDelete(false)}
+                className="px-4 py-2 text-sm font-medium rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50"
+              >
+                Cancel
+              </button>
               <button
                 type="button"
                 onClick={handleDeleteAccount}
                 disabled={deleting}
-                className="px-5 py-2.5 text-sm font-medium rounded-lg bg-red-600 text-white hover:bg-red-700 disabled:opacity-50 transition-colors"
+                className="px-4 py-2 text-sm font-medium rounded-lg bg-red-600 text-white hover:bg-red-700 disabled:opacity-50"
               >
-                {deleting ? "Deleting..." : "Yes, delete my account"}
-              </button>
-              <button
-                type="button"
-                onClick={() => setConfirmDelete(false)}
-                className="px-5 py-2.5 text-sm font-medium rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50 transition-colors"
-              >
-                Cancel
+                {deleting ? "Deleting..." : "Delete permanently"}
               </button>
             </div>
           )}
