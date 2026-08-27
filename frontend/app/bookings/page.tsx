@@ -215,9 +215,11 @@ export default function MyBookingsPage() {
             disabled={isRefetching}
             className="inline-flex items-center gap-2 mt-4 px-4 py-2 bg-gray-900 text-white text-sm font-medium rounded-lg hover:bg-gray-700 transition-colors disabled:opacity-40"
           >
-            <Loader2
-              className={`w-4 h-4 ${isRefetching ? "animate-spin" : ""}`}
-            />
+            {isRefetching ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
+              <BookOpen className="w-4 h-4" />
+            )}
             {isRefetching ? "Retrying…" : "Retry"}
           </button>
         </div>
