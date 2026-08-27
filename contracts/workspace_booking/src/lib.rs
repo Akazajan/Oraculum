@@ -270,11 +270,11 @@ impl WorkspaceBookingContract {
 
         let mut list: Vec<String> = env
             .storage()
-            .instance()
+            .persistent()
             .get(&DataKey::WorkspaceList)
             .unwrap_or(Vec::new(&env));
         list.push_back(id.clone());
-        env.storage().instance().set(&DataKey::WorkspaceList, &list);
+        env.storage().persistent().set(&DataKey::WorkspaceList, &list);
 
         env.events().publish(
             (symbol_short!("ws_reg"), id),
@@ -643,7 +643,7 @@ impl WorkspaceBookingContract {
     /// Return all registered workspace IDs (in registration order).
     pub fn get_all_workspaces(env: Env) -> Vec<String> {
         env.storage()
-            .instance()
+            .persistent()
             .get(&DataKey::WorkspaceList)
             .unwrap_or(Vec::new(&env))
     }

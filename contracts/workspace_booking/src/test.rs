@@ -901,3 +901,46 @@ fn test_concurrent_booking_conflict_same_slot() {
     );
     assert_eq!(result, Err(Ok(Error::BookingConflict)));
 }
+
+// ── FIX #248: Regression tests for persistent workspace list storage ────────
+
+#[test]
+fn test_get_all_workspaces_persistent_storage() {
+    let env = Env::default();
+    let contract_id = setup_contract(&env);
+    let client = WorkspaceBookingContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let token = Address::generate(&env);
+
+    env.mock_all_auths();
+    client.initialize(&admin, &token);
+
+    // Verify empty list initially
+    let initial_workspaces = client.get_all_workspaces();
+    assert_eq!(initial_workspaces.len(), 0u32);
+
+    // Register multiple workspaces to verify persistent accumulation and order
+    let ws_ids = ["ws-001", "ws-002", "ws-003", "ws-004", "ws-005"];
+    for ws_id in ws_ids.iter() {
+        client.register_workspace(
+            &admin,
+            &String::from_str(&env, ws_id),
+            &String::from_str(&env, "Workspace Name"),
+            &WorkspaceType::DedicatedDesk,
+            &4u32,
+            &250u128,
+        );
+    }
+
+    let all_workspaces = client.get_all_workspaces();
+    assert_eq!(all_workspaces.len(), 5u32);
+
+    for (i, expected_id) in ws_ids.iter().enumerate() {
+        assert_eq!(
+            all_workspaces.get(i as u32).unwrap(),
+            String::from_str(&env, expected_id)
+        );
+    }
+}
+
