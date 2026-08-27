@@ -5,6 +5,8 @@
 
 mod errors;
 mod types;
+#[cfg(test)]
+mod test;
 
 use errors::Error;
 use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, Env};
@@ -46,36 +48,40 @@ impl ResourceCreditsContract {
         recipient: Address,
         amount: u128,
     ) -> Result<(), Error> {
-        if amount == 0 {
-            return Err(Error::InvalidAmount);
-        }
+        // Authorize the caller first so unauthenticated callers receive
+        // `Unauthorized` rather than a descriptive validation error.
         let admin: Address = env
             .storage()
             .instance()
             .get(&DataKey::Admin)
             .ok_or(Error::AdminNotSet)?;
+        caller.require_auth();
         if caller != admin {
             return Err(Error::Unauthorized);
         }
-        caller.require_auth();
+        if amount == 0 {
+            return Err(Error::InvalidAmount);
+        }
 
         let bal: u128 = env
             .storage()
             .persistent()
             .get(&DataKey::Balance(recipient.clone()))
             .unwrap_or(0u128);
+        let new_bal = bal.checked_add(amount).ok_or(Error::Overflow)?;
         env.storage()
             .persistent()
-            .set(&DataKey::Balance(recipient.clone()), &(bal + amount));
+            .set(&DataKey::Balance(recipient.clone()), &new_bal);
 
         let supply: u128 = env
             .storage()
             .instance()
             .get(&DataKey::TotalSupply)
             .unwrap_or(0u128);
+        let new_supply = supply.checked_add(amount).ok_or(Error::Overflow)?;
         env.storage()
             .instance()
-            .set(&DataKey::TotalSupply, &(supply + amount));
+            .set(&DataKey::TotalSupply, &new_supply);
 
         env.events()
             .publish((symbol_short!("mint"), recipient), amount);
