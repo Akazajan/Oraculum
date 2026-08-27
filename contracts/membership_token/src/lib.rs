@@ -1,3 +1,5 @@
+#![no_std]
+#![allow(deprecated)]
 #no_std
 
 use soroban_sdk::{

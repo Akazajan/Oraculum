@@ -176,7 +176,13 @@ function BookingRow({ booking, onCancelled }: { booking: Booking; onCancelled: (
 
 export default function MyBookingsPage() {
   const [page, setPage] = useState(1);
-  const { data, isLoading, isError, refetch } = useGetMyBookings(page, 10);
+  const {
+    data,
+    isLoading,
+    isError,
+    isRefetching,
+    refetch,
+  } = useGetMyBookings(page, 10);
 
   const bookings = data?.data ?? [];
   const meta = data?.meta;
@@ -212,6 +218,19 @@ export default function MyBookingsPage() {
         <div className="text-center py-16 text-gray-500">
           <BookOpen className="w-10 h-10 mx-auto mb-3 text-gray-300" />
           <p className="font-medium">Failed to load bookings</p>
+          <button
+            type="button"
+            onClick={() => void refetch()}
+            disabled={isRefetching}
+            className="inline-flex items-center gap-2 mt-4 px-4 py-2 bg-gray-900 text-white text-sm font-medium rounded-lg hover:bg-gray-700 transition-colors disabled:opacity-40"
+          >
+            {isRefetching ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
+              <BookOpen className="w-4 h-4" />
+            )}
+            {isRefetching ? "Retrying…" : "Retry"}
+          </button>
         </div>
       ) : bookings.length === 0 ? (
         <div className="text-center py-16 text-gray-500">
