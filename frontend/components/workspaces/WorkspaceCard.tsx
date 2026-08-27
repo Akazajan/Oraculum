@@ -32,9 +32,9 @@ export default function WorkspaceCard({ workspace }: Props) {
   });
 
   return (
-    <div className="bg-white rounded-xl border border-gray-100 overflow-hidden hover:shadow-md transition-shadow group">
+    <div className="bg-white rounded-xl border border-gray-100 overflow-hidden hover:shadow-md transition-shadow group flex flex-col h-full">
       {/* Image or placeholder */}
-      <div className="h-40 bg-gradient-to-br from-gray-100 to-gray-200 relative">
+      <div className="h-40 bg-gradient-to-br from-gray-100 to-gray-200 relative flex-shrink-0">
         {workspace.images?.[0] ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img
@@ -57,28 +57,28 @@ export default function WorkspaceCard({ workspace }: Props) {
       </div>
 
       {/* Body */}
-      <div className="p-4">
-        <h3 className="font-semibold text-gray-900 text-sm truncate">
+      <div className="p-3 sm:p-4 flex flex-col h-full">
+        <h3 className="font-semibold text-gray-900 text-sm line-clamp-2 break-words">
           {workspace.name}
         </h3>
         {workspace.description && (
-          <p className="text-xs text-gray-500 mt-1 line-clamp-2">
+          <p className="text-xs text-gray-500 mt-1 line-clamp-2 break-words">
             {workspace.description}
           </p>
         )}
 
-        <div className="flex items-center gap-4 mt-3 text-xs text-gray-500">
-          <span className="flex items-center gap-1">
-            <Users className="w-3.5 h-3.5" />
-            {workspace.totalSeats} seat{workspace.totalSeats !== 1 ? "s" : ""}
+        <div className="flex flex-wrap gap-2 sm:gap-4 mt-3 text-xs text-gray-500">
+          <span className="flex items-center gap-1 whitespace-nowrap">
+            <Users className="w-3.5 h-3.5 flex-shrink-0" />
+            <span className="truncate">{workspace.totalSeats} seat{workspace.totalSeats !== 1 ? "s" : ""}</span>
           </span>
           {workspace.amenities?.slice(0, 2).map((a) => (
-            <span key={a} className="truncate">{a}</span>
+            <span key={a} className="truncate max-w-[120px]">{a}</span>
           ))}
         </div>
 
-        <div className="flex items-center justify-between mt-4">
-          <div>
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mt-4 pt-3 sm:pt-4 border-t border-gray-100 sm:border-t-0">
+          <div className="flex items-baseline">
             <span className="text-base font-bold text-gray-900">
               {hourlyNaira}
             </span>
@@ -86,7 +86,7 @@ export default function WorkspaceCard({ workspace }: Props) {
           </div>
           <Link
             href={`/workspaces/${workspace.id}`}
-            className="flex items-center gap-1 px-3 py-1.5 bg-gray-900 text-white text-xs font-medium rounded-lg hover:bg-gray-700 transition-colors group-hover:bg-gray-700"
+            className="flex items-center justify-center sm:justify-start gap-1 px-3 py-1.5 bg-gray-900 text-white text-xs font-medium rounded-lg hover:bg-gray-700 transition-colors group-hover:bg-gray-700 whitespace-nowrap"
           >
             View
             <ArrowRight className="w-3 h-3" />
