@@ -23,6 +23,8 @@ function InvoiceRow({ invoice }: { invoice: Invoice }) {
   });
 
   async function handleDownload() {
+    // Prevent duplicate concurrent downloads for the same invoice.
+    if (downloading) return;
     setDownloading(true);
     try {
       const token = storage.getToken();
@@ -31,7 +33,15 @@ function InvoiceRow({ invoice }: { invoice: Invoice }) {
       const res = await fetch(`${API_BASE}/invoices/${invoice.id}/download`, {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
-      if (!res.ok) throw new Error("Download failed");
+      if (!res.ok) {
+        throw new Error(
+          res.status === 404
+            ? `Invoice ${invoice.invoiceNumber} could not be found for download.`
+            : res.status === 401 || res.status === 403
+              ? "You are not authorized to download this invoice."
+              : `Unable to download this invoice (status ${res.status}). Please try again.`,
+        );
+      }
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
@@ -39,8 +49,10 @@ function InvoiceRow({ invoice }: { invoice: Invoice }) {
       a.download = `${invoice.invoiceNumber}.pdf`;
       a.click();
       URL.revokeObjectURL(url);
-    } catch {
-      toast.error("Failed to download invoice");
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : "Failed to download invoice",
+      );
     } finally {
       setDownloading(false);
     }
@@ -83,14 +95,20 @@ function InvoiceRow({ invoice }: { invoice: Invoice }) {
         <button
           onClick={handleDownload}
           disabled={downloading}
+          aria-busy={downloading}
           className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-200 text-xs font-medium text-gray-600 rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-40"
         >
           {downloading ? (
-            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            <>
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              Downloading…
+            </>
           ) : (
-            <Download className="w-3.5 h-3.5" />
+            <>
+              <Download className="w-3.5 h-3.5" />
+              PDF
+            </>
           )}
-          PDF
         </button>
       </div>
     </div>
