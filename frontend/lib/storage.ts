@@ -3,12 +3,13 @@ import { User } from "./types/user";
 const AUTH_TOKEN_KEY = "authToken";
 const AUTH_USER_KEY = "authUser";
 
-// The `authToken` cookie is read by Next.js middleware (server-side) to authorize
-// requests. It must only be transmitted over an encrypted transport, so it is
-// marked `Secure` whenever the page is served over HTTPS. On plain-HTTP origins
-// (e.g. local development) the flag is omitted so the cookie remains usable, but
-// it is never exposed over an unencrypted connection in production. `SameSite=Lax`
-// is set to mitigate CSRF while still permitting same-site navigations/fetch.
+/**
+ * NOTE (#219): Cookies set via `document.cookie` (client-side JS) are inherently
+ * accessible to JavaScript and cannot be marked httpOnly from the client.
+ * For full httpOnly protection the backend should set the token cookie in the
+ * Set-Cookie response header. This cookie is used only for Next.js middleware
+ * reads; sensitive operations use the Authorization header via apiClient.setToken().
+ */
 function authCookieAttributes(): string {
   const base = "; path=/; SameSite=Lax";
   const secure =
@@ -29,8 +30,7 @@ export const storage = {
   setToken(token: string): void {
     if (typeof window === "undefined") return;
     localStorage.setItem(AUTH_TOKEN_KEY, token);
-    // set the token to cookie as well for middleware access
-    document.cookie = `authToken=${token}; max-age=${1 * 24 * 60 * 60}${authCookieAttributes()}`; // 1 day - Access Token
+    document.cookie = `authToken=${token}; max-age=${1 * 24 * 60 * 60}${authCookieAttributes()}`;
   },
 
   removeToken(): void {
@@ -42,7 +42,7 @@ export const storage = {
   getUser(): User | null {
     if (typeof window === "undefined") return null;
     const user = localStorage.getItem(AUTH_USER_KEY);
-    return user ? JSON.parse(user) : null;
+    return user ? (JSON.parse(user) as User) : null;
   },
 
   setUser(user: unknown): void {
