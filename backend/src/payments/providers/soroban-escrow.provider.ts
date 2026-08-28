@@ -2,13 +2,19 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 
 /**
- * Handles on-chain escrow recording for long-term bookings (MONTHLY+).
+ * Bridges long-term booking payments to the Soroban payment escrow contract.
  *
- * NOTE: Full Stellar SDK integration requires @stellar/stellar-sdk.
- * Run: npm install @stellar/stellar-sdk
+ * The Stellar SDK integration is intentionally represented by deterministic
+ * transaction-hash stubs until the SDK client is added. The public methods
+ * already match the calls made by the payment webhook, so replacing the
+ * stubs with SDK transactions will not change the backend contract.
  *
- * The methods below are stubs that log intent and return placeholder values
- * until the SDK is installed and the contract IDs are configured.
+ * Environment variables:
+ * - `PAYMENT_ESCROW_CONTRACT_ID`: deployed payment escrow contract ID.
+ * - `STELLAR_NETWORK`: Stellar network name, defaulting to `testnet`.
+ * - `STELLAR_RPC_URL`: Soroban RPC endpoint, defaulting to the testnet URL.
+ * - `STELLAR_BENEFICIARY_ADDRESS`: escrow beneficiary address. This value is
+ *   read by the payment webhook when it creates an escrow.
  */
 @Injectable()
 export class SorobanEscrowProvider {
