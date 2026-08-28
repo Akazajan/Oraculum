@@ -90,8 +90,8 @@ describe('HandleWebhookProvider booking-payment confirmation', () => {
 
     const provider = new HandleWebhookProvider(
       {} as never,
-      {} as never,
-      {} as never,
+      { findOne: jest.fn().mockResolvedValue(store.booking) } as never,
+      { findOne: jest.fn().mockResolvedValue(store.user) } as never,
       paystackProvider,
       sorobanEscrowProvider,
       bookingsService,
@@ -130,7 +130,7 @@ describe('HandleWebhookProvider booking-payment confirmation', () => {
         id: userId,
         email: 'member@example.com',
         fullName: 'Test Member',
-        membershipStatus: MembershipStatus.PENDING,
+        membershipStatus: MembershipStatus.INACTIVE,
         memberSince: null,
       } as User,
     };
