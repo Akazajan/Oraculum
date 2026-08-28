@@ -1,7 +1,8 @@
 "use client";
 
-import { use } from "react";
+import { use, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import DashboardLayout from "@/components/dashboard/DashboardLayout";
 import { useGetWorkspaceById } from "@/lib/react-query/hooks/workspaces/useGetWorkspaceById";
 import {
@@ -12,6 +13,7 @@ import {
   CalendarPlus,
   AlertCircle,
   RefreshCcw,
+  Loader2,
 } from "lucide-react";
 
 const TYPE_LABELS: Record<string, string> = {
@@ -30,6 +32,17 @@ export default function WorkspaceDetailPage({
   const { id } = use(params);
   const { data, isLoading, isError, refetch } = useGetWorkspaceById(id);
   const workspace = data?.data;
+
+  // #351: track in-flight booking navigation so the CTA is disabled, shows a
+  // spinner, and duplicate requests are prevented while the booking form loads.
+  const router = useRouter();
+  const [bookingPending, setBookingPending] = useState(false);
+
+  function handleBookWorkspace() {
+    if (bookingPending || !workspace) return;
+    setBookingPending(true);
+    router.push(`/bookings/new?workspaceId=${workspace.id}`);
+  }
 
   const hourlyNaira = workspace
     ? (workspace.hourlyRate / 100).toLocaleString("en-NG", {
@@ -213,13 +226,25 @@ export default function WorkspaceDetailPage({
               </div>
 
               {workspace.isActive ? (
-                <Link
-                  href={`/bookings/new?workspaceId=${workspace.id}`}
-                  className="flex items-center justify-center gap-2 w-full py-2.5 bg-gray-900 text-white text-sm font-medium rounded-lg hover:bg-gray-700 transition-colors"
+                <button
+                  type="button"
+                  onClick={handleBookWorkspace}
+                  disabled={bookingPending}
+                  aria-busy={bookingPending}
+                  className="flex items-center justify-center gap-2 w-full py-2.5 bg-gray-900 text-white text-sm font-medium rounded-lg hover:bg-gray-700 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
                 >
-                  <CalendarPlus className="w-4 h-4" />
-                  Book this space
-                </Link>
+                  {bookingPending ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" />
+                      Preparing booking…
+                    </>
+                  ) : (
+                    <>
+                      <CalendarPlus className="w-4 h-4" aria-hidden="true" />
+                      Book this space
+                    </>
+                  )}
+                </button>
               ) : (
                 <button
                   disabled
