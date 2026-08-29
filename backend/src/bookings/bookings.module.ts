@@ -15,6 +15,7 @@ import { CacheInvalidationProvider } from '../common/providers/cache-invalidatio
 import { ExportBookingsProvider } from './providers/export-bookings.provider';
 import { CsvExportService } from '../common/csv-export/csv-export.service';
 import { BookingReminderScheduler } from './providers/booking-reminder.provider';
+import { RecurringBookingService } from '../modules/bookings/recurring-booking';
 
 @Module({
   imports: [TypeOrmModule.forFeature([Booking, User]), WorkspacesModule],
@@ -31,6 +32,7 @@ import { BookingReminderScheduler } from './providers/booking-reminder.provider'
     ExportBookingsProvider,
     CsvExportService,
     BookingReminderScheduler,
+    RecurringBookingService,
   ],
   exports: [BookingsService],
 })
