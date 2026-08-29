@@ -13,6 +13,7 @@ import { WarmWorkspaceCacheProvider } from './providers/warm-workspace-cache.pro
 import { AdminWorkspacesController } from './admin-workspaces.controller';
 import { AuditModule } from '../audit/audit.module';
 import { CacheInvalidationProvider } from '../common/providers/cache-invalidation.provider';
+import { WorkspaceSyncService } from '../workspace_sync';
 
 @Module({
   imports: [TypeOrmModule.forFeature([Workspace]), AuditModule],
@@ -27,6 +28,7 @@ import { CacheInvalidationProvider } from '../common/providers/cache-invalidatio
     CheckWorkspaceAvailabilityProvider,
     WarmWorkspaceCacheProvider,
     CacheInvalidationProvider,
+    WorkspaceSyncService, // #206 — was dead code; registered here so DI can wire it
   ],
   exports: [WorkspacesService, FindWorkspaceByIdProvider, FindAllWorkspacesProvider],
 })
