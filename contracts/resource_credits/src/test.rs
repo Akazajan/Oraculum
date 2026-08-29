@@ -157,3 +157,33 @@ fn test_mint_total_supply_overflow_rejected() {
     assert_eq!(result, Err(Ok(super::Error::Overflow)));
     assert_eq!(client.total_supply(), u128::MAX);
 }
+
+// ── transfer_credits self-transfer rejection ───────────────────────────────
+
+#[test]
+fn test_transfer_credits_self_transfer_rejected() {
+    let (env, admin, _token, client) = setup();
+    let member = Address::generate(&env);
+
+    client.mint_credits(&admin, &member, &1_000u128);
+    assert_eq!(client.balance(&member), 1_000u128);
+
+    let result = client.try_transfer_credits(&member, &member, &500u128);
+    assert_eq!(result, Err(Ok(super::Error::SelfTransfer)));
+    assert_eq!(client.balance(&member), 1_000u128);
+    assert_eq!(client.total_supply(), 1_000u128);
+}
+
+#[test]
+fn test_transfer_credits_success() {
+    let (env, admin, _token, client) = setup();
+    let from = Address::generate(&env);
+    let to = Address::generate(&env);
+
+    client.mint_credits(&admin, &from, &1_000u128);
+    client.transfer_credits(&from, &to, &300u128);
+
+    assert_eq!(client.balance(&from), 700u128);
+    assert_eq!(client.balance(&to), 300u128);
+    assert_eq!(client.total_supply(), 1_000u128);
+}
