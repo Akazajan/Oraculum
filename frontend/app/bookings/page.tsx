@@ -188,6 +188,11 @@ export default function MyBookingsPage() {
   const bookings = data?.data ?? [];
   const meta = data?.meta;
 
+  function goToPage(nextPage: number) {
+    setPage(nextPage);
+    window.scrollTo({ top: 0, behavior: "instant" });
+  }
+
   return (
     <DashboardLayout>
       <div className="mb-8 flex items-start justify-between gap-4">
@@ -267,16 +272,14 @@ export default function MyBookingsPage() {
               </p>
               <div className="flex gap-2">
                 <button
-                  onClick={() => setPage((p) => Math.max(1, p - 1))}
+                  onClick={() => goToPage(page - 1)}
                   disabled={page === 1}
                   className="px-3 py-1.5 text-sm border border-gray-200 rounded-lg hover:bg-gray-50 disabled:opacity-40"
                 >
                   Previous
                 </button>
                 <button
-                  onClick={() =>
-                    setPage((p) => Math.min(meta.totalPages, p + 1))
-                  }
+                  onClick={() => goToPage(page + 1)}
                   disabled={page === meta.totalPages}
                   className="px-3 py-1.5 text-sm border border-gray-200 rounded-lg hover:bg-gray-50 disabled:opacity-40"
                 >
