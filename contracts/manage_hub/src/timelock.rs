@@ -2,6 +2,8 @@
 //!
 //! Provides a [`TimeLockManager`] that queues proposed actions, enforces a
 //! configurable delay, and only allows execution once the delay has elapsed.
+//! An optional admin-configured expiry window closes the execution window so
+//! that stale operations cannot be executed indefinitely after the delay.
 
 use crate::errors::Error;
 use soroban_sdk::{contracterror, contracttype, Address, Env, String, Vec};
@@ -51,6 +53,16 @@ pub enum TimeLockDataKey {
     PendingList,
     /// The configured delay duration in seconds
     DelayDuration,
+    /// The configured execution expiry window in seconds.
+    ///
+    /// Zero means "no expiry": a queued action remains executable
+    /// indefinitely once its delay has elapsed.
+    ExpiryWindow,
+    /// Per-entry execution deadline (ledger timestamp), derived from the
+    /// [`ExpiryWindow`](TimeLockDataKey::ExpiryWindow) at queue time.
+    ///
+    /// Keyed by `action_id`. Absent for entries queued with no expiry.
+    Expiry(u64),
 }
 
 /// Errors specific to the timelock module.
@@ -64,6 +76,8 @@ pub enum TimeLockError {
     Unauthorized = 104,
     PendingLimitReached = 105,
     InvalidDelay = 106,
+    /// The queued action's execution window has closed.
+    OperationExpired = 107,
 }
 
 impl From<TimeLockError> for Error {
@@ -95,6 +109,33 @@ impl TimeLockManager {
         env.storage()
             .instance()
             .get(&TimeLockDataKey::DelayDuration)
+            .unwrap_or(0)
+    }
+
+    /// Set the execution expiry window (in seconds). Admin only.
+    ///
+    /// A queued action may only be executed within this window after its
+    /// delay has elapsed; once the window closes the action expires and can
+    /// no longer be executed. Zero disables the expiry behaviour entirely.
+    pub fn set_expiry_window(
+        env: &Env,
+        admin: &Address,
+        window_seconds: u64,
+    ) -> Result<(), TimeLockError> {
+        admin.require_auth();
+
+        env.storage()
+            .instance()
+            .set(&TimeLockDataKey::ExpiryWindow, &window_seconds);
+
+        Ok(())
+    }
+
+    /// Get the configured execution expiry window (defaults to 0 if not set).
+    pub fn get_expiry_window(env: &Env) -> u64 {
+        env.storage()
+            .instance()
+            .get(&TimeLockDataKey::ExpiryWindow)
             .unwrap_or(0)
     }
 
@@ -136,6 +177,18 @@ impl TimeLockManager {
         env.storage()
             .persistent()
             .set(&TimeLockDataKey::Entry(action_id), &entry);
+
+        // Persist the expiry deadline when an execution window is configured so
+        // that execution is refused after it closes.
+        let expiry_window = Self::get_expiry_window(env);
+        if expiry_window > 0 {
+            let expires_at = execute_after
+                .checked_add(expiry_window)
+                .ok_or(TimeLockError::InvalidDelay)?;
+            env.storage()
+                .persistent()
+                .set(&TimeLockDataKey::Expiry(action_id), &expires_at);
+        }
 
         // Append to pending list
         let mut pending: Vec<u64> = env
@@ -187,6 +240,19 @@ impl TimeLockManager {
             return Err(TimeLockError::DelayNotElapsed);
         }
 
+        // Reject execution once the operation's expiry window has closed:
+        // the deadline itself is the last instant execution is allowed, so
+        // reaching it means the operation has expired.
+        if let Some(expires_at) = env
+            .storage()
+            .persistent()
+            .get::<TimeLockDataKey, u64>(&TimeLockDataKey::Expiry(action_id))
+        {
+            if now >= expires_at {
+                return Err(TimeLockError::OperationExpired);
+            }
+        }
+
         let updated = TimeLockEntry {
             executed: true,
             ..entry.clone()
@@ -196,8 +262,11 @@ impl TimeLockManager {
             .persistent()
             .set(&TimeLockDataKey::Entry(action_id), &updated);
 
-        // Remove from pending list
+        // Remove from pending list and drop the now-irrelevant expiry record.
         Self::remove_from_pending(env, action_id);
+        env.storage()
+            .persistent()
+            .remove(&TimeLockDataKey::Expiry(action_id));
 
         env.events().publish(
             (String::from_str(env, "TimeLockExecuted"), action_id),
@@ -242,6 +311,9 @@ impl TimeLockManager {
             .set(&TimeLockDataKey::Entry(action_id), &updated);
 
         Self::remove_from_pending(env, action_id);
+        env.storage()
+            .persistent()
+            .remove(&TimeLockDataKey::Expiry(action_id));
 
         env.events().publish(
             (String::from_str(env, "TimeLockCancelled"), action_id),
@@ -469,5 +541,123 @@ mod tests {
         let (env, admin) = setup();
         let result = TimeLockManager::set_delay(&env, &admin, 0);
         assert_eq!(result, Err(TimeLockError::InvalidDelay));
+    }
+
+    // -----------------------------------------------------------------------
+    // C53 — Enforce timelock expiry
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_expired_operation_cannot_execute() {
+        let (env, admin) = setup();
+        TimeLockManager::set_delay(&env, &admin, 100).unwrap();
+        TimeLockManager::set_expiry_window(&env, &admin, 50).unwrap();
+
+        let proposer = Address::generate(&env);
+        // Both actions are queued at t=0: window is [100, 150).
+        let action_id = TimeLockManager::queue_action(&env, &proposer, ActionType::SetAdmin).unwrap();
+        let action2 = TimeLockManager::queue_action(&env, &proposer, ActionType::SetUsdcContract).unwrap();
+
+        // Inside the window (t=120, still < 150) execution succeeds.
+        env.ledger().set_timestamp(120);
+        let caller = Address::generate(&env);
+        assert!(TimeLockManager::execute_action(&env, &caller, action_id).is_ok());
+
+        // After the window closes (t=200 >= 150) execution is rejected.
+        let result = TimeLockManager::execute_action(&env, &caller, action2);
+        assert_eq!(result, Err(TimeLockError::OperationExpired));
+    }
+
+    #[test]
+    fn test_expired_operation_at_deadline_is_rejected() {
+        let (env, admin) = setup();
+        TimeLockManager::set_delay(&env, &admin, 100).unwrap();
+        TimeLockManager::set_expiry_window(&env, &admin, 50).unwrap();
+
+        let proposer = Address::generate(&env);
+        let action_id = TimeLockManager::queue_action(&env, &proposer, ActionType::SetAdmin).unwrap();
+
+        // At exactly expires_at (execute_after + window) execution is refused.
+        env.ledger().set_timestamp(150);
+        let caller = Address::generate(&env);
+        let result = TimeLockManager::execute_action(&env, &caller, action_id);
+        assert_eq!(result, Err(TimeLockError::OperationExpired));
+    }
+
+    #[test]
+    fn test_inside_window_executes_once() {
+        let (env, admin) = setup();
+        TimeLockManager::set_delay(&env, &admin, 100).unwrap();
+        TimeLockManager::set_expiry_window(&env, &admin, 50).unwrap();
+
+        let proposer = Address::generate(&env);
+        let action_id = TimeLockManager::queue_action(&env, &proposer, ActionType::SetAdmin).unwrap();
+
+        // Execute just after the delay elapses, still inside the window.
+        env.ledger().set_timestamp(101);
+        let caller = Address::generate(&env);
+        let entry = TimeLockManager::execute_action(&env, &caller, action_id).unwrap();
+        assert!(entry.executed);
+
+        // A second execution attempt fails — even inside the window.
+        let result = TimeLockManager::execute_action(&env, &caller, action_id);
+        assert_eq!(result, Err(TimeLockError::AlreadyExecuted));
+    }
+
+    #[test]
+    fn test_cancellation_prevents_expired_execution() {
+        let (env, admin) = setup();
+        TimeLockManager::set_delay(&env, &admin, 100).unwrap();
+        TimeLockManager::set_expiry_window(&env, &admin, 50).unwrap();
+
+        let proposer = Address::generate(&env);
+        let action_id = TimeLockManager::queue_action(&env, &proposer, ActionType::SetAdmin).unwrap();
+
+        let entry = TimeLockManager::cancel_action(&env, &proposer, action_id).unwrap();
+        assert!(entry.cancelled);
+
+        // Later execution is refused whether inside or outside the window.
+        env.ledger().set_timestamp(200);
+        let result = TimeLockManager::execute_action(&env, &proposer, action_id);
+        assert_eq!(result, Err(TimeLockError::AlreadyCancelled));
+    }
+
+    #[test]
+    fn test_no_expiry_window_means_no_expiration() {
+        let (env, admin) = setup();
+        TimeLockManager::set_delay(&env, &admin, 100).unwrap();
+        // No expiry window configured — defaults to 0.
+
+        let proposer = Address::generate(&env);
+        let action_id = TimeLockManager::queue_action(&env, &proposer, ActionType::SetAdmin).unwrap();
+
+        // Far beyond any plausible window the operation still executes.
+        env.ledger().set_timestamp(100_000);
+        let caller = Address::generate(&env);
+        let entry = TimeLockManager::execute_action(&env, &caller, action_id).unwrap();
+        assert!(entry.executed);
+    }
+
+    #[test]
+    fn test_expiry_record_removed_after_execution_and_cancellation() {
+        let (env, admin) = setup();
+        TimeLockManager::set_delay(&env, &admin, 100).unwrap();
+        TimeLockManager::set_expiry_window(&env, &admin, 50).unwrap();
+
+        let proposer = Address::generate(&env);
+        let id1 = TimeLockManager::queue_action(&env, &proposer, ActionType::SetAdmin).unwrap();
+        let id2 = TimeLockManager::queue_action(&env, &proposer, ActionType::SetUsdcContract).unwrap();
+        let id3 = TimeLockManager::queue_action(&env, &proposer, ActionType::SetPauseConfig).unwrap();
+
+        env.ledger().set_timestamp(120);
+        let caller = Address::generate(&env);
+        TimeLockManager::execute_action(&env, &caller, id1).unwrap();
+        TimeLockManager::cancel_action(&env, &proposer, id2).unwrap();
+
+        // id1 executed, id2 cancelled: their expiry records are cleared.
+        assert!(!env.storage().persistent().has(&TimeLockDataKey::Expiry(id1)));
+        assert!(!env.storage().persistent().has(&TimeLockDataKey::Expiry(id2)));
+        // id3 is still pending, so its expiry record remains.
+        assert!(env.storage().persistent().has(&TimeLockDataKey::Expiry(id3)));
     }
 }
