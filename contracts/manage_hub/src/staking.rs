@@ -101,6 +101,13 @@ impl StakingModule {
         if tier.base_rate_bps == 0 || tier.base_rate_bps > 10_000 {
             return Err(Error::InvalidPaymentAmount);
         }
+        // Cap lock_duration to the same maximum applied to the global config
+        // (2 years in ledgers ≈ 12,614,400) so that `now + lock_duration`
+        // can never overflow a u64 ledger timestamp.
+        const MAX_LOCK_DURATION_LEDGERS: u64 = 12_614_400;
+        if tier.lock_duration > MAX_LOCK_DURATION_LEDGERS {
+            return Err(Error::InvalidPaymentAmount);
+        }
 
         if env
             .storage()
