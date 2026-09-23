@@ -62,6 +62,8 @@ pub enum Error {
     StakingTierNotFound = 57,
     InvalidPaginationParams = 58,
     TierMismatch = 59,
+    /// Spender address is invalid (zero-address, empty, or equal to owner).
+    InvalidSpender = 60,
 }
 
 impl From<Error> for u32 {
@@ -133,6 +135,7 @@ impl TryFrom<u32> for Error {
             57 => Ok(Error::StakingTierNotFound),
             58 => Ok(Error::InvalidPaginationParams),
             59 => Ok(Error::TierMismatch),
+            60 => Ok(Error::InvalidSpender),
             _ => Err(v),
         }
     }

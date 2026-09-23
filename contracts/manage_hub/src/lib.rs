@@ -87,6 +87,7 @@ mod validation;
 mod edge_case_tests;
 #[cfg(test)]
 mod staking_overflow_tests;
+mod allowance_spender_tests;
 
 use attendance_log::{AttendanceLog, AttendanceLogModule};
 use batch::BatchModule;
