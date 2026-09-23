@@ -3892,6 +3892,72 @@ fn test_royalty_validation_fail() {
 }
 
 #[test]
+#[should_panic(expected = "Error(Contract, #8)")]
+fn test_royalty_zero_share_recipient_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(Contract, ());
+    let client = ContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+
+    let token_id = BytesN::<32>::random(&env);
+    let owner = Address::generate(&env);
+    client.issue_token(&token_id, &owner, &(env.ledger().timestamp() + 1000));
+
+    let recipient = Address::generate(&env);
+    let recipients = vec![
+        &env,
+        types::RoyaltyRecipient {
+            address: recipient,
+            percentage: 0, // 0% share must be rejected
+        },
+    ];
+
+    client.set_royalty(&token_id, &recipients);
+}
+
+#[test]
+fn test_royalty_exact_full_allocation_accepted() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(Contract, ());
+    let client = ContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+
+    let token_id = BytesN::<32>::random(&env);
+    let owner = Address::generate(&env);
+    client.issue_token(&token_id, &owner, &(env.ledger().timestamp() + 1000));
+
+    // Exactly 100% (10,000 bps) split across recipients must be accepted and
+    // the recorded total must sum deterministically to 10,000.
+    let first = Address::generate(&env);
+    let second = Address::generate(&env);
+    let recipients = vec![
+        &env,
+        types::RoyaltyRecipient {
+            address: first,
+            percentage: 7500, // 75%
+        },
+        types::RoyaltyRecipient {
+            address: second,
+            percentage: 2500, // 25%
+        },
+    ];
+
+    client.set_royalty(&token_id, &recipients);
+
+    let info = client.get_royalty_info(&token_id).unwrap();
+    assert_eq!(info.total_percentage, 10000);
+    assert_eq!(info.config.recipients.len(), 2);
+}
+
+#[test]
 fn test_transfer_with_royalty_events() {
     let env = Env::default();
     env.mock_all_auths();
