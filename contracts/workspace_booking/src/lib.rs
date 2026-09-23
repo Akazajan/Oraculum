@@ -480,6 +480,9 @@ impl WorkspaceBookingContract {
         if caller != booking.member && caller != admin {
             return Err(Error::Unauthorized);
         }
+        if booking.status == BookingStatus::Cancelled {
+            return Err(Error::BookingAlreadyCancelled);
+        }
         if booking.status != BookingStatus::Active {
             return Err(Error::BookingNotActive);
         }
