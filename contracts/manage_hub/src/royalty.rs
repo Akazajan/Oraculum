@@ -12,12 +12,26 @@ impl RoyaltyModule {
     /// Maximum allowed total royalty percentage (basis points: 10000 = 100%)
     const MAX_ROYALTY_BPS: u32 = 10000;
 
-    /// Validates royalty configuration
+    /// Validates royalty configuration.
+    ///
+    /// Rejects zero-share recipients and any configuration that over-allocates
+    /// beyond 100% (10,000 bps). Summation uses checked arithmetic so overflow
+    /// fails deterministically instead of being masked.
     fn validate_config(recipients: &Vec<RoyaltyRecipient>) -> Result<u32, Error> {
         let mut total_percentage: u32 = 0;
 
         for recipient in recipients.iter() {
-            total_percentage = total_percentage.saturating_add(recipient.percentage);
+            if recipient.percentage == 0 {
+                return Err(Error::InvalidPaymentAmount);
+            }
+
+            total_percentage = total_percentage
+                .checked_add(recipient.percentage)
+                .ok_or(Error::InvalidPaymentAmount)?;
+
+            if total_percentage > Self::MAX_ROYALTY_BPS {
+                return Err(Error::InvalidPaymentAmount);
+            }
         }
 
         if total_percentage > Self::MAX_ROYALTY_BPS {
@@ -114,7 +128,7 @@ impl RoyaltyModule {
         if let Some(config) = config_opt {
             let mut total_percentage = 0;
             for r in config.recipients.iter() {
-                total_percentage += r.percentage;
+                total_percentage = total_percentage.saturating_add(r.percentage);
             }
 
             Some(RoyaltyInfo {
