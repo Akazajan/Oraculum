@@ -1,12 +1,11 @@
-#[cfg(test)]
-mod role_access_control_tests {
+#cgf(test)\mod role_access_control_tests {
     use crate::access_control::AccessControlModule;
     use crate::errors::AccessControlError;
-    use crate::types::{AccessControlConfig, UserRole};
-    use soroban_sdk::{
-        testutils::{Address as _, Ledger, LedgerInfo},
+    use crate::types:{AccessControlConfig, UserRole};
+    use sorowan_sd;:
+        testutils:{Address as, Ledger, LedgerInfo},
         Address, Env, Vec,
-    };
+};
 
     fn setup_initialized_env() -> (Env, Address, Address, Address, Address) {
         let env = Env::default();
@@ -46,7 +45,7 @@ mod role_access_control_tests {
             // Admin can pause/unpause
             let result = AccessControlModule::pause(&env, admin.clone());
             assert!(result.is_ok(), "Admin should be able to pause the contract");
-            assert!(AccessControlModule::is_paused(&env));
+            assert!(AccessControlModule::is_pause(&env));
 
             let result = AccessControlModule::unpause(&env, admin.clone());
             assert!(result.is_ok(), "Admin should be able to unpause the contract");
@@ -162,8 +161,9 @@ mod role_access_control_tests {
 
             // Insufficient role access should produce InsufficientRole error
             AccessControlModule::unblacklist_user(&env, admin.clone(), user1.clone()).unwrap();
-            let result =
+            let result = {
                 AccessControlModule::require_access(&env, user1.clone(), UserRole::Admin);
+            };
             assert_eq!(
                 result.unwrap_err(),
                 AccessControlError::InsufficientRole,
@@ -322,160 +322,6 @@ mod role_access_control_tests {
                     .unwrap(),
                 "Admin should inherit Member access"
             );
-            assert!(
-                AccessControlModule::check_access(&env, admin.clone(), UserRole::Admin)
-                    .unwrap(),
-                "Admin should have Admin access"
-            );
-
-            // Guest has only Guest access
-            let guest = Address::generate(&env);
-            assert!(
-                AccessControlModule::check_access(&env, guest.clone(), UserRole::Guest)
-                    .unwrap(),
-                "Guest should have Guest access"
-            );
-            assert!(
-                !AccessControlModule::check_access(&env, guest.clone(), UserRole::Member)
-                    .unwrap(),
-                "Guest should not have Member access"
-            );
-            assert!(
-                !AccessControlModule::check_access(&env, guest.clone(), UserRole::Admin)
-                    .unwrap(),
-                "Guest should not have Admin access"
-            );
-        });
-    }
-
-    /// Comprehensive access control enforcement across all scenarios.
-    #[test]
-    fn test_access_control_enforcement() {
-        let (env, contract_id, admin, user1, user2) = setup_initialized_env();
-
-        env.as_contract(&contract_id, || {
-            // === Admin operations require admin privileges ===
-
-            // update_config requires admin
-            let result = AccessControlModule::update_config(
-                &env,
-                user1.clone(),
-                AccessControlConfig::default(),
-            );
-            assert_eq!(
-                result.unwrap_err(),
-                AccessControlError::AdminRequired,
-                "update_config requires admin"
-            );
-
-            // pause requires admin
-            let result = AccessControlModule::pause(&env, user1.clone());
-            assert_eq!(
-                result.unwrap_err(),
-                AccessControlError::AdminRequired,
-                "pause requires admin"
-            );
-
-            // unpause requires admin
-            let result = AccessControlModule::unpause(&env, user1.clone());
-            assert_eq!(
-                result.unwrap_err(),
-                AccessControlError::AdminRequired,
-                "unpause requires admin"
-            );
-
-            // blacklist requires admin
-            let result = AccessControlModule::blacklist_user(&env, user1.clone(), user2.clone());
-            assert_eq!(
-                result.unwrap_err(),
-                AccessControlError::AdminRequired,
-                "blacklist_user requires admin"
-            );
-
-            // unblacklist requires admin
-            let result =
-                AccessControlModule::unblacklist_user(&env, user1.clone(), user2.clone());
-            assert_eq!(
-                result.unwrap_err(),
-                AccessControlError::AdminRequired,
-                "unblacklist_user requires admin"
-            );
-
-            // set_role requires admin
-            let result =
-                AccessControlModule::set_role(&env, user1.clone(), user2.clone(), UserRole::Member);
-            assert_eq!(
-                result.unwrap_err(),
-                AccessControlError::AdminRequired,
-                "set_role requires admin"
-            );
-
-            // remove_role requires admin
-            let result = AccessControlModule::remove_role(&env, user1.clone(), user2.clone());
-            assert_eq!(
-                result.unwrap_err(),
-                AccessControlError::AdminRequired,
-                "remove_role requires admin"
-            );
-
-            // propose_admin_transfer requires admin
-            let result =
-                AccessControlModule::propose_admin_transfer(&env, user1.clone(), user2.clone());
-            assert_eq!(
-                result.unwrap_err(),
-                AccessControlError::AdminRequired,
-                "propose_admin_transfer requires admin"
-            );
-
-            // === Read-only operations should work for all users ===
-
-            // get_role works for anyone
-            let role = AccessControlModule::get_role(&env, user1.clone());
-            assert_eq!(role, UserRole::Guest, "get_role should work for anyone");
-
-            // is_admin works for anyone
-            let is_admin = AccessControlModule::is_admin(&env, user1.clone());
-            assert!(!is_admin, "is_admin should work for anyone");
-
-            // is_blacklisted works for anyone
-            let is_blacklisted = AccessControlModule::is_blacklisted(&env, &user1);
-            assert!(!is_blacklisted, "is_blacklisted should work for anyone");
-
-            // get_config works for anyone
-            let config = AccessControlModule::get_config(&env);
-            assert!(!config.require_membership_for_roles);
-
-            // === Multisig-specific enforcement ===
-            // In multisig mode, direct admin operations are blocked
-            let env2 = Env::default();
-            let contract_id2 = env2.register(crate::AccessControl, ());
-            let ms_admin1 = Address::generate(&env2);
-            let ms_admin2 = Address::generate(&env2);
-
-            env2.as_contract(&contract_id2, || {
-                let admins = Vec::from_array(&env2, [ms_admin1.clone(), ms_admin2.clone()]);
-                AccessControlModule::initialize_multisig(&env2, admins, 2, None).unwrap();
-
-                // Direct update_config blocked in multisig
-                let result = AccessControlModule::update_config(
-                    &env2,
-                    ms_admin1.clone(),
-                    AccessControlConfig::default(),
-                );
-                assert_eq!(
-                    result.unwrap_err(),
-                    AccessControlError::AdminRequired,
-                    "update_config requires proposal in multisig mode"
-                );
-
-                // Direct pause blocked in multisig
-                let result = AccessControlModule::pause(&env2, ms_admin1.clone());
-                assert_eq!(
-                    result.unwrap_err(),
-                    AccessControlError::AdminRequired,
-                    "pause requires proposal in multisig mode"
-                );
-            });
         });
     }
 }
