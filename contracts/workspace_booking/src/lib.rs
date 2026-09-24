@@ -99,7 +99,7 @@ impl WorkspaceBookingContract {
                 None => continue,
             };
 
-            if booking.status != BookingStatus::Active {
+            if !booking.status.is_active() {
                 continue;
             }
 
@@ -418,7 +418,7 @@ impl WorkspaceBookingContract {
             member: member.clone(),
             start_time,
             end_time,
-            status: BookingStatus::Active,
+            status: BookingStatus::initial(),
             amount_paid: amount,
             created_at: now,
             cancelled_at: None,
@@ -480,7 +480,7 @@ impl WorkspaceBookingContract {
         if caller != booking.member && caller != admin {
             return Err(Error::Unauthorized);
         }
-        if booking.status != BookingStatus::Active {
+        if !booking.status.is_active() {
             return Err(Error::BookingNotActive);
         }
 
@@ -508,7 +508,10 @@ impl WorkspaceBookingContract {
             );
         }
 
-        booking.status = BookingStatus::Cancelled;
+        booking.status = booking
+            .status
+            .transition(BookingStatus::Cancelled)
+            .map_err(|_| Error::BookingNotActive)?;
         booking.cancelled_at = Some(now);
         env.storage()
             .persistent()
@@ -533,11 +536,14 @@ impl WorkspaceBookingContract {
             .get(&DataKey::Booking(booking_id.clone()))
             .ok_or(Error::BookingNotFound)?;
 
-        if booking.status != BookingStatus::Active {
+        if !booking.status.is_active() {
             return Err(Error::BookingNotActive);
         }
 
-        booking.status = BookingStatus::Completed;
+        booking.status = booking
+            .status
+            .transition(BookingStatus::Completed)
+            .map_err(|_| Error::BookingNotActive)?;
         booking.completed_at = Some(env.ledger().timestamp());
         env.storage()
             .persistent()
@@ -565,7 +571,7 @@ impl WorkspaceBookingContract {
             .get(&DataKey::Booking(booking_id.clone()))
             .ok_or(Error::BookingNotFound)?;
 
-        if booking.status != BookingStatus::Active {
+        if !booking.status.is_active() {
             return Err(Error::BookingNotActive);
         }
 
@@ -574,7 +580,10 @@ impl WorkspaceBookingContract {
             return Err(Error::BookingConflict); // Too early to mark no-show
         }
 
-        booking.status = BookingStatus::NoShow;
+        booking.status = booking
+            .status
+            .transition(BookingStatus::NoShow)
+            .map_err(|_| Error::BookingNotActive)?;
         booking.cancelled_at = Some(now);
         env.storage()
             .persistent()
@@ -600,7 +609,7 @@ impl WorkspaceBookingContract {
             .get(&DataKey::Booking(booking_id.clone()))
             .ok_or(Error::BookingNotFound)?;
 
-        if booking.status != BookingStatus::Active {
+        if !booking.status.is_active() {
             return Err(Error::BookingNotActive);
         }
 
@@ -609,7 +618,10 @@ impl WorkspaceBookingContract {
             return Err(Error::BookingConflict); // Booking hasn't ended yet
         }
 
-        booking.status = BookingStatus::Expired;
+        booking.status = booking
+            .status
+            .transition(BookingStatus::Expired)
+            .map_err(|_| Error::BookingNotActive)?;
         booking.cancelled_at = Some(now);
         env.storage()
             .persistent()

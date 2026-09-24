@@ -944,3 +944,125 @@ fn test_get_all_workspaces_persistent_storage() {
     }
 }
 
+
+// ── C16: Booking state validation ─────────────────────────────────────────────
+// Acceptance: invalid discriminants rejected by helper; allowed transitions
+// explicit; serialization discriminants remain stable.
+
+#[test]
+fn test_c16_invalid_state_cannot_be_constructed() {
+    // Only 0..=4 are valid lifecycle discriminants.
+    assert!(BookingStatus::try_from_u32(0).is_some());
+    assert!(BookingStatus::try_from_u32(4).is_some());
+    assert_eq!(BookingStatus::try_from_u32(5), None);
+    assert_eq!(BookingStatus::try_from_u32(99), None);
+    assert_eq!(BookingStatus::try_from_u32(u32::MAX), None);
+}
+
+#[test]
+fn test_c16_serialization_discriminants_stable() {
+    assert_eq!(BookingStatus::Active.as_u32(), 0);
+    assert_eq!(BookingStatus::Completed.as_u32(), 1);
+    assert_eq!(BookingStatus::Cancelled.as_u32(), 2);
+    assert_eq!(BookingStatus::NoShow.as_u32(), 3);
+    assert_eq!(BookingStatus::Expired.as_u32(), 4);
+
+    // Round-trip through the helper preserves the same variant.
+    for d in 0u32..=4 {
+        let status = BookingStatus::try_from_u32(d).unwrap();
+        assert_eq!(status.as_u32(), d);
+    }
+}
+
+#[test]
+fn test_c16_allowed_transitions_explicit() {
+    let active = BookingStatus::initial();
+    assert!(active.is_active());
+    assert!(!active.is_terminal());
+
+    assert!(active.can_transition(&BookingStatus::Completed));
+    assert!(active.can_transition(&BookingStatus::Cancelled));
+    assert!(active.can_transition(&BookingStatus::NoShow));
+    assert!(active.can_transition(&BookingStatus::Expired));
+    assert!(!active.can_transition(&BookingStatus::Active));
+
+    // Terminal states admit no further transitions.
+    for terminal in [
+        BookingStatus::Completed,
+        BookingStatus::Cancelled,
+        BookingStatus::NoShow,
+        BookingStatus::Expired,
+    ] {
+        assert!(terminal.is_terminal());
+        for to in [
+            BookingStatus::Active,
+            BookingStatus::Completed,
+            BookingStatus::Cancelled,
+            BookingStatus::NoShow,
+            BookingStatus::Expired,
+        ] {
+            assert!(!terminal.can_transition(&to));
+            assert!(terminal.transition(to).is_err());
+        }
+    }
+
+    assert_eq!(
+        active.transition(BookingStatus::Cancelled).unwrap(),
+        BookingStatus::Cancelled
+    );
+}
+
+#[test]
+fn test_c16_contract_rejects_transition_from_terminal() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = setup_contract(&env);
+    let client = WorkspaceBookingContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let member = Address::generate(&env);
+    let token_address = setup_token(&env, &admin, &member, 50_000i128);
+
+    client.initialize(&admin, &token_address);
+    client.register_workspace(
+        &admin,
+        &String::from_str(&env, "ws-c16"),
+        &String::from_str(&env, "State Room"),
+        &WorkspaceType::MeetingRoom,
+        &4u32,
+        &1_000u128,
+    );
+
+    let now = env.ledger().timestamp();
+    let start = now + 60;
+    let end = start + 3_600;
+
+    client.book_workspace(
+        &member,
+        &String::from_str(&env, "c16-bk-1"),
+        &String::from_str(&env, "ws-c16"),
+        &start,
+        &end,
+    );
+
+    let booking = client.get_booking(&String::from_str(&env, "c16-bk-1"));
+    assert_eq!(booking.status, BookingStatus::Active);
+    assert_eq!(booking.status.as_u32(), 0);
+
+    client.complete_booking(&admin, &String::from_str(&env, "c16-bk-1"));
+    let completed = client.get_booking(&String::from_str(&env, "c16-bk-1"));
+    assert_eq!(completed.status, BookingStatus::Completed);
+    assert!(completed.status.is_terminal());
+
+    // Cancel / no-show / expire from Completed must fail (invalid transition).
+    let cancel = client.try_cancel_booking(&member, &String::from_str(&env, "c16-bk-1"));
+    assert_eq!(cancel, Err(Ok(Error::BookingNotActive)));
+
+    let noshow = client.try_mark_no_show(&admin, &String::from_str(&env, "c16-bk-1"));
+    assert_eq!(noshow, Err(Ok(Error::BookingNotActive)));
+
+    advance_time(&env, 10_000);
+    let expire = client.try_expire_booking(&admin, &String::from_str(&env, "c16-bk-1"));
+    assert_eq!(expire, Err(Ok(Error::BookingNotActive)));
+}
