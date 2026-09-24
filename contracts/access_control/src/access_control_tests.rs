@@ -570,21 +570,93 @@ fn test_two_step_admin_transfer() {
 
 #[test]
 fn test_admin_transfer_cancellation() {
-    let (env, contract_id, admin, user1, _) = setup_initialized_env();
+    let (env, contract_id, admin, user1, user2) = setup_initialized_env();
 
     env.as_contract(&contract_id, || {
+        // Propose admin transfer from current admin to proposed admin (user1)
         AccessControlModule::propose_admin_transfer(&env, admin.clone(), user1.clone()).unwrap();
 
-        assert!(AccessControlModule::get_pending_admin_transfer(&env).is_some());
+        let pending = AccessControlModule::get_pending_admin_transfer(&env);
+        assert!(pending.is_some());
+        assert_eq!(pending.unwrap().proposed_admin, user1);
 
+        // Cancel the pending admin transfer
         AccessControlModule::cancel_admin_transfer(&env, admin.clone()).unwrap();
 
+        // Acceptance criteria 1: The proposed admin is cleared
         assert!(AccessControlModule::get_pending_admin_transfer(&env).is_none());
+        assert_eq!(
+            AccessControlModule::get_role(&env, user1.clone()),
+            UserRole::Guest
+        );
+        assert!(!AccessControlModule::is_admin(&env, user1.clone()));
+
+        // Acceptance criteria 2: The current admin remains unchanged
         assert_eq!(
             AccessControlModule::get_role(&env, admin.clone()),
             UserRole::Admin
         );
+        assert!(AccessControlModule::is_admin(&env, admin.clone()));
+        assert!(AccessControlModule::set_role(
+            &env,
+            admin.clone(),
+            user2.clone(),
+            UserRole::Member
+        )
+        .is_ok());
+
+        // Acceptance criteria 3: A cancelled proposal cannot be executed
+        let accept_result = AccessControlModule::accept_admin_transfer(&env, user1.clone());
+        assert_eq!(
+            accept_result.unwrap_err(),
+            AccessControlError::InvalidAddress
+        );
     });
+}
+
+#[test]
+fn test_cancel_admin_transfer_no_pending_fails() {
+    let (env, contract_id, admin, _, _) = setup_initialized_env();
+
+    env.as_contract(&contract_id, || {
+        let result = AccessControlModule::cancel_admin_transfer(&env, admin.clone());
+        assert_eq!(result.unwrap_err(), AccessControlError::InvalidAddress);
+    });
+}
+
+#[test]
+fn test_cancel_admin_transfer_by_non_proposer_fails() {
+    let (env, contract_id, admin, user1, user2) = setup_initialized_env();
+
+    env.as_contract(&contract_id, || {
+        AccessControlModule::propose_admin_transfer(&env, admin.clone(), user1.clone()).unwrap();
+
+        let result = AccessControlModule::cancel_admin_transfer(&env, user2.clone());
+        assert_eq!(result.unwrap_err(), AccessControlError::AdminRequired);
+    });
+}
+
+#[test]
+fn test_admin_transfer_cancellation_via_client() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(crate::AccessControl, ());
+    let client = crate::AccessControlClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let user1 = Address::generate(&env);
+
+    client.initialize(&admin);
+    client.propose_admin_transfer(&admin, &user1);
+
+    // Cancel via client interface
+    client.cancel_admin_transfer(&admin);
+
+    // Verify pending transfer cleared and current admin unchanged
+    assert!(env.as_contract(&contract_id, || {
+        AccessControlModule::get_pending_admin_transfer(&env).is_none()
+    }));
+    assert!(client.is_admin(&admin));
+    assert!(!client.is_admin(&user1));
 }
 
 #[test]
