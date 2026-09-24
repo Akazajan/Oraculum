@@ -587,7 +587,7 @@ fn test_complete_booking_by_admin() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #103)")]
+#[should_panic(expected = "Error(Contract, #105)")]
 fn test_cancel_already_cancelled_fails() {
     let env = Env::default();
     env.mock_all_auths();
@@ -622,8 +622,48 @@ fn test_cancel_already_cancelled_fails() {
     );
 
     client.cancel_booking(&member, &String::from_str(&env, "booking-001"));
-    // BookingNotActive = 103
+    // BookingAlreadyCancelled = 105
     client.cancel_booking(&member, &String::from_str(&env, "booking-001"));
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #2)")]
+fn test_cancel_booking_unauthorized_caller_fails() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = setup_contract(&env);
+    let client = WorkspaceBookingContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let member = Address::generate(&env);
+    let stranger = Address::generate(&env);
+    let token_address = setup_token(&env, &admin, &member, 10_000i128);
+
+    client.initialize(&admin, &token_address);
+    client.register_workspace(
+        &admin,
+        &String::from_str(&env, "ws-001"),
+        &String::from_str(&env, "Hot Desk"),
+        &WorkspaceType::HotDesk,
+        &1u32,
+        &500u128,
+    );
+
+    let now = env.ledger().timestamp();
+    let start = now + 60;
+    let end = start + 3_600;
+
+    client.book_workspace(
+        &member,
+        &String::from_str(&env, "booking-001"),
+        &String::from_str(&env, "ws-001"),
+        &start,
+        &end,
+    );
+
+    // Stranger tries to cancel — Unauthorized = 2
+    client.cancel_booking(&stranger, &String::from_str(&env, "booking-001"));
 }
 
 #[test]
@@ -1014,6 +1054,158 @@ fn test_c16_allowed_transitions_explicit() {
 
 #[test]
 fn test_c16_contract_rejects_transition_from_terminal() {
+// ── C13: Prevent workspace double booking ─────────────────────────────────────
+// Acceptance: overlapping intervals fail; adjacent intervals allowed;
+// failed bookings do not transfer funds.
+
+#[test]
+fn test_c13_overlapping_intervals_fail() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = setup_contract(&env);
+    let client = WorkspaceBookingContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let member1 = Address::generate(&env);
+    let member2 = Address::generate(&env);
+    let token_address = setup_token(&env, &admin, &member1, 50_000i128);
+    StellarAssetClient::new(&env, &token_address)
+        .mock_all_auths()
+        .mint(&member2, &50_000i128);
+
+    client.initialize(&admin, &token_address);
+    client.register_workspace(
+        &admin,
+        &String::from_str(&env, "ws-c13"),
+        &String::from_str(&env, "Conflict Room"),
+        &WorkspaceType::MeetingRoom,
+        &8u32,
+        &1_000u128,
+    );
+
+    let now = env.ledger().timestamp();
+    let start = now + 60;
+    let end = start + 3_600;
+
+    client.book_workspace(
+        &member1,
+        &String::from_str(&env, "c13-bk-1"),
+        &String::from_str(&env, "ws-c13"),
+        &start,
+        &end,
+    );
+
+    // Partial overlap: starts mid-slot
+    let mid_overlap = client.try_book_workspace(
+        &member2,
+        &String::from_str(&env, "c13-bk-2"),
+        &String::from_str(&env, "ws-c13"),
+        &(start + 1_800),
+        &(end + 1_800),
+    );
+    assert_eq!(mid_overlap, Err(Ok(Error::BookingConflict)));
+
+    // Contained overlap: entirely inside existing booking
+    let contained = client.try_book_workspace(
+        &member2,
+        &String::from_str(&env, "c13-bk-3"),
+        &String::from_str(&env, "ws-c13"),
+        &(start + 600),
+        &(end - 600),
+    );
+    assert_eq!(contained, Err(Ok(Error::BookingConflict)));
+
+    // Covering overlap: spans entire existing booking
+    let covering = client.try_book_workspace(
+        &member2,
+        &String::from_str(&env, "c13-bk-4"),
+        &String::from_str(&env, "ws-c13"),
+        &(start - 600),
+        &(end + 600),
+    );
+    assert_eq!(covering, Err(Ok(Error::BookingConflict)));
+}
+
+#[test]
+fn test_c13_adjacent_intervals_allowed() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = setup_contract(&env);
+    let client = WorkspaceBookingContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let member1 = Address::generate(&env);
+    let member2 = Address::generate(&env);
+    let token_address = setup_token(&env, &admin, &member1, 50_000i128);
+    StellarAssetClient::new(&env, &token_address)
+        .mock_all_auths()
+        .mint(&member2, &50_000i128);
+
+    client.initialize(&admin, &token_address);
+    client.register_workspace(
+        &admin,
+        &String::from_str(&env, "ws-adj"),
+        &String::from_str(&env, "Adjacent Desk"),
+        &WorkspaceType::HotDesk,
+        &1u32,
+        &500u128,
+    );
+
+    let now = env.ledger().timestamp();
+    // Leave room before A so an adjacent earlier slot stays in the future.
+    let a_start = now + 7_200;
+    let a_end = a_start + 3_600;
+
+    client.book_workspace(
+        &member1,
+        &String::from_str(&env, "adj-a"),
+        &String::from_str(&env, "ws-adj"),
+        &a_start,
+        &a_end,
+    );
+
+    // Immediately after A ends (adjacent, not overlapping)
+    client.book_workspace(
+        &member2,
+        &String::from_str(&env, "adj-b"),
+        &String::from_str(&env, "ws-adj"),
+        &a_end,
+        &(a_end + 3_600),
+    );
+
+    // Immediately before A starts (adjacent on the other side)
+    let member3 = Address::generate(&env);
+    StellarAssetClient::new(&env, &token_address)
+        .mock_all_auths()
+        .mint(&member3, &50_000i128);
+
+    let before_start = a_start - 3_600;
+    assert!(before_start > now);
+    client.book_workspace(
+        &member3,
+        &String::from_str(&env, "adj-c"),
+        &String::from_str(&env, "ws-adj"),
+        &before_start,
+        &a_start,
+    );
+
+    assert_eq!(
+        client
+            .get_workspace_bookings(&String::from_str(&env, "ws-adj"))
+            .len(),
+        3u32
+    );
+    assert!(client.check_availability(
+        &String::from_str(&env, "ws-adj"),
+        &a_end,
+        &(a_end + 1),
+    ));
+}
+
+#[test]
+fn test_c13_failed_booking_does_not_transfer_funds() {
     let env = Env::default();
     env.mock_all_auths();
 
@@ -1023,17 +1215,26 @@ fn test_c16_contract_rejects_transition_from_terminal() {
     let admin = Address::generate(&env);
     let member = Address::generate(&env);
     let token_address = setup_token(&env, &admin, &member, 50_000i128);
+    let member1 = Address::generate(&env);
+    let member2 = Address::generate(&env);
+    let token_address = setup_token(&env, &admin, &member1, 20_000i128);
+    StellarAssetClient::new(&env, &token_address)
+        .mock_all_auths()
+        .mint(&member2, &20_000i128);
 
     client.initialize(&admin, &token_address);
     client.register_workspace(
         &admin,
         &String::from_str(&env, "ws-c16"),
         &String::from_str(&env, "State Room"),
+        &String::from_str(&env, "ws-pay"),
+        &String::from_str(&env, "Paid Room"),
         &WorkspaceType::MeetingRoom,
         &4u32,
         &1_000u128,
     );
 
+    let token = TokenClient::new(&env, &token_address);
     let now = env.ledger().timestamp();
     let start = now + 60;
     let end = start + 3_600;
@@ -1065,4 +1266,85 @@ fn test_c16_contract_rejects_transition_from_terminal() {
     advance_time(&env, 10_000);
     let expire = client.try_expire_booking(&admin, &String::from_str(&env, "c16-bk-1"));
     assert_eq!(expire, Err(Ok(Error::BookingNotActive)));
+        &member1,
+        &String::from_str(&env, "pay-1"),
+        &String::from_str(&env, "ws-pay"),
+        &start,
+        &end,
+    );
+    assert_eq!(token.balance(&member1), 19_000i128); // 1hr × 1000
+
+    let balance_before = token.balance(&member2);
+    let contract_before = token.balance(&contract_id);
+
+    let result = client.try_book_workspace(
+        &member2,
+        &String::from_str(&env, "pay-2"),
+        &String::from_str(&env, "ws-pay"),
+        &(start + 900),
+        &(end + 900),
+    );
+    assert_eq!(result, Err(Ok(Error::BookingConflict)));
+
+    // No funds moved on the failed booking
+    assert_eq!(token.balance(&member2), balance_before);
+    assert_eq!(token.balance(&contract_id), contract_before);
+    // Only the first booking should exist for the workspace
+    assert_eq!(
+        client
+            .get_workspace_bookings(&String::from_str(&env, "ws-pay"))
+            .len(),
+        1u32
+    );
+}
+
+#[test]
+fn test_c13_cancelled_booking_frees_slot_for_rebook() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = setup_contract(&env);
+    let client = WorkspaceBookingContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let member1 = Address::generate(&env);
+    let member2 = Address::generate(&env);
+    let token_address = setup_token(&env, &admin, &member1, 20_000i128);
+    StellarAssetClient::new(&env, &token_address)
+        .mock_all_auths()
+        .mint(&member2, &20_000i128);
+
+    client.initialize(&admin, &token_address);
+    client.register_workspace(
+        &admin,
+        &String::from_str(&env, "ws-free"),
+        &String::from_str(&env, "Rebook Room"),
+        &WorkspaceType::PrivateOffice,
+        &2u32,
+        &2_000u128,
+    );
+
+    let now = env.ledger().timestamp();
+    let start = now + 60;
+    let end = start + 3_600;
+
+    client.book_workspace(
+        &member1,
+        &String::from_str(&env, "free-1"),
+        &String::from_str(&env, "ws-free"),
+        &start,
+        &end,
+    );
+    client.cancel_booking(&member1, &String::from_str(&env, "free-1"));
+
+    // Same slot must be bookable again after cancel (inactive bookings ignored)
+    client.book_workspace(
+        &member2,
+        &String::from_str(&env, "free-2"),
+        &String::from_str(&env, "ws-free"),
+        &start,
+        &end,
+    );
+    let rebooked = client.get_booking(&String::from_str(&env, "free-2"));
+    assert_eq!(rebooked.status, BookingStatus::Active);
 }
