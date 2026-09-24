@@ -24,7 +24,15 @@ export class CreateNotificationProvider {
     private readonly preferencesService: NotificationPreferencesService,
   ) {}
 
-  async create(input: CreateNotificationInput): Promise<Notification> {
+  async create(input: CreateNotificationInput): Promise<Notification | null> {
+    if (!input.userId || input.userId.trim() === '') {
+      throw new Error('Notification recipient (userId) is required');
+    }
+
+    if (!input.type || !Object.values(NotificationType).includes(input.type)) {
+      throw new Error(`Unsupported notification type: ${input.type}`);
+    }
+
     const inAppEnabled = await this.preferencesService.isEnabled(
       input.userId,
       NotificationChannel.IN_APP,
