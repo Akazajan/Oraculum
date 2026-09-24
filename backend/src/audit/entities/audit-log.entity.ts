@@ -23,6 +23,7 @@ import {
  *  - metadata: free-form jsonb for action-specific context.
  *
  * The composite index makes the admin filters efficient.
+ * The correlationId index allows efficient correlation of audit events.
  */
 export type AuditOutcome = 'SUCCESS' | 'FAILURE';
 
@@ -30,6 +31,7 @@ export type AuditOutcome = 'SUCCESS' | 'FAILURE';
 @Index(['action', 'createdAt'])
 @Index(['actorId', 'createdAt'])
 @Index(['resourceType', 'resourceId'])
+@Index(['correlationId'])
 export class AuditLog {
   @PrimaryGeneratedColumn('uuid')
   id: string;
