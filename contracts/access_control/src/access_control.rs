@@ -257,6 +257,7 @@ impl AccessControlModule {
                 return Ok(());
             }
         } else if Self::is_admin(env, caller.clone()) {
+            caller.require_auth();
             return Ok(());
         }
         Err(AccessControlError::AdminRequired)
@@ -547,6 +548,9 @@ impl AccessControlModule {
 
     pub fn remove_role(env: &Env, caller: Address, user: Address) -> AccessControlResult<()> {
         Self::require_admin(env, &caller)?;
+        // C02 / issue #460: bind Soroban auth on role removal. The single-admin
+        // branch of require_admin previously skipped require_auth.
+        caller.require_auth();
 
         if let Some(admin) = Self::get_admin(env) {
             if user == admin {

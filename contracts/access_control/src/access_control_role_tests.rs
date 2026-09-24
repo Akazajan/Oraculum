@@ -10,6 +10,7 @@ mod role_access_control_tests {
 
     fn setup_initialized_env() -> (Env, Address, Address, Address, Address) {
         let env = Env::default();
+        env.mock_all_auths();
         let contract_id = env.register(crate::AccessControl, ());
         let admin = Address::generate(&env);
         let user1 = Address::generate(&env);
@@ -476,6 +477,39 @@ mod role_access_control_tests {
                     "pause requires proposal in multisig mode"
                 );
             });
+        });
+    }
+
+    /// C02 / issue #460: authorized admin removal clears the role; repeated removal is deterministic.
+    #[test]
+    fn test_remove_role_requires_admin_auth_binding() {
+        let (env, contract_id, admin, user1, _) = setup_initialized_env();
+
+        env.as_contract(&contract_id, || {
+            AccessControlModule::set_role(
+                &env,
+                admin.clone(),
+                user1.clone(),
+                UserRole::Member,
+            )
+            .unwrap();
+
+            let first = AccessControlModule::remove_role(&env, admin.clone(), user1.clone());
+            assert!(first.is_ok(), "authorized admin can remove role");
+            assert_eq!(
+                AccessControlModule::get_role(&env, user1.clone()),
+                UserRole::Guest,
+            );
+
+            let second = AccessControlModule::remove_role(&env, admin.clone(), user1.clone());
+            assert!(second.is_ok(), "repeated removal stays deterministic");
+            assert_eq!(
+                AccessControlModule::get_role(&env, user1.clone()),
+                UserRole::Guest,
+            );
+
+            let denied = AccessControlModule::remove_role(&env, user1.clone(), admin.clone());
+            assert_eq!(denied.unwrap_err(), AccessControlError::AdminRequired);
         });
     }
 }
