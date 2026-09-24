@@ -3,7 +3,7 @@
 
 use super::*;
 use soroban_sdk::{
-    testutils::{Address as _, Ledger},
+    testutils::{Address as _, Events, Ledger},
     token::{Client as TokenClient, StellarAssetClient},
     Address, Env, String,
 };
@@ -186,14 +186,25 @@ fn test_register_workspace_success() {
     );
 
     let ws = client.get_workspace(&String::from_str(&env, "ws-001"));
+    assert_eq!(ws.id, String::from_str(&env, "ws-001"));
     assert_eq!(ws.name, String::from_str(&env, "Hot Desk A"));
     assert_eq!(ws.workspace_type, WorkspaceType::HotDesk);
     assert_eq!(ws.capacity, 1u32);
     assert_eq!(ws.hourly_rate, 500u128);
     assert_eq!(ws.availability, WorkspaceAvailability::Available);
+    assert_eq!(ws.created_at, env.ledger().timestamp());
 
     let all = client.get_all_workspaces();
     assert_eq!(all.len(), 1u32);
+
+    let events = env.events().all();
+    assert_eq!(events.len(), 2);
+    let registration_event = events.get(1).unwrap();
+    assert_eq!(registration_event.1, (symbol_short!("ws_reg"), ws.id));
+    assert_eq!(
+        registration_event.2,
+        (ws.name, ws.workspace_type, ws.capacity, ws.hourly_rate)
+    );
 }
 
 #[test]
@@ -221,8 +232,7 @@ fn test_register_workspace_name_too_long_fails() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #201)")]
-fn test_register_workspace_duplicate_id_fails() {
+fn test_register_workspace_duplicate_id_fails_without_mutation_or_event() {
     let env = Env::default();
     let contract_id = setup_contract(&env);
     let client = WorkspaceBookingContractClient::new(&env, &contract_id);
@@ -241,15 +251,24 @@ fn test_register_workspace_duplicate_id_fails() {
         &1u32,
         &500u128,
     );
-    // WorkspaceAlreadyExists = 201
-    client.register_workspace(
+    let events_before = env.events().all().len();
+    let result = client.try_register_workspace(
         &admin,
         &String::from_str(&env, "ws-001"),
         &String::from_str(&env, "Hot Desk B"),
         &WorkspaceType::HotDesk,
-        &1u32,
-        &500u128,
+        &2u32,
+        &750u128,
     );
+
+    assert_eq!(result, Err(Ok(Error::WorkspaceAlreadyExists)));
+    assert_eq!(env.events().all().len(), events_before);
+
+    let workspace = client.get_workspace(&String::from_str(&env, "ws-001"));
+    assert_eq!(workspace.name, String::from_str(&env, "Hot Desk A"));
+    assert_eq!(workspace.capacity, 1u32);
+    assert_eq!(workspace.hourly_rate, 500u128);
+    assert_eq!(client.get_all_workspaces().len(), 1u32);
 }
 
 #[test]
