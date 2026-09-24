@@ -1,12 +1,24 @@
-// Event emitted when an agent's metadata is updated.
-//
-// # Fields
-// * `agent_id` - Unique identifier of the agent (address)
-// * `updater` - Address of the user who performed the update
-// * `previous_version` - Metadata version before the update
-// * `new_version` - Metadata version after the update
-// * `timestamp` - When the update occurred
-// * `new_metadata` - The metadata after the update
+//! Common types used across Oraculum contracts.
+//!
+//! This module provides shared enums and structs to ensure consistency
+//! across all Oraculum smart contracts, including subscription management,
+//! attendance tracking, and user role definitions.
+
+use soroban_sdk::{contracttype, Address, Map, String, Vec};
+
+// ============================================================================
+// Agent Metadata Events
+// ============================================================================
+
+/// Event emitted when an agent's metadata is updated.
+///
+/// # Fields
+/// * `agent_id` - Unique identifier of the agent (address)
+/// * `updater` - Address of the user who performed the update
+/// * `previous_version` - Metadata version before the update
+/// * `new_version` - Metadata version after the update
+/// * `timestamp` - When the update occurred
+/// * `new_metadata` - The metadata after the update
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AgentMetadataUpdatedEvent {
@@ -22,14 +34,8 @@ pub struct AgentMetadataUpdatedEvent {
     pub timestamp: u64,
     /// New metadata after the update
     pub new_metadata: TokenMetadata,
-};
-//! Common types used across Oraculum contracts.
-//!
-//! This module provides shared enums and structs to ensure consistency
-//! across all Oraculum smart contracts, including subscription management,
-//! attendance tracking, and user role definitions.
+}
 
-use soroban_sdk::{contracttype, Address, Map, String, Vec};
 
 // ============================================================================
 // Metadata Types for Token Metadata System
@@ -653,6 +659,65 @@ pub enum TierChangeStatus {
     Rejected,
 }
 
+
+// ============================================================================
+// Shared Input Validation Helpers (C08)
+// ============================================================================
+
+/// Maximum length for bounded string identifiers shared across contracts
+/// (workspace ids, booking ids, tier ids, etc.).
+pub const MAX_IDENTIFIER_LENGTH: u32 = 64;
+
+/// Validates a party [`Address`].
+///
+/// Host-constructed [`Address`] values are always well-formed, so this helper
+/// succeeds for any `Address` reference. Consumers should call it at API
+/// boundaries so address checks stay in one place instead of being duplicated
+/// (or skipped) across contracts.
+///
+/// # Returns
+/// * `Ok(())` — address is usable
+pub fn validate_address(_address: &Address) -> Result<(), &'static str> {
+    Ok(())
+}
+
+/// Validates that an amount is strictly positive (`> 0`).
+///
+/// Rejects zero and negative values so payment, escrow, and credit paths share
+/// one rule for "how much".
+///
+/// # Returns
+/// * `Ok(())` if `amount > 0`
+/// * `Err` if `amount <= 0`
+pub fn validate_positive_amount(amount: i128) -> Result<(), &'static str> {
+    if amount <= 0 {
+        return Err("Amount must be positive");
+    }
+    Ok(())
+}
+
+/// Validates a bounded string identifier.
+///
+/// # Rules
+/// * Must be non-empty
+/// * Length must not exceed [`MAX_IDENTIFIER_LENGTH`]
+///
+/// Valid identifiers are accepted unchanged (no rewriting).
+///
+/// # Returns
+/// * `Ok(())` if the identifier is within bounds
+/// * `Err` if empty or too long
+pub fn validate_bounded_identifier(identifier: &String) -> Result<(), &'static str> {
+    let len = identifier.len();
+    if len == 0 {
+        return Err("Identifier cannot be empty");
+    }
+    if len > MAX_IDENTIFIER_LENGTH {
+        return Err("Identifier exceeds maximum length");
+    }
+    Ok(())
+}
+
 // ============================================================================
 // Metadata Validation Functions
 // ============================================================================
@@ -834,5 +899,70 @@ mod tests {
         assert_eq!(completed, TierChangeStatus::Completed);
         assert_eq!(cancelled, TierChangeStatus::Cancelled);
         assert_eq!(rejected, TierChangeStatus::Rejected);
+    }
+
+    // ------------------------------------------------------------------------
+    // C08 shared validation helpers
+    // ------------------------------------------------------------------------
+
+    #[test]
+    fn test_validate_address_accepts_generated() {
+        let env = soroban_sdk::Env::default();
+        let addr = soroban_sdk::testutils::Address::generate(&env);
+        assert!(validate_address(&addr).is_ok());
+    }
+
+    #[test]
+    fn test_validate_positive_amount_rejects_non_positive() {
+        assert_eq!(validate_positive_amount(0), Err("Amount must be positive"));
+        assert_eq!(validate_positive_amount(-1), Err("Amount must be positive"));
+        assert_eq!(validate_positive_amount(-100), Err("Amount must be positive"));
+    }
+
+    #[test]
+    fn test_validate_positive_amount_accepts_positive() {
+        assert!(validate_positive_amount(1).is_ok());
+        assert!(validate_positive_amount(42).is_ok());
+        assert!(validate_positive_amount(i128::MAX).is_ok());
+    }
+
+    #[test]
+    fn test_validate_bounded_identifier_rejects_empty() {
+        let env = soroban_sdk::Env::default();
+        let empty = String::from_str(&env, "");
+        assert_eq!(
+            validate_bounded_identifier(&empty),
+            Err("Identifier cannot be empty")
+        );
+    }
+
+    #[test]
+    fn test_validate_bounded_identifier_rejects_too_long() {
+        let env = soroban_sdk::Env::default();
+        // 65 chars > MAX_IDENTIFIER_LENGTH (64)
+        let long = String::from_str(
+            &env,
+            "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abc",
+        );
+        assert_eq!(long.len(), 65);
+        assert_eq!(
+            validate_bounded_identifier(&long),
+            Err("Identifier exceeds maximum length")
+        );
+    }
+
+    #[test]
+    fn test_validate_bounded_identifier_accepts_valid() {
+        let env = soroban_sdk::Env::default();
+        let id = String::from_str(&env, "workspace-42");
+        assert!(validate_bounded_identifier(&id).is_ok());
+        // unchanged: still the same length / content after validation
+        assert_eq!(id.len(), 12);
+        let maxed = String::from_str(
+            &env,
+            "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789ab",
+        );
+        assert_eq!(maxed.len(), MAX_IDENTIFIER_LENGTH);
+        assert!(validate_bounded_identifier(&maxed).is_ok());
     }
 }
