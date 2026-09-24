@@ -45,6 +45,9 @@ export class NewsletterSubscriber {
   @Column('varchar', { length: 128 })
   unsubscribeToken: string;
 
+  @Column({ type: 'timestamptz', nullable: true })
+  unsubscribeTokenExpiresAt?: Date | null;
+
   @Column('timestamptz', { nullable: true })
   consentedAt?: Date;
 

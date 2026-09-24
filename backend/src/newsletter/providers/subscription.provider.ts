@@ -61,6 +61,9 @@ export class NewsletterProvider {
 
     subscriber.verificationToken = verificationToken;
     subscriber.unsubscribeToken = unsubscribeToken;
+    subscriber.unsubscribeTokenExpiresAt = new Date(
+      Date.now() + 30 * 24 * 60 * 60 * 1000,
+    );
 
     // If it was soft-deleted before, revive it (so unique email won't conflict)
     subscriber.deletedAt = null;
@@ -123,6 +126,10 @@ export class NewsletterProvider {
   async unsubscribe(params: { token: string }) {
     const token = params.token.trim();
 
+    if (!token) {
+      throw new BadRequestException('An unsubscribe token is required.');
+    }
+
     // Find by token, including soft-deleted rows (so repeated unsub is idempotent)
     const subscriber = await this.repo.findOne({
       where: { unsubscribeToken: token },
@@ -134,6 +141,16 @@ export class NewsletterProvider {
       throw new NotFoundException('Invalid unsubscribe token.');
     }
 
+    // B52 — Reject expired tokens without modifying the subscription.
+    if (
+      subscriber.unsubscribeTokenExpiresAt &&
+      subscriber.unsubscribeTokenExpiresAt < new Date()
+    ) {
+      throw new BadRequestException(
+        'Unsubscribe token has expired. Please request a new unsubscribe link.',
+      );
+    }
+
     // Idempotency: if already unsubscribed, return success anyway
     if (!subscriber.isActive || subscriber.deletedAt) {
       return {
@@ -143,6 +160,7 @@ export class NewsletterProvider {
     }
 
     subscriber.isActive = false;
+    subscriber.unsubscribedAt = new Date();
 
     // Soft delete the record while keeping history
     await this.repo.softRemove(subscriber);
