@@ -21,5 +21,4 @@ pub use types::{
 pub use storage_version::{StorageVersion, StorageVersionManager};
 
 #[cfg(test)]
-pub mod canonicalization;
 mod test_contract;
