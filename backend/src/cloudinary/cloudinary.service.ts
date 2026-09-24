@@ -6,6 +6,7 @@ import {
 } from 'cloudinary';
 import { ConfigService } from '@nestjs/config';
 import { scanUploadedFile } from '../common/utils/malware-scanner.util';
+import { assertAllowedImageMimeType } from '../common/utils/image-mime.util';
 
 @Injectable()
 export class CloudinaryService {
@@ -15,6 +16,8 @@ export class CloudinaryService {
     file: Express.Multer.File,
     folder?: string,
   ): Promise<UploadApiResponse | UploadApiErrorResponse> {
+    assertAllowedImageMimeType(file);
+
     await scanUploadedFile(
       file.buffer,
       file.originalname || 'upload',
