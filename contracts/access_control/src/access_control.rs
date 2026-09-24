@@ -34,6 +34,10 @@ pub enum DataKey {
     EmergencyMode,
 }
 
+/// C03: Maximum addresses allowed in a single batch blacklist/role operation.
+/// Prevents resource exhaustion / oversized proposal execution.
+pub const MAX_BATCH_SIZE: u32 = 50;
+
 pub struct AccessControlModule;
 
 impl AccessControlModule {
@@ -608,6 +612,14 @@ impl AccessControlModule {
             .unwrap_or(false)
     }
 
+    /// C03: Reject empty or oversized batch operations before any mutation.
+    pub fn validate_batch_size(size: u32) -> AccessControlResult<()> {
+        if size == 0 || size > MAX_BATCH_SIZE {
+            return Err(AccessControlError::BatchSizeExceeded);
+        }
+        Ok(())
+    }
+
     fn require_not_blacklisted(env: &Env, user: &Address) -> AccessControlResult<()> {
         if Self::is_blacklisted(env, user) {
             return Err(AccessControlError::Unauthorized);
@@ -656,6 +668,11 @@ impl AccessControlModule {
         action: ProposalAction,
     ) -> AccessControlResult<u64> {
         Self::require_admin(env, &proposer)?;
+
+        // C03: Bound batch actions before any proposal storage mutation
+        if let ProposalAction::BatchBlacklist(users) = &action {
+            Self::validate_batch_size(users.len())?;
+        }
 
         let multisig_config =
             Self::get_multisig_config(env).ok_or(AccessControlError::MultisigNotEnabled)?;
@@ -847,6 +864,11 @@ impl AccessControlModule {
             return Err(AccessControlError::InsufficientApprovals);
         }
 
+        // C03: Bound batch size before mutating proposal / storage
+        if let ProposalAction::BatchBlacklist(users) = &proposal.action {
+            Self::validate_batch_size(users.len())?;
+        }
+
         proposal.executed = true;
         env.storage()
             .persistent()
@@ -901,23 +923,27 @@ impl AccessControlModule {
                 );
             }
             ProposalAction::ClearEmergencyMode => {
-    env.storage().persistent().set(&DataKey::EmergencyMode, &false);
-}
+                env.storage()
+                    .persistent()
+                    .set(&DataKey::EmergencyMode, &false);
 
                 env.events().publish(
-                    (symbol_short!("emrg_pse"), reason),
+                    (symbol_short!("clr_emrg"),),
                     proposal.proposer.clone(),
                 );
             }
             ProposalAction::BatchBlacklist(users) => {
+                // Size pre-validated; process every address exactly once
+                let mut processed: u32 = 0;
                 for user in users.iter() {
                     env.storage()
                         .persistent()
                         .set(&DataKey::Blacklisted(user.clone()), &true);
+                    processed = processed.saturating_add(1);
                 }
 
                 env.events().publish(
-                    (symbol_short!("batch_bl"), users.len()),
+                    (symbol_short!("batch_bl"), processed),
                     proposal.proposer.clone(),
                 );
             }
