@@ -5,6 +5,7 @@ import { NotificationPreferencesService } from './notification-preferences.servi
 import { NotificationPreferencesController } from './notification-preferences.controller';
 import { CreateNotificationPreferencesProvider } from './providers/create-notification-preferences.provider';
 import { FindNotificationPreferencesProvider } from './providers/find-notification-preferences.provider';
+import { NotificationPreferenceValidationProvider } from './providers/notification-preference-validation.provider';
 
 @Module({
   imports: [TypeOrmModule.forFeature([NotificationPreference])],
@@ -13,6 +14,7 @@ import { FindNotificationPreferencesProvider } from './providers/find-notificati
     NotificationPreferencesService,
     CreateNotificationPreferencesProvider,
     FindNotificationPreferencesProvider,
+    NotificationPreferenceValidationProvider,
   ],
   exports: [NotificationPreferencesService],
 })

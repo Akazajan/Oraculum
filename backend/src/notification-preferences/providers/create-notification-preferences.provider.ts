@@ -5,6 +5,7 @@ import { NotificationPreference } from '../entities/notification-preference.enti
 import { NotificationChannel } from '../enums/notification-channel.enum';
 import { NotificationFrequency } from '../enums/notification-frequency.enum';
 import { NotificationType } from '../../notifications/enums/notification-type.enum';
+import { NotificationPreferenceValidationProvider } from './notification-preference-validation.provider';
 
 const DEFAULT_PREFERENCES: Array<{
   channel: NotificationChannel;
@@ -25,6 +26,7 @@ export class CreateNotificationPreferencesProvider {
   constructor(
     @InjectRepository(NotificationPreference)
     private readonly preferenceRepository: Repository<NotificationPreference>,
+    private readonly validationProvider: NotificationPreferenceValidationProvider,
   ) {}
 
   async createDefaultPreferences(userId: string): Promise<NotificationPreference[]> {
@@ -46,6 +48,9 @@ export class CreateNotificationPreferencesProvider {
       frequency?: NotificationFrequency;
     },
   ): Promise<NotificationPreference> {
+    const frequency = input.frequency ?? NotificationFrequency.INSTANT;
+    this.validationProvider.validateCombination(input.channel, frequency);
+
     let pref = await this.preferenceRepository.findOne({
       where: {
         userId,
@@ -63,7 +68,7 @@ export class CreateNotificationPreferencesProvider {
         channel: input.channel,
         eventType: input.eventType,
         enabled: input.enabled ?? true,
-        frequency: input.frequency ?? NotificationFrequency.INSTANT,
+        frequency,
       });
     }
 
