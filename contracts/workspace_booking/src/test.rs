@@ -587,7 +587,7 @@ fn test_complete_booking_by_admin() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #103)")]
+#[should_panic(expected = "Error(Contract, #105)")]
 fn test_cancel_already_cancelled_fails() {
     let env = Env::default();
     env.mock_all_auths();
@@ -622,8 +622,48 @@ fn test_cancel_already_cancelled_fails() {
     );
 
     client.cancel_booking(&member, &String::from_str(&env, "booking-001"));
-    // BookingNotActive = 103
+    // BookingAlreadyCancelled = 105
     client.cancel_booking(&member, &String::from_str(&env, "booking-001"));
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #2)")]
+fn test_cancel_booking_unauthorized_caller_fails() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = setup_contract(&env);
+    let client = WorkspaceBookingContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let member = Address::generate(&env);
+    let stranger = Address::generate(&env);
+    let token_address = setup_token(&env, &admin, &member, 10_000i128);
+
+    client.initialize(&admin, &token_address);
+    client.register_workspace(
+        &admin,
+        &String::from_str(&env, "ws-001"),
+        &String::from_str(&env, "Hot Desk"),
+        &WorkspaceType::HotDesk,
+        &1u32,
+        &500u128,
+    );
+
+    let now = env.ledger().timestamp();
+    let start = now + 60;
+    let end = start + 3_600;
+
+    client.book_workspace(
+        &member,
+        &String::from_str(&env, "booking-001"),
+        &String::from_str(&env, "ws-001"),
+        &start,
+        &end,
+    );
+
+    // Stranger tries to cancel — Unauthorized = 2
+    client.cancel_booking(&stranger, &String::from_str(&env, "booking-001"));
 }
 
 #[test]
