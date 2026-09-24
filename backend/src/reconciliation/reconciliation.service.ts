@@ -8,6 +8,7 @@ import { InvoiceStatus } from '../invoices/enums/invoice-status.enum';
 import { Payment } from '../payments/entities/payment.entity';
 import { PaymentStatus } from '../payments/enums/payment-status.enum';
 import { AuditService, AuditAction } from '../audit/audit.service';
+import { InvoiceStatusTransitionProvider } from '../invoices/providers/invoice-status-transition.provider';
 import {
   ReconciliationReport,
   ReconciliationOutcome,
@@ -35,6 +36,7 @@ export class ReconciliationService {
     private readonly reportsRepo: Repository<ReconciliationReport>,
     private readonly auditService: AuditService,
     private readonly configService: ConfigService,
+    private readonly transitionProvider: InvoiceStatusTransitionProvider,
   ) {}
 
   @Cron('0 */30 * * * *')
@@ -103,6 +105,7 @@ export class ReconciliationService {
       payment.status === PaymentStatus.SUCCESS &&
       invoice.status === InvoiceStatus.PENDING
     ) {
+      this.transitionProvider.validateTransition(invoice.status, InvoiceStatus.PAID);
       invoice.status = InvoiceStatus.PAID;
       invoice.paidAt = payment.paidAt ?? new Date();
       this.invoicesRepo.save(invoice);
@@ -123,6 +126,7 @@ export class ReconciliationService {
       payment.status === PaymentStatus.FAILED &&
       invoice.status === InvoiceStatus.PAID
     ) {
+      this.transitionProvider.validateTransition(invoice.status, InvoiceStatus.VOID);
       invoice.status = InvoiceStatus.VOID;
       this.invoicesRepo.save(invoice);
       this.recordReport(
