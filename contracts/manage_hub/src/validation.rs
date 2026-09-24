@@ -8,13 +8,17 @@ pub struct BatchValidator;
 impl BatchValidator {
     /// Validates that the batch size is within acceptable limits.
     ///
+    /// An empty batch (size == 0) is allowed and returns `Ok` so callers
+    /// get back an empty result list without a hard error.  A batch that
+    /// exceeds `MAX_BATCH_SIZE` is still rejected.
+    ///
     /// # Arguments
     /// * `size` - The number of items in the batch
     ///
     /// # Errors
-    /// * `BatchSizeExceeded` - If size is 0 or greater than MAX_BATCH_SIZE
+    /// * `Unauthorized` - If size is greater than MAX_BATCH_SIZE
     pub fn validate_batch_size(size: u32) -> Result<(), Error> {
-        if size == 0 || size > MAX_BATCH_SIZE {
+        if size > MAX_BATCH_SIZE {
             return Err(Error::Unauthorized);
         }
         Ok(())
