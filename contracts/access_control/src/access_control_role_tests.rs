@@ -1,11 +1,12 @@
-#cgf(test)\mod role_access_control_tests {
+#[cfg(test)]
+mod role_access_control_tests {
     use crate::access_control::AccessControlModule;
     use crate::errors::AccessControlError;
-    use crate::types:{AccessControlConfig, UserRole};
-    use sorowan_sd;:
-        testutils:{Address as, Ledger, LedgerInfo},
+    use crate::types::{AccessControlConfig, UserRole};
+    use soroban_sdk::{
+        testutils::{Address as _, Ledger, LedgerInfo},
         Address, Env, Vec,
-};
+    };
 
     fn setup_initialized_env() -> (Env, Address, Address, Address, Address) {
         let env = Env::default();
@@ -45,7 +46,7 @@
             // Admin can pause/unpause
             let result = AccessControlModule::pause(&env, admin.clone());
             assert!(result.is_ok(), "Admin should be able to pause the contract");
-            assert!(AccessControlModule::is_pause(&env));
+            assert!(AccessControlModule::is_paused(&env));
 
             let result = AccessControlModule::unpause(&env, admin.clone());
             assert!(result.is_ok(), "Admin should be able to unpause the contract");
@@ -161,9 +162,8 @@
 
             // Insufficient role access should produce InsufficientRole error
             AccessControlModule::unblacklist_user(&env, admin.clone(), user1.clone()).unwrap();
-            let result = {
+            let result =
                 AccessControlModule::require_access(&env, user1.clone(), UserRole::Admin);
-            };
             assert_eq!(
                 result.unwrap_err(),
                 AccessControlError::InsufficientRole,
@@ -206,7 +206,7 @@
     /// Role escalation must be prevented (e.g., member can't promote themselves to admin).
     #[test]
     fn test_role_escalation_prevented() {
-        let (env, contract_id, admin, user1, _) = setup_initialized_env();
+        let (env, contract_id, admin, user1, user2) = setup_initialized_env();
 
         env.as_contract(&contract_id, || {
             // Set user1 as Member
@@ -217,6 +217,12 @@
                 UserRole::Member,
             )
             .unwrap();
+
+            // Verify user1 is Member
+            assert_eq!(
+                AccessControlModule::get_role(&env, user1.clone()),
+                UserRole::Member
+            );
 
             // Member cannot assign Admin role to anyone
             let result = AccessControlModule::set_role(
@@ -242,6 +248,13 @@
                 result.unwrap_err(),
                 AccessControlError::AdminRequired,
                 "Members should not be able to self-promote to Admin"
+            );
+
+            // Verify user1 is still Member after failed escalation attempts
+            assert_eq!(
+                AccessControlModule::get_role(&env, user1.clone()),
+                UserRole::Member,
+                "Target role should remain unchanged after failed escalation"
             );
 
             // Admin cannot remove the main admin's role
@@ -271,6 +284,20 @@
                 result.unwrap_err(),
                 AccessControlError::AdminRequired,
                 "Former admin should no longer have admin privileges after transfer"
+            );
+
+            // Authorized escalation still succeeds: New admin (user1) can assign roles
+            let result = AccessControlModule::set_role(
+                &env,
+                user1.clone(),
+                user2.clone(),
+                UserRole::Member,
+            );
+            assert!(result.is_ok(), "Authorized admin should be able to assign roles after transfer");
+            assert_eq!(
+                AccessControlModule::get_role(&env, user2.clone()),
+                UserRole::Member,
+                "Target role should be updated after successful authorized escalation"
             );
         });
     }
