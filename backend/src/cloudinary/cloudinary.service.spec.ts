@@ -1,3 +1,4 @@
+import { BadRequestException } from '@nestjs/common';
 import { v2 as cloudinary } from 'cloudinary';
 import { CloudinaryService } from './cloudinary.service';
 import { scanUploadedFile } from '../common/utils/malware-scanner.util';
@@ -16,6 +17,8 @@ jest.mock('../common/utils/malware-scanner.util', () => ({
 }));
 
 const mockedScanUploadedFile = scanUploadedFile as jest.MockedFunction<typeof scanUploadedFile>;
+
+const PNG_BYTES = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00]);
 
 describe('CloudinaryService', () => {
   const mockedUploadStream = cloudinary.uploader.upload_stream as jest.Mock;
@@ -39,12 +42,12 @@ describe('CloudinaryService', () => {
     } as any);
 
     await service.uploadImage(
-      { buffer: Buffer.from('hello world'), originalname: 'avatar.png', size: 11 } as Express.Multer.File,
+      { buffer: PNG_BYTES, originalname: 'avatar.png', mimetype: 'image/png', size: PNG_BYTES.length } as Express.Multer.File,
       'profile-pictures',
     );
 
     expect(mockedScanUploadedFile).toHaveBeenCalledWith(
-      Buffer.from('hello world'),
+      PNG_BYTES,
       'avatar.png',
       expect.anything(),
     );
@@ -59,9 +62,40 @@ describe('CloudinaryService', () => {
 
     await expect(
       service.uploadImage(
-        { buffer: Buffer.from('hello world'), originalname: 'avatar.png', size: 11 } as Express.Multer.File,
+        { buffer: PNG_BYTES, originalname: 'avatar.png', mimetype: 'image/png', size: PNG_BYTES.length } as Express.Multer.File,
         'profile-pictures',
       ),
     ).rejects.toThrow('Upload rejected: suspicious content detected');
+  });
+
+  it('rejects a disallowed MIME type before scanning or uploading', async () => {
+    const service = new CloudinaryService({
+      get: jest.fn().mockReturnValue('profile-pictures'),
+    } as any);
+
+    await expect(
+      service.uploadImage(
+        { buffer: Buffer.from('<svg></svg>'), originalname: 'avatar.svg', mimetype: 'image/svg+xml', size: 11 } as Express.Multer.File,
+        'profile-pictures',
+      ),
+    ).rejects.toBeInstanceOf(BadRequestException);
+
+    expect(mockedScanUploadedFile).not.toHaveBeenCalled();
+    expect(mockedUploadStream).not.toHaveBeenCalled();
+  });
+
+  it('rejects a spoofed extension whose content is not an image', async () => {
+    const service = new CloudinaryService({
+      get: jest.fn().mockReturnValue('profile-pictures'),
+    } as any);
+
+    await expect(
+      service.uploadImage(
+        { buffer: Buffer.from('%PDF-1.7'), originalname: 'avatar.png', mimetype: 'image/png', size: 8 } as Express.Multer.File,
+        'profile-pictures',
+      ),
+    ).rejects.toBeInstanceOf(BadRequestException);
+
+    expect(mockedUploadStream).not.toHaveBeenCalled();
   });
 });
