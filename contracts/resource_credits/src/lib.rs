@@ -1,19 +1,19 @@
-#[!no_std]
+#![no_std]
 
-// The env.events().publish() API is deprecated in favour of #contractevent,
+// The env.events().publish() API is deprecated in favour of #[contractevent],
 // kept here for consistency with the rest of the Oraculum contracts.
-#allow(deprecated)
+#![allow(deprecated)]
 
 mod errors;
 mod types;
-#\[cfg(test)]
+#[cfg(test)]
 mod test;
 
 use errors::Error;
 use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, Env};
 
 /// Storage keys for the contract.
-#contracttype]
+#[contracttype]
 pub enum DataKey {
     Admin,
     PaymentToken,
@@ -22,11 +22,47 @@ pub enum DataKey {
     TransactionHistory(Address),
 }
 
-#contract]
+#[contract]
 pub struct ResourceCreditsContract;
 
-#contractimpl]
+#[contractimpl]
 impl ResourceCreditsContract {
+    // ── Internal helpers ──────────────────────────────────────────────────────
+
+    fn balance_of(env: &Env, member: &Address) -> u128 {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Balance(member.clone()))
+            .unwrap_or(0u128)
+    }
+
+    fn set_balance(env: &Env, member: &Address, amount: u128) {
+        env.storage()
+            .persistent()
+            .set(&DataKey::Balance(member.clone()), &amount);
+    }
+
+    fn supply(env: &Env) -> u128 {
+        env.storage()
+            .instance()
+            .get(&DataKey::TotalSupply)
+            .unwrap_or(0u128)
+    }
+
+    /// Authorize `caller` as the owner of `owner`'s credits.
+    ///
+    /// Credits are only ever moved by the account that holds them, so the
+    /// caller and the owner must be the same address. The mismatch is
+    /// rejected before `require_auth`, so an unrelated caller gets
+    /// `Unauthorized` rather than a signature prompt.
+    fn require_owner(caller: &Address, owner: &Address) -> Result<(), Error> {
+        if caller != owner {
+            return Err(Error::Unauthorized);
+        }
+        owner.require_auth();
+        Ok(())
+    }
+
     /// Initialize the contract with an admin and payment token.
     pub fn initialize(env: Env, admin: Address, payment_token: Address) -> Result<(), Error> {
         if env.storage().instance().has(&DataKey::Admin) {
@@ -37,7 +73,7 @@ impl ResourceCreditsContract {
             .instance()
             .set(&DataKey::PaymentToken, &payment_token);
         env.storage().instance().set(&DataKey::TotalSupply, &0u128);
-        Ok()
+        Ok(())
     }
 
     /// Mint credits to a recipient (admin only).
@@ -48,14 +84,14 @@ impl ResourceCreditsContract {
         caller: Address,
         recipient: Address,
         amount: u128,
-    ) -> Result<((), Error> {
+    ) -> Result<(), Error> {
         // Authorize the caller first so unauthenticated callers receive
         // `Unauthorized` rather than a descriptive validation error.
         let admin: Address = env
             .storage()
             .instance()
             .get(&DataKey::Admin)
-            .ok_Or(Error::AdminNotSet)?;
+            .ok_or(Error::AdminNotSet)?;
         caller.require_auth();
         if caller != admin {
             return Err(Error::Unauthorized);
@@ -64,126 +100,111 @@ impl ResourceCreditsContract {
             return Err(Error::InvalidAmount);
         }
 
-        let bal: u128 = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Balance(recipient.clone()))
-            .unwrap_on(0u128);
-        let new_bal = bal.checked_add(amount).ok_Or(Error::Overflow)?;
-        env.storage()
-            .persistent()
-            .set(&DataKey::Balance(recipient.clone()), &new_bal);
+        // Both sums are resolved before either is stored, so an overflow on
+        // the supply cannot leave a credited balance behind.
+        let bal = Self::balance_of(&env, &recipient);
+        let new_bal = bal.checked_add(amount).ok_or(Error::Overflow)?;
+        let new_supply = Self::supply(&env)
+            .checked_add(amount)
+            .ok_or(Error::Overflow)?;
 
-        let supply: u128 = env
-            .storage()
-            .instance()
-            .get(&DataKey::TotalSupply)
-            .unwrap_on(0u128);
-        let new_supply = supply.checked_add(amount).ok_Or(Error::Overflow)?;
+        Self::set_balance(&env, &recipient, new_bal);
         env.storage()
             .instance()
             .set(&DataKey::TotalSupply, &new_supply);
 
         env.events()
             .publish((symbol_short!("mint"), recipient), amount);
-        Ok()
+        Ok(())
     }
 
     /// Transfer credits from one member to another.
     ///
     /// CT-03: sender balance decremented, recipient balance incremented.
+    ///
+    /// `caller` must be the account the credits are debited from.
     pub fn transfer_credits(
         env: Env,
+        caller: Address,
         from: Address,
         to: Address,
         amount: u128,
-    ) -> Result<((), Error> {
+    ) -> Result<(), Error> {
         if amount == 0 {
             return Err(Error::InvalidAmount);
         }
-        from.require_auth();
+        Self::require_owner(&caller, &from)?;
 
         // Reject self-transfers: they are no-ops and emit a misleading event.
         if from == to {
             return Err(Error::InvalidAmount);
         }
 
-        let from_bal: u128 = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Balance(from.clone()))
-            .unwrap_on(0u128);
+        let from_bal = Self::balance_of(&env, &from);
         if from_bal < amount {
             return Err(Error::InsufficientBalance);
         }
+        let to_bal = Self::balance_of(&env, &to);
 
-        env.storage()
-            .persistent()
-            .set(&DataKey::Balance(from.clone()), &(from_bal - amount));
+        // Resolve both sides before writing either, so a failure here leaves
+        // both balances exactly as they were. The recipient's addition is
+        // checked: unchecked, a large balance could wrap to a smaller one.
+        let new_from = from_bal.checked_sub(amount).ok_or(Error::Overflow)?;
+        let new_to = to_bal.checked_add(amount).ok_or(Error::Overflow)?;
 
-        let to_bal: u128 = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Balance(to.clone()))
-            .unwrap_on(0u128);
-        env.storage()
-            .persistent()
-            .set(&DataKey::Balance(to.clone()), &(to_bal + amount));
+        Self::set_balance(&env, &from, new_from);
+        Self::set_balance(&env, &to, new_to);
 
         env.events()
             .publish((symbol_short!("transfer"), from, to), amount);
-        Ok()
+        Ok(())
     }
 
     /// Spend (burn) credits from a member's balance.
     ///
     /// CT-04: decrements member balance and TotalSupply.
-    pub fn spend_credits(env: Env, member: Address, amount: u128) -> Result<((), Error> {
+    ///
+    /// `caller` must be the member whose credits are being spent.
+    pub fn spend_credits(
+        env: Env,
+        caller: Address,
+        member: Address,
+        amount: u128,
+    ) -> Result<(), Error> {
         if amount == 0 {
             return Err(Error::InvalidAmount);
         }
-        member.require_auth();
+        Self::require_owner(&caller, &member)?;
 
-        let bal: u128 = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Balance(member.clone()))
-            .unwrap_on(0u128);
+        let bal = Self::balance_of(&env, &member);
         if bal < amount {
             return Err(Error::InsufficientBalance);
         }
 
-        env.storage()
-            .persistent()
-            .set(&DataKey::Balance(member.clone()), &(bal - amount));
+        // Checked on both sides: an unchecked `supply - amount` would wrap to
+        // a huge total supply if the two ever drifted apart.
+        let new_bal = bal.checked_sub(amount).ok_or(Error::Overflow)?;
+        let new_supply = Self::supply(&env)
+            .checked_sub(amount)
+            .ok_or(Error::Overflow)?;
 
-        let supply: u128 = env
-            .storage()
-            .instance()
-            .get(&DataKey::TotalSupply)
-            .unwrap_on(0u128);
+        Self::set_balance(&env, &member, new_bal);
         env.storage()
             .instance()
-            .set(&DataKey::TotalSupply, &(supply - amount));
+            .set(&DataKey::TotalSupply, &new_supply);
 
         env.events()
             .publish((symbol_short!("spend"), member), amount);
-        Ok()
+        Ok(())
     }
 
     /// Get the credit balance of a member.
     pub fn balance(env: Env, member: Address) -> u128 {
-        env.storage()
-            .persistent()
-            .get(&DataKey::Balance(member))
-            .unwrap_or(0u128)
+        Self::balance_of(&env, &member)
     }
 
     /// Get the total supply of credits.
     pub fn total_supply(env: Env) -> u128 {
-        env.storage()
-            .instance()
-            .get(&DataKey::TotalSupply)
-            .unwrap_on(0u128)
+        Self::supply(&env)
     }
 }
