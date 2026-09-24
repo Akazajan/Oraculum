@@ -15,6 +15,7 @@ import { CacheInvalidationProvider } from '../common/providers/cache-invalidatio
 import { ExportBookingsProvider } from './providers/export-bookings.provider';
 import { CsvExportService } from '../common/csv-export/csv-export.service';
 import { BookingReminderScheduler } from './providers/booking-reminder.provider';
+import { ReservationExpiryHandler } from './providers/reservation-expiry.provider';
 import { RecurringBookingService } from '../modules/bookings/recurring-booking';
 
 @Module({
@@ -32,6 +33,7 @@ import { RecurringBookingService } from '../modules/bookings/recurring-booking';
     ExportBookingsProvider,
     CsvExportService,
     BookingReminderScheduler,
+    ReservationExpiryHandler,
     RecurringBookingService,
   ],
   exports: [BookingsService],
