@@ -1,4 +1,4 @@
-import { Injectable, Optional } from '@nestjs/common';
+import { Injectable, Optional, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { AuditLog, AuditOutcome } from './entities/audit-log.entity';
@@ -8,6 +8,9 @@ import {
   getRequestIp,
   getUserAgent,
 } from '../common/context/correlation-context';
+
+// Sensitive fields that should not be logged
+const SENSITIVE_FIELDS = ['password', 'token', 'secret', 'key', 'authorization', 'credential'];
 
 /**
  * Public list of audit action codes. Centralised so every contributor
@@ -95,6 +98,8 @@ export interface AuditEntry {
  */
 @Injectable()
 export class AuditService {
+  private readonly logger = new Logger(AuditService.name);
+
   constructor(
     @Optional()
     @InjectRepository(AuditLog)
@@ -117,9 +122,42 @@ export class AuditService {
     };
   }
 
+  /**
+   * Filters out sensitive fields from metadata
+   */
+  private filterSensitiveMetadata(metadata: Record<string, unknown> | null): Record<string, unknown> | null {
+    if (!metadata) return null;
+    
+    const filtered = { ...metadata };
+    
+    Object.keys(filtered).forEach(key => {
+      if (SENSITIVE_FIELDS.some(field => key.toLowerCase().includes(field))) {
+        filtered[key] = '[REDACTED]' as unknown;
+      }
+    });
+    
+    return filtered;
+  }
+
+  /**
+   * Creates a structured error log message
+   */
+  private createErrorLog(action: string, correlationId: string, error: unknown): string {
+    return JSON.stringify({
+      timestamp: new Date().toISOString(),
+      correlationId,
+      action,
+      error: error instanceof Error ? error.message : String(error),
+      errorType: error instanceof Error ? error.name : typeof error
+    });
+  }
+
   async log(entry: AuditEntry): Promise<AuditLog | null> {
     const correlationId = getCorrelationId();
     const actor = this.resolveActor(entry.actor);
+
+    // Create a copy of metadata to avoid modifying the original
+    const filteredMetadata = this.filterSensitiveMetadata(entry.metadata);
 
     const row: Partial<AuditLog> = {
       action: entry.action,
@@ -132,13 +170,12 @@ export class AuditService {
       ip: getRequestIp(),
       userAgent: getUserAgent(),
       correlationId,
-      metadata: entry.metadata ?? null,
+      metadata: filteredMetadata,
     };
 
     if (!this.auditRepository) {
       // Logger fallback used by tests / when the repository is not wired.
-      // eslint-disable-next-line no-console
-      console.warn(
+      this.logger.warn(
         `[audit] ${row.action} ${row.outcome} actor=${row.actorEmail ?? 'anon'} resource=${row.resourceType ?? '-'}/${row.resourceId ?? '-'} cid=${correlationId}`,
       );
       return null;
@@ -148,12 +185,10 @@ export class AuditService {
       const created = this.auditRepository.create(row);
       return await this.auditRepository.save(created);
     } catch (err) {
-      // eslint-disable-next-line no-console
-      console.warn(
-        `[audit] failed to persist ${row.action} (cid=${correlationId}): ${
-          (err as Error)?.message ?? err
-        }`,
-      );
+      // Log structured error with context but without sensitive data
+      this.logger.warn(this.createErrorLog(row.action, correlationId, err));
+      
+      // Return null to indicate audit failure without affecting the business operation
       return null;
     }
   }
