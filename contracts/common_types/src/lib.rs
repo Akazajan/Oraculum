@@ -11,15 +11,15 @@ pub mod storage_version;
 
 // Re-export all types
 pub use types::{
-    validate_attribute, validate_metadata, validate_page_params, AttendanceAction,
+    validate_address, validate_attribute, validate_bounded_identifier, validate_metadata,
+    validate_page_params, validate_positive_amount, AgentMetadataUpdatedEvent, AttendanceAction,
     AttendanceFrequency, DateRange, DayPattern, MembershipStatus, MetadataUpdate, MetadataValue,
     PageParams, PeakHourData, SubscriptionPlan, SubscriptionTier, TierChangeRequest,
     TierChangeStatus, TierChangeType, TierFeature, TierLevel, TierPromotion, TimePeriod,
     TokenMetadata, UserAttendanceStats, UserRole, MAX_ATTRIBUTES_COUNT, MAX_ATTRIBUTE_KEY_LENGTH,
-    MAX_DESCRIPTION_LENGTH, MAX_PAGE_SIZE, MAX_TEXT_VALUE_LENGTH,
+    MAX_DESCRIPTION_LENGTH, MAX_IDENTIFIER_LENGTH, MAX_PAGE_SIZE, MAX_TEXT_VALUE_LENGTH,
 };
 pub use storage_version::{StorageVersion, StorageVersionManager};
 
 #[cfg(test)]
-pub mod canonicalization;
 mod test_contract;
