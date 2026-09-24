@@ -245,6 +245,14 @@ impl WorkspaceBookingContract {
     ) -> Result<(), Error> {
         Self::require_admin(&env, &caller)?;
 
+        if env
+            .storage()
+            .persistent()
+            .has(&DataKey::Workspace(id.clone()))
+        {
+            return Err(Error::WorkspaceAlreadyExists);
+        }
+
         if name.len() > types::MAX_NAME_LEN {
             return Err(Error::StringTooLong);
         }
@@ -253,13 +261,6 @@ impl WorkspaceBookingContract {
         }
         if hourly_rate == 0 {
             return Err(Error::InvalidRate);
-        }
-        if env
-            .storage()
-            .persistent()
-            .has(&DataKey::Workspace(id.clone()))
-        {
-            return Err(Error::WorkspaceAlreadyExists);
         }
 
         let workspace = Workspace {
