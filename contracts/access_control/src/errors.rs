@@ -75,6 +75,8 @@ pub enum AccessControlError {
     ProposalRejected = 133,
     /// ADDED BY FIX #270: User is blacklisted and cannot be elevated to admin
     UserBlacklisted = 134,
+    /// C03: Batch blacklist/role operation exceeds maximum allowed size
+    BatchSizeExceeded = 135,
 }
 
 impl AccessControlError {
@@ -122,6 +124,7 @@ impl AccessControlError {
             AccessControlError::NotMultisigAdmin => "Not authorized as multisig admin",
             AccessControlError::ProposalRejected => "Proposal rejection threshold reached",
             AccessControlError::UserBlacklisted => "User is blacklisted and cannot be elevated to admin",
+            AccessControlError::BatchSizeExceeded => "Batch size exceeds the maximum allowed for access-control operations",
         }
     }
 
@@ -171,6 +174,7 @@ mod tests {
         assert!(!AccessControlError::Unauthorized.description().is_empty());
         assert!(!AccessControlError::AdminRequired.description().is_empty());
         assert!(!AccessControlError::InvalidRole.description().is_empty());
+        assert!(!AccessControlError::BatchSizeExceeded.description().is_empty());
     }
 
     #[test]
@@ -191,5 +195,6 @@ mod tests {
         assert_eq!(AccessControlError::Unauthorized as u32, 100);
         assert_eq!(AccessControlError::AdminRequired as u32, 101);
         assert_eq!(AccessControlError::ContractPaused as u32, 115);
+        assert_eq!(AccessControlError::BatchSizeExceeded as u32, 135);
     }
 }

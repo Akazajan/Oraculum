@@ -60,6 +60,19 @@ impl ResourceCreditsContract {
             return Err(Error::Unauthorized);
         }
         owner.require_auth();
+    /// Reject a zero-value credit operation.
+    ///
+    /// Minting, transferring or spending zero credits moves nothing but still
+    /// writes balances and emits an event, which makes the transaction
+    /// history misleading. Every credit-moving entry point runs this before
+    /// touching storage, so a zero-value call fails with no state change.
+    ///
+    /// Distinct from [`Error::InsufficientBalance`]: the amount itself is
+    /// invalid here, regardless of what the account holds.
+    fn require_nonzero(amount: u128) -> Result<(), Error> {
+        if amount == 0 {
+            return Err(Error::InvalidAmount);
+        }
         Ok(())
     }
 
@@ -96,9 +109,7 @@ impl ResourceCreditsContract {
         if caller != admin {
             return Err(Error::Unauthorized);
         }
-        if amount == 0 {
-            return Err(Error::InvalidAmount);
-        }
+        Self::require_nonzero(amount)?;
 
         // Both sums are resolved before either is stored, so an overflow on
         // the supply cannot leave a credited balance behind.
@@ -109,6 +120,22 @@ impl ResourceCreditsContract {
             .ok_or(Error::Overflow)?;
 
         Self::set_balance(&env, &recipient, new_bal);
+        let bal: u128 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Balance(recipient.clone()))
+            .unwrap_or(0u128);
+        let new_bal = bal.checked_add(amount).ok_or(Error::Overflow)?;
+        env.storage()
+            .persistent()
+            .set(&DataKey::Balance(recipient.clone()), &new_bal);
+
+        let supply: u128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::TotalSupply)
+            .unwrap_or(0u128);
+        let new_supply = supply.checked_add(amount).ok_or(Error::Overflow)?;
         env.storage()
             .instance()
             .set(&DataKey::TotalSupply, &new_supply);
@@ -134,6 +161,10 @@ impl ResourceCreditsContract {
             return Err(Error::InvalidAmount);
         }
         Self::require_owner(&caller, &from)?;
+        // Checked before `require_auth` so a zero-value transfer fails
+        // outright instead of first prompting the holder for a signature.
+        Self::require_nonzero(amount)?;
+        from.require_auth();
 
         // Reject self-transfers: they are no-ops and emit a misleading event.
         if from == to {
@@ -141,6 +172,11 @@ impl ResourceCreditsContract {
         }
 
         let from_bal = Self::balance_of(&env, &from);
+        let from_bal: u128 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Balance(from.clone()))
+            .unwrap_or(0u128);
         if from_bal < amount {
             return Err(Error::InsufficientBalance);
         }
@@ -154,6 +190,14 @@ impl ResourceCreditsContract {
 
         Self::set_balance(&env, &from, new_from);
         Self::set_balance(&env, &to, new_to);
+        let to_bal: u128 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Balance(to.clone()))
+            .unwrap_or(0u128);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Balance(to.clone()), &(to_bal + amount));
 
         env.events()
             .publish((symbol_short!("transfer"), from, to), amount);
@@ -177,6 +221,16 @@ impl ResourceCreditsContract {
         Self::require_owner(&caller, &member)?;
 
         let bal = Self::balance_of(&env, &member);
+    pub fn spend_credits(env: Env, member: Address, amount: u128) -> Result<(), Error> {
+        // As in `transfer_credits`: a zero-value spend never reaches auth.
+        Self::require_nonzero(amount)?;
+        member.require_auth();
+
+        let bal: u128 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Balance(member.clone()))
+            .unwrap_or(0u128);
         if bal < amount {
             return Err(Error::InsufficientBalance);
         }
@@ -189,6 +243,11 @@ impl ResourceCreditsContract {
             .ok_or(Error::Overflow)?;
 
         Self::set_balance(&env, &member, new_bal);
+        let supply: u128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::TotalSupply)
+            .unwrap_or(0u128);
         env.storage()
             .instance()
             .set(&DataKey::TotalSupply, &new_supply);
@@ -206,5 +265,9 @@ impl ResourceCreditsContract {
     /// Get the total supply of credits.
     pub fn total_supply(env: Env) -> u128 {
         Self::supply(&env)
+        env.storage()
+            .instance()
+            .get(&DataKey::TotalSupply)
+            .unwrap_or(0u128)
     }
 }

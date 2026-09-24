@@ -213,44 +213,151 @@ mod tests {
     use super::*;
     use soroban_sdk::testutils::Address as _;
 
+    fn put_text(env: &Env, map: &mut Map<String, MetadataValue>, key: &str, value: &str) {
+        map.put(
+            String::from_str(env, key),
+            MetadataValue::Text(String::from_str(env, value)),
+        );
+    }
+
+    /// Acceptance: field ordering must not change the hash.
+    #[test]
+    fn test_field_ordering_does_not_change_hash() {
+        let env = Env::default();
+
+        let mut a = Map::<String, MetadataValue>::new(&env);
+        put_text(&env, &mut a, "zeta", "last");
+        put_text(&env, &mut a, "alpha", "first");
+        a.put(String::from_str(&env, "mid"), MetadataValue::Number(42));
+        a.put(
+            String::from_str(&env, "flag"),
+            MetadataValue::Boolean(true),
+        );
+
+        // Reverse insertion order, same logical fields/values.
+        let mut b = Map::<String, MetadataValue>::new(&env);
+        b.put(String::from_str(&env, "mid"), MetadataValue::Number(42));
+        put_text(&env, &mut b, "zeta", "last");
+        b.put(
+            String::from_str(&env, "flag"),
+            MetadataValue::Boolean(true),
+        );
+        put_text(&env, &mut b, "alpha", "first");
+
+        assert_eq!(hash_query_receipt(&env, &a), hash_query_receipt(&env, &b));
+    }
+
+    /// Acceptance: omitted optional fields follow one rule — absence from the
+    /// map means the key is not serialized. Including a key (even with empty
+    /// text) is distinct from omitting it; two maps with the same present keys
+    /// and values hash identically regardless of which optionals were skipped.
+    #[test]
+    fn test_omitted_optional_fields_follow_one_rule() {
+        let env = Env::default();
+
+        let mut core = Map::<String, MetadataValue>::new(&env);
+        put_text(&env, &mut core, "query_id", "q-100");
+        put_text(&env, &mut core, "source", "oracle");
+
+        let mut core_again = Map::<String, MetadataValue>::new(&env);
+        put_text(&env, &mut core_again, "source", "oracle");
+        put_text(&env, &mut core_again, "query_id", "q-100");
+
+        assert_eq!(
+            hash_query_receipt(&env, &core),
+            hash_query_receipt(&env, &core_again),
+            "omitting the same optionals must be deterministic"
+        );
+
+        let mut with_optional = Map::<String, MetadataValue>::new(&env);
+        put_text(&env, &mut with_optional, "query_id", "q-100");
+        put_text(&env, &mut with_optional, "source", "oracle");
+        put_text(&env, &mut with_optional, "note", "extra");
+
+        assert_ne!(
+            hash_query_receipt(&env, &core),
+            hash_query_receipt(&env, &with_optional),
+            "present optional must change the hash vs omitted"
+        );
+
+        let mut with_empty = Map::<String, MetadataValue>::new(&env);
+        put_text(&env, &mut with_empty, "query_id", "q-100");
+        put_text(&env, &mut with_empty, "source", "oracle");
+        put_text(&env, &mut with_empty, "note", "");
+
+        assert_ne!(
+            hash_query_receipt(&env, &core),
+            hash_query_receipt(&env, &with_empty),
+            "empty optional value must not collapse to omission"
+        );
+        assert_ne!(
+            hash_query_receipt(&env, &with_optional),
+            hash_query_receipt(&env, &with_empty),
+            "empty vs non-empty optional values must differ"
+        );
+
+        let canonical = canonicalize_payload(&env, &core);
+        assert_eq!(canonical.len(), 2);
+        let (k0, _) = canonical.get(0).unwrap();
+        let (k1, _) = canonical.get(1).unwrap();
+        assert_eq!(k0, String::from_str(&env, "query_id"));
+        assert_eq!(k1, String::from_str(&env, "source"));
+    }
+
+    /// Acceptance: different values produce different hashes.
+    #[test]
+    fn test_different_values_produce_different_hashes() {
+        let env = Env::default();
+
+        let mut base = Map::<String, MetadataValue>::new(&env);
+        put_text(&env, &mut base, "name", "Alice");
+        base.put(String::from_str(&env, "age"), MetadataValue::Number(30));
+        base.put(
+            String::from_str(&env, "active"),
+            MetadataValue::Boolean(true),
+        );
+        base.put(
+            String::from_str(&env, "ts"),
+            MetadataValue::Timestamp(1_700_000_000),
+        );
+
+        let hash_base = hash_query_receipt(&env, &base);
+
+        let mut text_diff = base.clone();
+        put_text(&env, &mut text_diff, "name", "Bob");
+        assert_ne!(hash_base, hash_query_receipt(&env, &text_diff));
+
+        let mut num_diff = base.clone();
+        num_diff.put(String::from_str(&env, "age"), MetadataValue::Number(31));
+        assert_ne!(hash_base, hash_query_receipt(&env, &num_diff));
+
+        let mut bool_diff = base.clone();
+        bool_diff.put(
+            String::from_str(&env, "active"),
+            MetadataValue::Boolean(false),
+        );
+        assert_ne!(hash_base, hash_query_receipt(&env, &bool_diff));
+
+        let mut ts_diff = base.clone();
+        ts_diff.put(
+            String::from_str(&env, "ts"),
+            MetadataValue::Timestamp(1_700_000_001),
+        );
+        assert_ne!(hash_base, hash_query_receipt(&env, &ts_diff));
+    }
+
     #[test]
     fn test_deterministic_hash_same_payload() {
         let env = Env::default();
 
         let mut payload = Map::<String, MetadataValue>::new(&env);
-        payload.put(
-            String::from_str(&env, "name"),
-            MetadataValue::Text(String::from_str(&env, "Alice")),
+        put_text(&env, &mut payload, "name", "Alice");
+        payload.put(String::from_str(&env, "age"), MetadataValue::Number(30));
+
+        assert_eq!(
+            hash_query_receipt(&env, &payload),
+            hash_query_receipt(&env, &payload)
         );
-        payload.put(
-            String::from_str(&env, "age"),
-            MetadataValue::Number(30),
-        );
-
-        let hash1 = hash_query_receipt(&env, &payload);
-        let hash2 = hash_query_receipt(&env, &payload);
-        assert_eq!(hash1, hash2);
-    }
-
-    #[test]
-    fn test_different_payloads_different_hashes() {
-        let env = Env::default();
-
-        let mut payload1 = Map::<String, MetadataValue>::new(&env);
-        payload1.put(
-            String::from_str(&env, "name"),
-            MetadataValue::Text(String::from_str(&env, "Alice")),
-        );
-
-        let mut payload2 = Map::<String, MetadataValue>::new(&env);
-        payload2.put(
-            String::from_str(&env, "name"),
-            MetadataValue::Text(String::from_str(&env, "Bob")),
-        );
-
-        let hash1 = hash_query_receipt(&env, &payload1);
-        let hash2 = hash_query_receipt(&env, &payload2);
-        assert_ne!(hash1, hash2);
     }
 
     #[test]
@@ -258,28 +365,17 @@ mod tests {
         let env = Env::default();
 
         let mut payload1 = Map::<String, MetadataValue>::new(&env);
-        payload1.put(
-            String::from_str(&env, "alpha"),
-            MetadataValue::Text(String::from_str(&env, "1")),
-        );
-        payload1.put(
-            String::from_str(&env, "beta"),
-            MetadataValue::Text(String::from_str(&env, "2")),
-        );
+        put_text(&env, &mut payload1, "alpha", "1");
+        put_text(&env, &mut payload1, "beta", "2");
 
         let mut payload2 = Map::<String, MetadataValue>::new(&env);
-        payload2.put(
-            String::from_str(&env, "beta"),
-            MetadataValue::Text(String::from_str(&env, "2")),
-        );
-        payload2.put(
-            String::from_str(&env, "alpha"),
-            MetadataValue::Text(String::from_str(&env, "1")),
-        );
+        put_text(&env, &mut payload2, "beta", "2");
+        put_text(&env, &mut payload2, "alpha", "1");
 
-        let hash1 = hash_query_receipt(&env, &payload1);
-        let hash2 = hash_query_receipt(&env, &payload2);
-        assert_eq!(hash1, hash2);
+        assert_eq!(
+            hash_query_receipt(&env, &payload1),
+            hash_query_receipt(&env, &payload2)
+        );
     }
 
     #[test]
@@ -287,60 +383,87 @@ mod tests {
         let env = Env::default();
 
         let mut payload = Map::<String, MetadataValue>::new(&env);
-        payload.put(
-            String::from_str(&env, "charlie"),
-            MetadataValue::Number(3),
-        );
-        payload.put(
-            String::from_str(&env, "alpha"),
-            MetadataValue::Number(1),
-        );
-        payload.put(
-            String::from_str(&env, "bravo"),
-            MetadataValue::Number(2),
-        );
+        payload.put(String::from_str(&env, "charlie"), MetadataValue::Number(3));
+        payload.put(String::from_str(&env, "alpha"), MetadataValue::Number(1));
+        payload.put(String::from_str(&env, "bravo"), MetadataValue::Number(2));
 
         let canonical = canonicalize_payload(&env, &payload);
         assert_eq!(canonical.len(), 3);
 
-        let (k0, _) = canonical.get(0).unwrap();
-        let (k1, _) = canonical.get(1).unwrap();
-        let (k2, _) = canonical.get(2).unwrap();
+        let (k0, v0) = canonical.get(0).unwrap();
+        let (k1, v1) = canonical.get(1).unwrap();
+        let (k2, v2) = canonical.get(2).unwrap();
         assert_eq!(k0, String::from_str(&env, "alpha"));
         assert_eq!(k1, String::from_str(&env, "bravo"));
         assert_eq!(k2, String::from_str(&env, "charlie"));
+        assert_eq!(v0, String::from_str(&env, "1"));
+        assert_eq!(v1, String::from_str(&env, "2"));
+        assert_eq!(v2, String::from_str(&env, "3"));
     }
 
     #[test]
     fn test_canonicalize_empty_map() {
         let env = Env::default();
         let payload = Map::<String, MetadataValue>::new(&env);
-        let canonical = canonicalize_payload(&env, &payload);
-        assert_eq!(canonical.len(), 0);
+        assert_eq!(canonicalize_payload(&env, &payload).len(), 0);
     }
 
     #[test]
-    fn test_canonicalize_address_list_sorted() {
+    fn test_hash_empty_payload_is_deterministic() {
+        let env = Env::default();
+        let payload = Map::<String, MetadataValue>::new(&env);
+        let hash1 = hash_query_receipt(&env, &payload);
+        let hash2 = hash_query_receipt(&env, &payload);
+        assert_eq!(hash1, hash2);
+    }
+
+    #[test]
+    fn test_metadata_value_serialization_variants() {
+        let env = Env::default();
+
+        let mut payload = Map::<String, MetadataValue>::new(&env);
+        payload.put(String::from_str(&env, "b"), MetadataValue::Boolean(false));
+        payload.put(String::from_str(&env, "n"), MetadataValue::Number(-7));
+        payload.put(String::from_str(&env, "t"), MetadataValue::Timestamp(0));
+        put_text(&env, &mut payload, "s", "ok");
+
+        let canonical = canonicalize_payload(&env, &payload);
+        assert_eq!(canonical.len(), 4);
+
+        let (_, v0) = canonical.get(0).unwrap();
+        let (_, v1) = canonical.get(1).unwrap();
+        let (_, v2) = canonical.get(2).unwrap();
+        let (_, v3) = canonical.get(3).unwrap();
+        // Keys sorted: b, n, s, t
+        assert_eq!(v0, String::from_str(&env, "false"));
+        assert_eq!(v1, String::from_str(&env, "-7"));
+        assert_eq!(v2, String::from_str(&env, "ok"));
+        assert_eq!(v3, String::from_str(&env, "0"));
+    }
+
+    #[test]
+    fn test_canonicalize_address_list_sorted_and_deterministic() {
         let env = Env::default();
         let addr_a = Address::generate(&env);
         let addr_b = Address::generate(&env);
         let addr_c = Address::generate(&env);
 
-        // Insert in reverse order.
         let mut addresses = Vec::<Address>::new(&env);
         addresses.push_back(addr_c.clone());
         addresses.push_back(addr_a.clone());
         addresses.push_back(addr_b.clone());
 
-        let sorted = canonicalize_address_list(&env, &addresses);
-        assert_eq!(sorted.len(), 3);
+        let sorted1 = canonicalize_address_list(&env, &addresses);
+        let sorted2 = canonicalize_address_list(&env, &addresses);
+        assert_eq!(sorted1.len(), 3);
+        for i in 0..sorted1.len() {
+            assert_eq!(sorted1.get(i).unwrap(), sorted2.get(i).unwrap());
+        }
 
-        // The sorted order depends on internal byte representation;
-        // just verify all original addresses are present.
         let mut found_a = false;
         let mut found_b = false;
         let mut found_c = false;
-        for addr in sorted.iter() {
+        for addr in sorted1.iter() {
             if addr == addr_a {
                 found_a = true;
             }
@@ -351,35 +474,6 @@ mod tests {
                 found_c = true;
             }
         }
-        assert!(found_a);
-        assert!(found_b);
-        assert!(found_c);
-    }
-
-    #[test]
-    fn test_canonicalize_address_list_deterministic() {
-        let env = Env::default();
-        let addr1 = Address::generate(&env);
-        let addr2 = Address::generate(&env);
-
-        let mut addresses = Vec::<Address>::new(&env);
-        addresses.push_back(addr1.clone());
-        addresses.push_back(addr2.clone());
-
-        let sorted1 = canonicalize_address_list(&env, &addresses);
-        let sorted2 = canonicalize_address_list(&env, &addresses);
-        assert_eq!(sorted1.len(), sorted2.len());
-        for i in 0..sorted1.len() {
-            assert_eq!(sorted1.get(i).unwrap(), sorted2.get(i).unwrap());
-        }
-    }
-
-    #[test]
-    fn test_hash_empty_payload() {
-        let env = Env::default();
-        let payload = Map::<String, MetadataValue>::new(&env);
-        let hash = hash_query_receipt(&env, &payload);
-        // Should still produce a valid 32-byte hash.
-        assert_eq!(hash.to_buffer().len(), 32);
+        assert!(found_a && found_b && found_c);
     }
 }
