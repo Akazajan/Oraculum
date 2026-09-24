@@ -37,7 +37,6 @@ fn make_config(env: &Env) -> StakingConfig {
         staking_token: Address::generate(env),
         reward_pool: Address::generate(env),
         emergency_unstake_penalty_bps: 500, // 5 %
-        lock_duration: 100,
     }
 }
 
@@ -174,23 +173,6 @@ fn test_staking_config_excessive_penalty_bps_fails() {
     );
 }
 
-/// set_staking_config with lock_duration > 2 years must fail.
-#[test]
-fn test_staking_config_excessive_lock_duration_fails() {
-    let (env, admin) = setup_env();
-    let contract_id = env.register(Contract, ());
-    let client = ContractClient::new(&env, &contract_id);
-    client.set_admin(&admin);
-
-    let mut config = make_config(&env);
-    config.lock_duration = MAX_LOCK + 1;
-
-    let result = client.try_set_staking_config(&admin, &config);
-    assert!(
-        result.is_err(),
-        "config.lock_duration > MAX_LOCK must be rejected"
-    );
-}
 
 // ---------------------------------------------------------------------------
 // Criterion 3 — Valid stakes and rewards remain unchanged
@@ -272,7 +254,11 @@ fn test_reward_calculation_normal_values_no_overflow() {
         emergency_unstaked: false,
     };
 
-    let rewards = RewardsModule::calculate_pending_rewards(&env, &stake).unwrap();
+    // RewardsModule accesses storage (tier lookup) and ledger timestamp,
+    // both of which require a contract execution frame.
+    let rewards = env.as_contract(&contract_id, || {
+        RewardsModule::calculate_pending_rewards(&env, &stake).unwrap()
+    });
     // 1_000_000 * 1000/10000 * (1yr/1yr) * 10000/10000 = 100_000
     assert_eq!(rewards, 100_000, "annual reward must be 10% of principal");
     assert!(rewards >= 0, "rewards must not wrap to negative");
@@ -319,8 +305,11 @@ fn test_reward_calculation_overflow_fails_not_wraps() {
         emergency_unstaked: false,
     };
 
+    // RewardsModule accesses storage and ledger; must run inside a contract frame.
     // Must return an error, not silently wrap.
-    let result = RewardsModule::calculate_pending_rewards(&env, &stake);
+    let result = env.as_contract(&contract_id, || {
+        RewardsModule::calculate_pending_rewards(&env, &stake)
+    });
     assert!(
         result.is_err(),
         "i128::MAX principal with 100% rate must fail with overflow error, not wrap"
