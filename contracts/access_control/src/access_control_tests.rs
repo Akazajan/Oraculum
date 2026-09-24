@@ -1356,6 +1356,53 @@ fn test_batch_blacklist_proposal() {
 }
 
 #[test]
+fn test_batch_blacklist_rejects_oversized_batch() {
+    let env = Env::default();
+    let contract_id = env.register(crate::AccessControl, ());
+    let admin1 = Address::generate(&env);
+    let admin2 = Address::generate(&env);
+    let admin3 = Address::generate(&env);
+
+    env.as_contract(&contract_id, || {
+        let admins = Vec::from_array(&env, [admin1.clone(), admin2.clone(), admin3.clone()]);
+        AccessControlModule::initialize_multisig(&env, admins, 2, None).unwrap();
+
+        // Build a batch larger than MAX_BATCH_SIZE (50)
+        let mut users = Vec::new(&env);
+        for _ in 0..51 {
+            users.push_back(Address::generate(&env));
+        }
+        let action = ProposalAction::BatchBlacklist(users);
+
+        let result = AccessControlModule::create_proposal(&env, admin1.clone(), action);
+        assert_eq!(result.unwrap_err(), AccessControlError::BatchSizeExceeded);
+
+        // Empty batch also rejected before mutation
+        let empty = Vec::new(&env);
+        let empty_action = ProposalAction::BatchBlacklist(empty);
+        let result = AccessControlModule::create_proposal(&env, admin1.clone(), empty_action);
+        assert_eq!(result.unwrap_err(), AccessControlError::BatchSizeExceeded);
+
+        // No proposals should have been stored
+        assert_eq!(AccessControlModule::get_pending_proposals(&env).len(), 0);
+    });
+}
+
+#[test]
+fn test_validate_batch_size_bounds() {
+    assert_eq!(
+        AccessControlModule::validate_batch_size(0).unwrap_err(),
+        AccessControlError::BatchSizeExceeded
+    );
+    assert_eq!(
+        AccessControlModule::validate_batch_size(51).unwrap_err(),
+        AccessControlError::BatchSizeExceeded
+    );
+    assert!(AccessControlModule::validate_batch_size(1).is_ok());
+    assert!(AccessControlModule::validate_batch_size(50).is_ok());
+}
+
+#[test]
 fn test_add_remove_admin_via_proposal() {
     let env = Env::default();
     let contract_id = env.register(crate::AccessControl, ());
