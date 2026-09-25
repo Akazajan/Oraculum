@@ -7,7 +7,7 @@ import {
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { AuthService } from './auth.service';
 import { User } from '../users/entities/user.entity';
-import { AuditService } from '../audit/audit.service';
+import { AuditAction, AuditService } from '../audit/audit.service';
 import { JwtHelper } from './helper/jwt-helper';
 import { RefreshTokenRepositoryOperations } from './providers/refreshToken.repository';
 import { SetupTotpProvider } from './providers/setup-totp.provider';
@@ -129,6 +129,120 @@ describe('AuthService.resendVerificationOtp (#203)', () => {
 
     const err = await service
       .resendVerificationOtp(user.email!)
+      .catch((e) => e);
+
+    expect(err).toBeInstanceOf(InternalServerErrorException);
+    expect(err.getStatus()).toBe(500);
+  });
+});
+
+/**
+ * #204 — resendResetPasswordVerificationOtp had the same blanket-catch
+ * bug: typed HTTP exceptions (400/404) were swallowed and converted to
+ * 500s. Same mock setup as the #203 block above.
+ */
+describe('AuthService.resendResetPasswordVerificationOtp (#204)', () => {
+  let service: AuthService;
+  let users: { findOne: jest.Mock; save: jest.Mock };
+  let userHelper: { generateVerificationCode: jest.Mock };
+  let email: { sendPasswordResetEmail: jest.Mock };
+  let audit: { authSuccess: jest.Mock; authFailure: jest.Mock };
+  let user: Partial<User>;
+
+  beforeEach(async () => {
+    user = {
+      id: 'user-1',
+      email: 'jane.doe@example.com',
+      firstname: 'Jane',
+      lastname: 'Doe',
+      role: 'USER' as any,
+    };
+    users = {
+      findOne: jest.fn().mockResolvedValue(user),
+      save: jest.fn().mockResolvedValue(undefined),
+    };
+    userHelper = {
+      generateVerificationCode: jest.fn().mockReturnValue('654321'),
+    };
+    email = {
+      sendPasswordResetEmail: jest.fn().mockResolvedValue(undefined),
+    };
+    audit = {
+      authSuccess: jest.fn().mockResolvedValue(undefined),
+      authFailure: jest.fn().mockResolvedValue(undefined),
+    };
+
+    const mod = await Test.createTestingModule({
+      providers: [
+        AuthService,
+        { provide: getRepositoryToken(User), useValue: users },
+        { provide: UserHelper, useValue: userHelper },
+        { provide: JwtHelper, useValue: {} },
+        { provide: EmailService, useValue: email },
+        { provide: ConfigService, useValue: { get: () => undefined } },
+        { provide: RefreshTokenRepositoryOperations, useValue: {} },
+        { provide: SetupTotpProvider, useValue: {} },
+        { provide: VerifyTotpProvider, useValue: {} },
+        { provide: ManageTotpProvider, useValue: {} },
+        { provide: AuditService, useValue: audit },
+      ],
+    }).compile();
+
+    service = mod.get(AuthService);
+  });
+
+  it('persists a new reset OTP, delivers it and returns OTP_SENT', async () => {
+    const result = await service.resendResetPasswordVerificationOtp({
+      email: user.email!,
+    });
+
+    expect(users.findOne).toHaveBeenCalledWith({
+      where: { email: user.email },
+    });
+    expect(users.save).toHaveBeenCalledWith(
+      expect.objectContaining({ passwordResetCode: '654321' }),
+    );
+    expect(email.sendPasswordResetEmail).toHaveBeenCalledWith(
+      user.email,
+      '654321',
+      'Jane Doe',
+    );
+    expect(audit.authSuccess).toHaveBeenCalledWith(
+      AuditAction.PASSWORD_RESET_REQUEST,
+      expect.objectContaining({ email: user.email }),
+    );
+    expect(result).toEqual({ message: UserMessages.OTP_SENT });
+  });
+
+  it('returns 400 instead of 500 when the email is missing', async () => {
+    const err = await service
+      .resendResetPasswordVerificationOtp({ email: '' })
+      .catch((e) => e);
+
+    expect(err).toBeInstanceOf(BadRequestException);
+    expect(err.getStatus()).toBe(400);
+    expect(err.message).toBe(UserMessages.EMAIL_REQUIRED);
+    expect(users.findOne).not.toHaveBeenCalled();
+  });
+
+  it('returns 404 instead of 500 when no user matches the email', async () => {
+    users.findOne.mockResolvedValue(null);
+
+    const err = await service
+      .resendResetPasswordVerificationOtp({ email: 'ghost@example.com' })
+      .catch((e) => e);
+
+    expect(err).toBeInstanceOf(NotFoundException);
+    expect(err.getStatus()).toBe(404);
+    expect(email.sendPasswordResetEmail).not.toHaveBeenCalled();
+    expect(audit.authSuccess).not.toHaveBeenCalled();
+  });
+
+  it('still maps unexpected failures to 500', async () => {
+    users.save.mockRejectedValue(new Error('db down'));
+
+    const err = await service
+      .resendResetPasswordVerificationOtp({ email: user.email! })
       .catch((e) => e);
 
     expect(err).toBeInstanceOf(InternalServerErrorException);
