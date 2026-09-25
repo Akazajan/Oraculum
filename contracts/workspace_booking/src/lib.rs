@@ -84,7 +84,14 @@ impl WorkspaceBookingContract {
     }
 
     /// Returns `true` if no active booking for `workspace_id` overlaps
-    /// [`start_time`, `end_time`).
+    /// the half-open interval [`start_time`, `end_time`).
+    ///
+    /// C13 — Prevent workspace double booking:
+    /// - Overlapping intervals (`existing.start < new.end && existing.end > new.start`)
+    ///   are conflicts and make the slot unavailable.
+    /// - Adjacent intervals that only touch at a boundary
+    ///   (`existing.end == new.start` or `new.end == existing.start`) do **not**
+    ///   overlap and are allowed.
     fn is_slot_available(env: &Env, workspace_id: &String, start_time: u64, end_time: u64) -> bool {
         let booking_ids: Vec<String> = env
             .storage()
@@ -99,11 +106,12 @@ impl WorkspaceBookingContract {
                 None => continue,
             };
 
-            if booking.status != BookingStatus::Active {
+            if !booking.status.is_active() {
                 continue;
             }
 
-            // Overlap: existing booking starts before new slot ends AND ends after new slot starts.
+            // Half-open overlap: [a,b) ∩ [c,d) ≠ ∅ ⇔ a < d && b > c.
+            // Equality at a boundary (b == c or d == a) is adjacent, not overlapping.
             if booking.start_time < end_time && booking.end_time > start_time {
                 return false;
             }
@@ -237,6 +245,14 @@ impl WorkspaceBookingContract {
     ) -> Result<(), Error> {
         Self::require_admin(&env, &caller)?;
 
+        if env
+            .storage()
+            .persistent()
+            .has(&DataKey::Workspace(id.clone()))
+        {
+            return Err(Error::WorkspaceAlreadyExists);
+        }
+
         if name.len() > types::MAX_NAME_LEN {
             return Err(Error::StringTooLong);
         }
@@ -245,13 +261,6 @@ impl WorkspaceBookingContract {
         }
         if hourly_rate == 0 {
             return Err(Error::InvalidRate);
-        }
-        if env
-            .storage()
-            .persistent()
-            .has(&DataKey::Workspace(id.clone()))
-        {
-            return Err(Error::WorkspaceAlreadyExists);
         }
 
         let workspace = Workspace {
@@ -350,6 +359,9 @@ impl WorkspaceBookingContract {
     /// payment token (or the caller's auth tree must cover the sub-invocation).
     /// Cost is rounded **up** to the nearest full hour.
     ///
+    /// Overlap is checked **before** payment transfer (C13). A conflicting
+    /// request returns `BookingConflict` and never moves funds.
+    ///
     /// * `booking_id`   – unique ID chosen by the caller (e.g. a UUID).
     /// * `workspace_id` – workspace to book.
     /// * `start_time`   – Unix timestamp (seconds) for start of reservation.
@@ -418,7 +430,7 @@ impl WorkspaceBookingContract {
             member: member.clone(),
             start_time,
             end_time,
-            status: BookingStatus::Active,
+            status: BookingStatus::initial(),
             amount_paid: amount,
             created_at: now,
             cancelled_at: None,
@@ -480,6 +492,10 @@ impl WorkspaceBookingContract {
         if caller != booking.member && caller != admin {
             return Err(Error::Unauthorized);
         }
+        if !booking.status.is_active() {
+        if booking.status == BookingStatus::Cancelled {
+            return Err(Error::BookingAlreadyCancelled);
+        }
         if booking.status != BookingStatus::Active {
             return Err(Error::BookingNotActive);
         }
@@ -508,7 +524,10 @@ impl WorkspaceBookingContract {
             );
         }
 
-        booking.status = BookingStatus::Cancelled;
+        booking.status = booking
+            .status
+            .transition(BookingStatus::Cancelled)
+            .map_err(|_| Error::BookingNotActive)?;
         booking.cancelled_at = Some(now);
         env.storage()
             .persistent()
@@ -533,11 +552,14 @@ impl WorkspaceBookingContract {
             .get(&DataKey::Booking(booking_id.clone()))
             .ok_or(Error::BookingNotFound)?;
 
-        if booking.status != BookingStatus::Active {
+        if !booking.status.is_active() {
             return Err(Error::BookingNotActive);
         }
 
-        booking.status = BookingStatus::Completed;
+        booking.status = booking
+            .status
+            .transition(BookingStatus::Completed)
+            .map_err(|_| Error::BookingNotActive)?;
         booking.completed_at = Some(env.ledger().timestamp());
         env.storage()
             .persistent()
@@ -565,7 +587,7 @@ impl WorkspaceBookingContract {
             .get(&DataKey::Booking(booking_id.clone()))
             .ok_or(Error::BookingNotFound)?;
 
-        if booking.status != BookingStatus::Active {
+        if !booking.status.is_active() {
             return Err(Error::BookingNotActive);
         }
 
@@ -574,7 +596,10 @@ impl WorkspaceBookingContract {
             return Err(Error::BookingConflict); // Too early to mark no-show
         }
 
-        booking.status = BookingStatus::NoShow;
+        booking.status = booking
+            .status
+            .transition(BookingStatus::NoShow)
+            .map_err(|_| Error::BookingNotActive)?;
         booking.cancelled_at = Some(now);
         env.storage()
             .persistent()
@@ -600,7 +625,7 @@ impl WorkspaceBookingContract {
             .get(&DataKey::Booking(booking_id.clone()))
             .ok_or(Error::BookingNotFound)?;
 
-        if booking.status != BookingStatus::Active {
+        if !booking.status.is_active() {
             return Err(Error::BookingNotActive);
         }
 
@@ -609,7 +634,10 @@ impl WorkspaceBookingContract {
             return Err(Error::BookingConflict); // Booking hasn't ended yet
         }
 
-        booking.status = BookingStatus::Expired;
+        booking.status = booking
+            .status
+            .transition(BookingStatus::Expired)
+            .map_err(|_| Error::BookingNotActive)?;
         booking.cancelled_at = Some(now);
         env.storage()
             .persistent()

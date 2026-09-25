@@ -1,6 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import { Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { CleanupService } from './cleanup.service';
 import { RefreshToken } from '../auth/entities/refreshToken.entity';
@@ -80,6 +81,54 @@ describe('CleanupService', () => {
           createdAt: expect.anything(),
         }),
       );
+    });
+  });
+
+  describe('when no expired records exist', () => {
+    let errorSpy: jest.SpyInstance;
+    let logSpy: jest.SpyInstance;
+
+    beforeEach(() => {
+      mockDelete.mockResolvedValue({ affected: 0 });
+      errorSpy = jest
+        .spyOn(Logger.prototype, 'error')
+        .mockImplementation(() => undefined);
+      logSpy = jest
+        .spyOn(Logger.prototype, 'log')
+        .mockImplementation(() => undefined);
+    });
+
+    afterEach(() => {
+      errorSpy.mockRestore();
+      logSpy.mockRestore();
+    });
+
+    it('handles no expired refresh tokens gracefully and logs no error', async () => {
+      await expect(
+        service.handleExpiredRefreshTokens(),
+      ).resolves.toBeUndefined();
+
+      expect(mockDelete).toHaveBeenCalled();
+      expect(errorSpy).not.toHaveBeenCalled();
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Removed 0'));
+    });
+
+    it('handles no stale temporary uploads gracefully and logs no error', async () => {
+      await expect(
+        service.handleStaleTemporaryUploads(),
+      ).resolves.toBeUndefined();
+
+      expect(mockDelete).toHaveBeenCalled();
+      expect(errorSpy).not.toHaveBeenCalled();
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Removed 0'));
+    });
+
+    it('handles no old audit logs gracefully and logs no error', async () => {
+      await expect(service.handleOldAuditLogs()).resolves.toBeUndefined();
+
+      expect(mockDelete).toHaveBeenCalled();
+      expect(errorSpy).not.toHaveBeenCalled();
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Removed 0'));
     });
   });
 });

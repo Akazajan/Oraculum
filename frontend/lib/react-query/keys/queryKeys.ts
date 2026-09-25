@@ -35,6 +35,11 @@ export const queryKeys = {
   },
   dashboard: {
     member: ["dashboard", "member"] as const,
+    stats: ["dashboard", "stats"] as const,
+    activity: ["dashboard", "activity"] as const,
+    adminStats: ["dashboard", "admin", "stats"] as const,
+    adminUsers: (page: number, limit: number) =>
+      ["dashboard", "admin", "users", { page, limit }] as const,
     adminAnalytics: (params?: unknown) =>
       ["dashboard", "admin", "analytics", params] as const,
   },

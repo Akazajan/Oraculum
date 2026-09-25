@@ -14,6 +14,7 @@ import { PdfGenerationProvider } from './providers/pdf-generation.provider';
 import { PdfGenerationFallbackProvider } from './providers/pdf-generation-fallback.provider';
 import { InvoiceSequenceProvider } from './providers/invoice-sequence.provider';
 import { ExportInvoicesProvider } from './providers/export-invoices.provider';
+import { InvoiceStatusTransitionProvider } from './providers/invoice-status-transition.provider';
 import { CsvExportService } from '../common/csv-export/csv-export.service';
 
 @Module({
@@ -29,9 +30,10 @@ import { CsvExportService } from '../common/csv-export/csv-export.service';
     PdfGenerationProvider,
     PdfGenerationFallbackProvider,
     InvoiceSequenceProvider,
+    InvoiceStatusTransitionProvider,
     ExportInvoicesProvider,
     CsvExportService,
   ],
-  exports: [InvoicesService],
+  exports: [InvoicesService, InvoiceStatusTransitionProvider],
 })
 export class InvoicesModule {}

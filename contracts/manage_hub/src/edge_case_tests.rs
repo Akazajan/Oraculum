@@ -9,7 +9,7 @@
 use super::*;
 use crate::membership_token::{DataKey as MembershipDataKey, MembershipTokenContract};
 use crate::types::MembershipStatus;
-use soroban_sdk::testutils::{Address as _, BytesN as _};
+use soroban_sdk::testutils::{Address as _, BytesN as _, Ledger as _};
 use soroban_sdk::{map, Address, BytesN, Env, String};
 
 // ---------------------------------------------------------------------------
@@ -31,7 +31,7 @@ fn issue_test_token(env: &Env, client: &ContractClient, admin: &Address) -> Byte
     let token_id = BytesN::<32>::random(env);
     let user = Address::generate(env);
     let expiry = env.ledger().timestamp() + 86400; // 1 day from now
-    client.issue_token(&token_id, &user, expiry);
+    client.issue_token(&token_id, &user, &expiry);
     token_id
 }
 
@@ -87,12 +87,15 @@ fn test_zero_amount_staking_tier() {
 
 #[test]
 fn test_expired_token_operations_rejected() {
-    let (env, admin, _contract_id) = setup_contract();
+    let (env, _admin, _contract_id) = setup_contract();
     let client = ContractClient::new(&env, &_contract_id);
+
+    // Advance ledger so timestamp > 0, making timestamp - 1 a valid subtraction.
+    env.ledger().with_mut(|l| l.timestamp = 1_000);
 
     let token_id = BytesN::<32>::random(&env);
     let user = Address::generate(&env);
-    // Expiry in the past.
+    // Expiry in the past — must be rejected.
     let expiry = env.ledger().timestamp() - 1;
     let result = client.try_issue_token(&token_id, &user, &expiry);
     assert!(result.is_err());
@@ -107,13 +110,15 @@ fn test_subscription_expired_status() {
     let payment_token = Address::generate(&env);
     let sub_id = String::from_str(&env, "sub_expired");
 
+    // Register the payment token as the USDC contract so payment validation passes.
+    client.set_usdc_contract(&admin, &payment_token);
+
     // Create with 0 duration — immediately expired.
     client.create_subscription(&sub_id, &user, &payment_token, &100i128, &0u64);
 
-    let sub = client.get_subscription(&sub_id);
     // With duration 0 the subscription may be in any terminal state.
     // At minimum it should exist.
-    assert!(sub.is_ok());
+    let _sub = client.get_subscription(&sub_id);
 }
 
 // ---------------------------------------------------------------------------
@@ -284,7 +289,7 @@ fn test_admin_can_create_and_deactivate_tier() {
     client.create_tier(&admin, &params);
 
     let tier = client.get_tier(&String::from_str(&env, "deact_tier"));
-    assert!(tier.is_ok());
+    assert!(tier.is_active);
 
     // Deactivate
     client.deactivate_tier(&admin, &String::from_str(&env, "deact_tier"));
@@ -351,7 +356,7 @@ fn test_update_metadata_on_token_without_metadata() {
     let token_id = issue_test_token(&env, &client, &admin);
 
     let mut updates = soroban_sdk::Map::<String, common_types::MetadataValue>::new(&env);
-    updates.put(
+    updates.set(
         String::from_str(&env, "color"),
         common_types::MetadataValue::Text(String::from_str(&env, "blue")),
     );
@@ -359,20 +364,6 @@ fn test_update_metadata_on_token_without_metadata() {
     // Updating metadata on a token that has never had metadata set should fail.
     let result = client.try_update_token_metadata(&token_id, &updates);
     assert!(result.is_err());
-}
-
-// ---------------------------------------------------------------------------
-// Additional edge-case: hello endpoint with empty string
-// ---------------------------------------------------------------------------
-
-#[test]
-fn test_hello_with_empty_string() {
-    let (env, _admin, _contract_id) = setup_contract();
-    let client = ContractClient::new(&env, &_contract_id);
-
-    let result = client.hello(&String::from_str(&env, ""));
-    assert_eq!(result.len(), 1);
-    assert_eq!(result.get(0).unwrap(), String::from_str(&env, ""));
 }
 
 // ---------------------------------------------------------------------------

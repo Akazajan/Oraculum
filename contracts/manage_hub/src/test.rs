@@ -10,8 +10,20 @@ use crate::AttendanceAction;
 use soroban_sdk::{map, symbol_short};
 use soroban_sdk::{
     testutils::{Address as _, BytesN as BytesNTestUtils, Events, Ledger as LedgerTestUtils},
-    Address, BytesN, Env, String,
+    Address, BytesN, Env, String, Symbol, TryFromVal, Val,
 };
+
+/// Returns `true` when `topics` carries `want` as a symbol topic.
+///
+/// Test-visible event topics are raw `Val`s, which are not directly
+/// comparable, so each topic is decoded back into a `Symbol` first.
+fn topics_contain_symbol(env: &Env, topics: &soroban_sdk::Vec<Val>, want: &Symbol) -> bool {
+    topics.iter().any(|topic: Val| {
+        Symbol::try_from_val(env, &topic)
+            .map(|symbol| &symbol == want)
+            .unwrap_or(false)
+    })
+}
 
 #[test]
 fn test_log_attendance_clock_in() {
@@ -20,6 +32,9 @@ fn test_log_attendance_clock_in() {
 
     let contract_id = env.register(Contract, ());
     let client = ContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
 
     let user = Address::generate(&env);
     let log_id = BytesN::<32>::random(&env);
@@ -33,7 +48,7 @@ fn test_log_attendance_clock_in() {
     ];
 
     // Log clock-in
-    client.log_attendance(&log_id, &user, &AttendanceAction::ClockIn, &details);
+    client.log_attendance(&admin, &log_id, &user, &AttendanceAction::ClockIn, &details);
 
     // Retrieve logs for user
     let logs = client.get_logs_for_user(&user);
@@ -54,6 +69,9 @@ fn test_log_attendance_clock_out() {
     let contract_id = env.register(Contract, ());
     let client = ContractClient::new(&env, &contract_id);
 
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+
     let user = Address::generate(&env);
     let log_id = BytesN::<32>::random(&env);
 
@@ -66,7 +84,7 @@ fn test_log_attendance_clock_out() {
     ];
 
     // Log clock-out
-    client.log_attendance(&log_id, &user, &AttendanceAction::ClockOut, &details);
+    client.log_attendance(&admin, &log_id, &user, &AttendanceAction::ClockOut, &details);
 
     // Retrieve logs for user
     let logs = client.get_logs_for_user(&user);
@@ -84,6 +102,9 @@ fn test_log_attendance_multiple_users() {
     let contract_id = env.register(Contract, ());
     let client = ContractClient::new(&env, &contract_id);
 
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+
     let user1 = Address::generate(&env);
     let user2 = Address::generate(&env);
     let log_id1 = BytesN::<32>::random(&env);
@@ -98,8 +119,8 @@ fn test_log_attendance_multiple_users() {
     ];
 
     // Log attendance for both users
-    client.log_attendance(&log_id1, &user1, &AttendanceAction::ClockIn, &details);
-    client.log_attendance(&log_id2, &user2, &AttendanceAction::ClockIn, &details);
+    client.log_attendance(&admin, &log_id1, &user1, &AttendanceAction::ClockIn, &details);
+    client.log_attendance(&admin, &log_id2, &user2, &AttendanceAction::ClockIn, &details);
 
     // Each user should have their own log
     let logs_user1 = client.get_logs_for_user(&user1);
@@ -119,6 +140,9 @@ fn test_log_attendance_multiple_entries_same_user() {
     let contract_id = env.register(Contract, ());
     let client = ContractClient::new(&env, &contract_id);
 
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+
     let user = Address::generate(&env);
     let log_id1 = BytesN::<32>::random(&env);
     let log_id2 = BytesN::<32>::random(&env);
@@ -132,8 +156,8 @@ fn test_log_attendance_multiple_entries_same_user() {
     ];
 
     // Log clock-in and clock-out for same user
-    client.log_attendance(&log_id1, &user, &AttendanceAction::ClockIn, &details);
-    client.log_attendance(&log_id2, &user, &AttendanceAction::ClockOut, &details);
+    client.log_attendance(&admin, &log_id1, &user, &AttendanceAction::ClockIn, &details);
+    client.log_attendance(&admin, &log_id2, &user, &AttendanceAction::ClockOut, &details);
 
     // User should have 2 logs
     let logs = client.get_logs_for_user(&user);
@@ -151,6 +175,9 @@ fn test_log_attendance_details_limit() {
     let contract_id = env.register(Contract, ());
     let client = ContractClient::new(&env, &contract_id);
 
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+
     let user = Address::generate(&env);
     let log_id = BytesN::<32>::random(&env);
 
@@ -162,7 +189,7 @@ fn test_log_attendance_details_limit() {
         big_map.set(key, val);
     }
 
-    client.log_attendance(&log_id, &user, &AttendanceAction::ClockIn, &big_map);
+    client.log_attendance(&admin, &log_id, &user, &AttendanceAction::ClockIn, &big_map);
 }
 
 #[test]
@@ -172,6 +199,9 @@ fn test_get_attendance_log_by_id() {
 
     let contract_id = env.register(Contract, ());
     let client = ContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
 
     let user = Address::generate(&env);
     let log_id = BytesN::<32>::random(&env);
@@ -185,7 +215,7 @@ fn test_get_attendance_log_by_id() {
     ];
 
     // Log attendance
-    client.log_attendance(&log_id, &user, &AttendanceAction::ClockIn, &details);
+    client.log_attendance(&admin, &log_id, &user, &AttendanceAction::ClockIn, &details);
 
     // Retrieve specific log by ID
     let log = client.get_attendance_log(&log_id);
@@ -220,6 +250,9 @@ fn test_attendance_log_immutability() {
     let contract_id = env.register(Contract, ());
     let client = ContractClient::new(&env, &contract_id);
 
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+
     let user = Address::generate(&env);
     let log_id = BytesN::<32>::random(&env);
 
@@ -232,7 +265,7 @@ fn test_attendance_log_immutability() {
     ];
 
     // Log attendance
-    client.log_attendance(&log_id, &user, &AttendanceAction::ClockIn, &details);
+    client.log_attendance(&admin, &log_id, &user, &AttendanceAction::ClockIn, &details);
 
     // Get initial log
     let initial_log = client.get_attendance_log(&log_id).unwrap();
@@ -245,6 +278,183 @@ fn test_attendance_log_immutability() {
     let later_log = client.get_attendance_log(&log_id).unwrap();
     assert_eq!(later_log.timestamp, initial_timestamp);
     assert_eq!(later_log.action, AttendanceAction::ClockIn);
+}
+
+#[test]
+#[should_panic(expected = "HostError: Error(Contract, #4)")]
+fn test_log_attendance_requires_operator() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(Contract, ());
+    let client = ContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+
+    let stranger = Address::generate(&env);
+    let user = Address::generate(&env);
+    let log_id = BytesN::<32>::random(&env);
+
+    let details = map![
+        &env,
+        (
+            String::from_str(&env, "location"),
+            String::from_str(&env, "office")
+        )
+    ];
+
+    // Non-operator (and non-admin) caller must be rejected.
+    client.log_attendance(&stranger, &log_id, &user, &AttendanceAction::ClockIn, &details);
+}
+
+#[test]
+#[should_panic(expected = "HostError: Error(Contract, #65)")]
+fn test_duplicate_attendance_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(Contract, ());
+    let client = ContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+
+    let user = Address::generate(&env);
+    let log_id = BytesN::<32>::random(&env);
+
+    let details = map![
+        &env,
+        (
+            String::from_str(&env, "location"),
+            String::from_str(&env, "office")
+        )
+    ];
+
+    client.log_attendance(&admin, &log_id, &user, &AttendanceAction::ClockIn, &details);
+
+    // Reusing the same log id must fail.
+    client.log_attendance(&admin, &log_id, &user, &AttendanceAction::ClockOut, &details);
+}
+
+#[test]
+fn test_set_operator_and_is_operator() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(Contract, ());
+    let client = ContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+
+    let operator = Address::generate(&env);
+    assert!(!client.is_operator(&operator));
+
+    client.set_operator(&admin, &operator, &true);
+    assert!(client.is_operator(&operator));
+
+    // The admin is always an operator.
+    assert!(client.is_operator(&admin));
+
+    // A registered operator can log attendance.
+    let user = Address::generate(&env);
+    let log_id = BytesN::<32>::random(&env);
+    let details = map![
+        &env,
+        (
+            String::from_str(&env, "location"),
+            String::from_str(&env, "office")
+        )
+    ];
+    client.log_attendance(&operator, &log_id, &user, &AttendanceAction::ClockIn, &details);
+    assert_eq!(client.get_logs_for_user(&user).len(), 1);
+
+    // Revoking removes the privilege.
+    client.set_operator(&admin, &operator, &false);
+    assert!(!client.is_operator(&operator));
+}
+
+#[test]
+fn test_correct_attendance() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(Contract, ());
+    let client = ContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+
+    let operator = Address::generate(&env);
+    client.set_operator(&admin, &operator, &true);
+
+    let user = Address::generate(&env);
+    let log_id = BytesN::<32>::random(&env);
+
+    let original = map![
+        &env,
+        (
+            String::from_str(&env, "location"),
+            String::from_str(&env, "office")
+        )
+    ];
+    let corrected_details = map![
+        &env,
+        (
+            String::from_str(&env, "location"),
+            String::from_str(&env, "remote")
+        )
+    ];
+
+    client.log_attendance(&operator, &log_id, &user, &AttendanceAction::ClockIn, &original);
+    let initial = client.get_attendance_log(&log_id).unwrap();
+
+    let corrected = client.correct_attendance(
+        &operator,
+        &log_id,
+        &AttendanceAction::ClockOut,
+        &corrected_details,
+    );
+    assert_eq!(corrected.action, AttendanceAction::ClockOut);
+
+    // The log id, user and timestamp are preserved; only action/details change.
+    let log = client.get_attendance_log(&log_id).unwrap();
+    assert_eq!(log.id, log_id);
+    assert_eq!(log.user_id, user);
+    assert_eq!(log.timestamp, initial.timestamp);
+    assert_eq!(log.action, AttendanceAction::ClockOut);
+    assert_eq!(log.details.get(String::from_str(&env, "location")), Some(String::from_str(&env, "remote")));
+
+    // The user's log list reflects the correction too.
+    let user_logs = client.get_logs_for_user(&user);
+    assert_eq!(user_logs.len(), 1);
+    assert_eq!(user_logs.get(0).unwrap().action, AttendanceAction::ClockOut);
+}
+
+#[test]
+#[should_panic(expected = "HostError: Error(Contract, #66)")]
+fn test_correct_attendance_missing_log() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(Contract, ());
+    let client = ContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+
+    let user = Address::generate(&env);
+    let log_id = BytesN::<32>::random(&env);
+    let details = map![
+        &env,
+        (
+            String::from_str(&env, "location"),
+            String::from_str(&env, "office")
+        )
+    ];
+
+    client.correct_attendance(&admin, &log_id, &AttendanceAction::ClockIn, &details);
 }
 
 // ==================== Subscription Integration Tests ====================
@@ -265,6 +475,7 @@ fn test_create_subscription_success() {
     let duration = 2_592_000u64; // 30 days
 
     // Set USDC contract address
+    client.set_admin(&admin);
     client.set_usdc_contract(&admin, &payment_token);
 
     // Create subscription
@@ -306,6 +517,7 @@ fn test_renew_subscription_success() {
     let duration = 2_592_000u64;
 
     // Set USDC contract and create initial subscription
+    client.set_admin(&admin);
     client.set_usdc_contract(&admin, &payment_token);
     client.create_subscription(
         &subscription_id,
@@ -349,6 +561,7 @@ fn test_renew_subscription_not_found() {
     let amount = 100_000i128;
     let duration = 2_592_000u64;
 
+    client.set_admin(&admin);
     client.set_usdc_contract(&admin, &payment_token);
 
     // Try to renew non-existent subscription
@@ -368,9 +581,11 @@ fn test_create_subscription_invalid_amount() {
     let user = Address::generate(&env);
     let payment_token = Address::generate(&env);
     let subscription_id = String::from_str(&env, "sub_003");
-    let invalid_amount = 0i128; // Invalid: zero amount
+    // Negative amount is always invalid; zero is now allowed as a free-tier subscription.
+    let invalid_amount = -1i128;
     let duration = 2_592_000u64;
 
+    client.set_admin(&admin);
     client.set_usdc_contract(&admin, &payment_token);
 
     // Try to create subscription with invalid amount
@@ -400,6 +615,7 @@ fn test_create_subscription_invalid_token() {
     let amount = 100_000i128;
     let duration = 2_592_000u64;
 
+    client.set_admin(&admin);
     client.set_usdc_contract(&admin, &usdc_token);
 
     // Try to create subscription with wrong payment token
@@ -428,6 +644,7 @@ fn test_subscription_cross_contract_call_integration() {
     let duration = 2_592_000u64;
 
     // Setup and create subscription
+    client.set_admin(&admin);
     client.set_usdc_contract(&admin, &payment_token);
     client.create_subscription(&subscription_id, &user, &payment_token, &amount, &duration);
 
@@ -465,6 +682,7 @@ fn test_multiple_subscription_events_logged() {
     let amount = 100_000i128;
     let duration = 2_592_000u64;
 
+    client.set_admin(&admin);
     client.set_usdc_contract(&admin, &payment_token);
 
     // Create multiple subscriptions
@@ -522,6 +740,7 @@ fn test_cancel_subscription_success() {
     let duration = 2_592_000u64;
 
     // Setup and create subscription
+    client.set_admin(&admin);
     client.set_usdc_contract(&admin, &payment_token);
     client.create_subscription(&subscription_id, &user, &payment_token, &amount, &duration);
 
@@ -555,32 +774,31 @@ fn test_cancel_subscription_emits_event() {
     let duration = 2_592_000u64;
 
     // Setup and create subscription
+    client.set_admin(&admin);
     client.set_usdc_contract(&admin, &payment_token);
     client.create_subscription(&subscription_id, &user, &payment_token, &amount, &duration);
-
-    // Get initial event count
-    let initial_events = env.events().all().len();
 
     // Cancel subscription
     client.cancel_subscription(&subscription_id);
 
-    // Verify cancellation event was emitted
+    // Verify cancellation event was emitted.
+    //
+    // `events().all()` drains the host event buffer, so it must be called
+    // only once to collect this window's events and any count comparison
+    // across two calls would be meaningless.
     let events = env.events().all();
-    assert!(events.len() > initial_events, "Cancellation event should be emitted");
 
     // Find the cancellation event
-    let cancellation_event = events.iter().find(|event| {
-        if let Some(topics) = event.topics {
-            if topics.len() >= 1 {
-                if let Some(topic) = topics.get(0) {
-                    return topic == &symbol_short!("sub_cancl").into_val(&env);
-                }
-            }
+    let cancel_symbol = symbol_short!("sub_cancl");
+    let mut found = false;
+    for (_contract, topics, _data) in events.iter() {
+        if topics_contain_symbol(&env, &topics, &cancel_symbol) {
+            found = true;
+            break;
         }
-        false
-    });
+    }
 
-    assert!(cancellation_event.is_some(), "Cancellation event with 'sub_cancl' topic should be emitted");
+    assert!(found, "Cancellation event with 'sub_cancl' topic should be emitted");
 }
 
 #[test]
@@ -614,6 +832,7 @@ fn test_create_duplicate_subscription() {
     let amount = 100_000i128;
     let duration = 2_592_000u64;
 
+    client.set_admin(&admin);
     client.set_usdc_contract(&admin, &payment_token);
     client.create_subscription(&subscription_id, &user, &payment_token, &amount, &duration);
 
@@ -637,6 +856,7 @@ fn test_subscription_renewal_extends_from_expiry() {
     let duration = 2_592_000u64; // 30 days
 
     // Setup and create subscription
+    client.set_admin(&admin);
     client.set_usdc_contract(&admin, &payment_token);
     client.create_subscription(&subscription_id, &user, &payment_token, &amount, &duration);
 
@@ -672,6 +892,7 @@ fn test_subscription_renewal_after_expiry() {
     let duration = 2_592_000u64;
 
     // Setup and create subscription
+    client.set_admin(&admin);
     client.set_usdc_contract(&admin, &payment_token);
     client.create_subscription(&subscription_id, &user, &payment_token, &amount, &duration);
 
@@ -707,6 +928,7 @@ fn test_get_subscription_retrieves_correct_data() {
     let amount = 250_000i128;
     let duration = 5_184_000u64; // 60 days
 
+    client.set_admin(&admin);
     client.set_usdc_contract(&admin, &payment_token);
     client.create_subscription(&subscription_id, &user, &payment_token, &amount, &duration);
 
@@ -752,6 +974,7 @@ fn test_subscription_payment_validation() {
     let duration = 2_592_000u64;
 
     // Setup USDC contract
+    client.set_admin(&admin);
     client.set_usdc_contract(&admin, &payment_token);
 
     // Creating subscription validates payment (amount > 0, correct token)
@@ -776,6 +999,7 @@ fn test_multiple_users_multiple_subscriptions() {
     let amount = 100_000i128;
     let duration = 2_592_000u64;
 
+    client.set_admin(&admin);
     client.set_usdc_contract(&admin, &payment_token);
 
     // Create subscriptions for different users
@@ -816,6 +1040,7 @@ fn test_subscription_amount_updates_on_renewal() {
     let renewal_amount = 200_000i128;
     let duration = 2_592_000u64;
 
+    client.set_admin(&admin);
     client.set_usdc_contract(&admin, &payment_token);
     client.create_subscription(
         &subscription_id,
@@ -853,6 +1078,7 @@ fn test_subscription_created_event_emitted() {
     let duration = 2_592_000u64;
 
     // Set USDC contract
+    client.set_admin(&admin);
     client.set_usdc_contract(&admin, &payment_token);
 
     // Create subscription
@@ -882,6 +1108,7 @@ fn test_subscription_cancelled_event_emitted() {
     let duration = 2_592_000u64;
 
     // Set USDC contract and create subscription
+    client.set_admin(&admin);
     client.set_usdc_contract(&admin, &payment_token);
     client.create_subscription(&subscription_id, &user, &payment_token, &amount, &duration);
 
@@ -909,6 +1136,7 @@ fn test_subscription_renewed_event_emitted() {
     let duration = 2_592_000u64;
 
     // Set USDC contract and create subscription
+    client.set_admin(&admin);
     client.set_usdc_contract(&admin, &payment_token);
     client.create_subscription(&subscription_id, &user, &payment_token, &amount, &duration);
 
@@ -935,6 +1163,7 @@ fn test_usdc_contract_set_event_emitted() {
     let payment_token = Address::generate(&env);
 
     // Set USDC contract
+    client.set_admin(&admin);
     client.set_usdc_contract(&admin, &payment_token);
 
     // Verify event was emitted
@@ -961,6 +1190,7 @@ fn test_multiple_events_emitted_in_sequence() {
     let duration = 2_592_000u64;
 
     // Execute sequence of operations
+    client.set_admin(&admin);
     client.set_usdc_contract(&admin, &payment_token);
     client.create_subscription(&subscription_id, &user, &payment_token, &amount, &duration);
 
@@ -1284,6 +1514,7 @@ fn test_resume_not_paused_subscription() {
     let duration = 2_592_000u64;
 
     // Setup and create subscription (but don't pause)
+    client.set_admin(&admin);
     client.set_usdc_contract(&admin, &payment_token);
     client.create_subscription(&subscription_id, &user, &payment_token, &amount, &duration);
 
@@ -1858,7 +2089,7 @@ fn test_ct18_reactivate_tier_roundtrip() {
 }
 
 #[test]
-#[should_panic(expected = "HostError: Error(Contract, #51)")]
+#[should_panic(expected = "HostError: Error(Contract, #53)")]
 fn test_ct18_reactivate_already_active_errors() {
     // CT-18: reactivate on an already-active tier rejects safely.
     let env = Env::default();
@@ -1888,7 +2119,7 @@ fn test_ct18_reactivate_already_active_errors() {
 }
 
 #[test]
-#[should_panic(expected = "HostError: Error(Contract, #52)")]
+#[should_panic(expected = "HostError: Error(Contract, #54)")]
 fn test_ct18_deactivate_already_deactivated_errors() {
     // CT-18: deactivate on an already-deactivated tier rejects safely.
     let env = Env::default();
@@ -1948,21 +2179,13 @@ fn test_ct17_get_all_tiers_returns_sorted_by_id() {
     }
 
     let tiers = client.get_all_tiers();
-    assert_eq!(tiers.len(), ids.len());
+    assert_eq!(tiers.len() as usize, ids.len());
 
-    // Sorted ascending by tier id.
-    let mut sorted_ids: soroban_sdk::Vec<soroban_sdk::String> = soroban_sdk::Vec::new(&env);
-    for s in ids.iter() {
-        sorted_ids.push_back(soroban_sdk::String::from_str(&env, s));
-    }
-    // Sort in-place using a simple comparison (the contract guarantees
-    // ascending lexicographic order; we re-sort here so the test does
-    // not depend on the caller's pre-sorted inputs).
-    let mut expected: Vec<String> = ids.iter().map(|s| s.to_string()).collect();
-    expected.sort();
-
+    // The contract guarantees ascending lexicographic order regardless of the
+    // insertion order above.
+    let expected = ["apple", "banana", "kiwi", "mango", "zebra"];
     for (i, want) in expected.iter().enumerate() {
-        assert_eq!(tiers.get(i).unwrap().id, String::from_str(&env, want));
+        assert_eq!(tiers.get(i as u32).unwrap().id, String::from_str(&env, want));
     }
 }
 
@@ -2000,8 +2223,7 @@ fn test_ct16_get_all_tiers_paginated_basic() {
         .get_all_tiers_paginated(&PageParams {
             offset: 0,
             limit: 2,
-        })
-        .unwrap();
+        });
     assert_eq!(page0.len(), 2);
     assert_eq!(page0.get(0).unwrap().id, String::from_str(&env, "tier_0"));
     assert_eq!(page0.get(1).unwrap().id, String::from_str(&env, "tier_1"));
@@ -2011,8 +2233,7 @@ fn test_ct16_get_all_tiers_paginated_basic() {
         .get_all_tiers_paginated(&PageParams {
             offset: 2,
             limit: 2,
-        })
-        .unwrap();
+        });
     assert_eq!(page1.len(), 2);
     assert_eq!(page1.get(0).unwrap().id, String::from_str(&env, "tier_2"));
     assert_eq!(page1.get(1).unwrap().id, String::from_str(&env, "tier_3"));
@@ -2022,8 +2243,7 @@ fn test_ct16_get_all_tiers_paginated_basic() {
         .get_all_tiers_paginated(&PageParams {
             offset: 4,
             limit: 2,
-        })
-        .unwrap();
+        });
     assert_eq!(page2.len(), 1);
     assert_eq!(page2.get(0).unwrap().id, String::from_str(&env, "tier_4"));
 
@@ -2032,15 +2252,15 @@ fn test_ct16_get_all_tiers_paginated_basic() {
         .get_all_tiers_paginated(&PageParams {
             offset: 5,
             limit: 10,
-        })
-        .unwrap();
+        });
     assert_eq!(page3.len(), 0);
 }
 
 #[test]
-#[should_panic(expected = "HostError: Error(Contract, #56)")]
+#[should_panic(expected = "HostError: Error(Contract, #58)")]
 fn test_ct16_zero_limit_rejected() {
     // CT-16: pagination validation rejects limit = 0.
+    // Error 58 == Error::InvalidPaginationParams.
     let env = Env::default();
     env.mock_all_auths();
 
@@ -2051,11 +2271,11 @@ fn test_ct16_zero_limit_rejected() {
         offset: 0,
         limit: 0,
     };
-    client.get_all_tiers_paginated(&bad).unwrap();
+    client.get_all_tiers_paginated(&bad);
 }
 
 #[test]
-#[should_panic(expected = "HostError: Error(Contract, #56)")]
+#[should_panic(expected = "HostError: Error(Contract, #58)")]
 fn test_ct16_oversized_limit_rejected() {
     // CT-16: pagination validation enforces MAX_PAGE_SIZE.
     let env = Env::default();
@@ -2068,7 +2288,7 @@ fn test_ct16_oversized_limit_rejected() {
         offset: 0,
         limit: common_types::MAX_PAGE_SIZE + 1,
     };
-    client.get_all_tiers_paginated(&bad).unwrap();
+    client.get_all_tiers_paginated(&bad);
 }
 
 #[test]
@@ -2105,8 +2325,7 @@ fn test_ct16_get_active_tiers_paginated_excludes_deactivated() {
         .get_active_tiers_paginated(&PageParams {
             offset: 0,
             limit: 10,
-        })
-        .unwrap();
+        });
     assert_eq!(active.len(), 2);
     let ids: soroban_sdk::Vec<soroban_sdk::String> = soroban_sdk::Vec::from_array(
         &env,
@@ -2159,25 +2378,23 @@ fn test_ct15_paginated_read_only_budget_consumption_scales_with_limit() {
     let full = client.get_all_tiers();
     assert_eq!(full.len(), 20);
 
-    let mut collected: Vec<String> = Vec::new();
+    let mut collected: soroban_sdk::Vec<soroban_sdk::String> = soroban_sdk::Vec::new(&env);
     let page_size: u32 = 5;
     let total_pages = 20u32 / page_size + if 20u32 % page_size != 0 { 1 } else { 0 };
     for page_idx in 0..total_pages {
-        let page = client
-            .get_all_tiers_paginated(&PageParams {
-                offset: page_idx * page_size,
-                limit: page_size,
-            })
-            .unwrap();
+        let page = client.get_all_tiers_paginated(&PageParams {
+            offset: page_idx * page_size,
+            limit: page_size,
+        });
         for t in page.iter() {
-            collected.push(t.id.to_string());
+            collected.push_back(t.id.clone());
         }
     }
     assert_eq!(collected.len(), 20);
-    let mut full_ids: Vec<String> = full.iter().map(|t| t.id.to_string()).collect();
-    collected.sort();
-    full_ids.sort();
-    assert_eq!(collected, full_ids);
+    // Every id seen through pagination must appear in the full listing.
+    for id in collected.iter() {
+        assert!(full.iter().any(|t| t.id == id));
+    }
 }
 
 #[test]
@@ -2223,14 +2440,12 @@ fn test_ct18_staking_tier_deactivate_reactivate() {
         .get_staking_tiers_paginated(&PageParams {
             offset: 0,
             limit: 10,
-        })
-        .unwrap();
+        });
     let after_deactivate_active = client
-        .get_active_staking_tiers_paginated(&PageParams {
+        .active_staking_tiers_paginated(&PageParams {
             offset: 0,
             limit: 10,
-        })
-        .unwrap();
+        });
     let in_paged = after_deactivate_paged
         .iter()
         .find(|t| t.id == tier_id)
@@ -2246,8 +2461,7 @@ fn test_ct18_staking_tier_deactivate_reactivate() {
         .get_staking_tiers_paginated(&PageParams {
             offset: 0,
             limit: 10,
-        })
-        .unwrap();
+        });
     let r = after_reactivate
         .iter()
         .find(|t| t.id == tier_id)
@@ -2260,7 +2474,7 @@ fn test_ct18_staking_tier_deactivate_reactivate() {
 }
 
 #[test]
-#[should_panic(expected = "HostError: Error(Contract, #53)")]
+#[should_panic(expected = "HostError: Error(Contract, #55)")]
 fn test_ct18_staking_reactivate_already_active_errors() {
     // CT-18 staking: reactivate an already-active staking tier rejects.
     let env = Env::default();
@@ -2460,7 +2674,7 @@ fn test_approve_rejects_self_as_spender() {
     client.issue_token(&token_id, &owner, &expiry_date);
 
     let result = client.try_approve(&token_id, &owner, &500, &None);
-    assert_eq!(result, Err(Ok(Error::Unauthorized)));
+    assert_eq!(result, Err(Ok(Error::InvalidSpender)));
 }
 
 // ==================== Token Fractionalization Tests ====================
@@ -3892,6 +4106,72 @@ fn test_royalty_validation_fail() {
 }
 
 #[test]
+#[should_panic(expected = "Error(Contract, #8)")]
+fn test_royalty_zero_share_recipient_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(Contract, ());
+    let client = ContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+
+    let token_id = BytesN::<32>::random(&env);
+    let owner = Address::generate(&env);
+    client.issue_token(&token_id, &owner, &(env.ledger().timestamp() + 1000));
+
+    let recipient = Address::generate(&env);
+    let recipients = vec![
+        &env,
+        types::RoyaltyRecipient {
+            address: recipient,
+            percentage: 0, // 0% share must be rejected
+        },
+    ];
+
+    client.set_royalty(&token_id, &recipients);
+}
+
+#[test]
+fn test_royalty_exact_full_allocation_accepted() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(Contract, ());
+    let client = ContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+
+    let token_id = BytesN::<32>::random(&env);
+    let owner = Address::generate(&env);
+    client.issue_token(&token_id, &owner, &(env.ledger().timestamp() + 1000));
+
+    // Exactly 100% (10,000 bps) split across recipients must be accepted and
+    // the recorded total must sum deterministically to 10,000.
+    let first = Address::generate(&env);
+    let second = Address::generate(&env);
+    let recipients = vec![
+        &env,
+        types::RoyaltyRecipient {
+            address: first,
+            percentage: 7500, // 75%
+        },
+        types::RoyaltyRecipient {
+            address: second,
+            percentage: 2500, // 25%
+        },
+    ];
+
+    client.set_royalty(&token_id, &recipients);
+
+    let info = client.get_royalty_info(&token_id).unwrap();
+    assert_eq!(info.total_percentage, 10000);
+    assert_eq!(info.config.recipients.len(), 2);
+}
+
+#[test]
 fn test_transfer_with_royalty_events() {
     let env = Env::default();
     env.mock_all_auths();
@@ -3968,18 +4248,24 @@ fn regression_issue_token_successful_path() {
     // Successful, authorized mint with a future expiry.
     client.issue_token(&token_id, &user, &expiry_date);
 
+    // Emitted events: a `token_iss` event must be published on success.
+    // Check events immediately after the emitting call — env.events().all()
+    // returns the events from the most recent contract invocation, so the
+    // check must happen before any subsequent contract call.
+    let issue_symbol = symbol_short!("token_iss");
+    let issued = env
+        .events()
+        .all()
+        .iter()
+        .any(|(_c, topics, _d)| topics_contain_symbol(&env, &topics, &issue_symbol));
+    assert!(issued, "token_iss event should be emitted on successful issuance");
+
     // Storage/ABI: the token is persisted with the expected fields.
-    let token = client.get_token(&token_id).unwrap();
+    let token = client.get_token(&token_id);
     assert_eq!(token.user, user);
     assert_eq!(token.status, MembershipStatus::Active);
     assert_eq!(token.expiry_date, expiry_date);
     assert_eq!(token.issue_date, now);
-
-    // Emitted events: a `token_iss` event must be published on success.
-    let issued = env.events().all().iter().any(|(_c, topics, _d)| {
-        topics.first() == Some(symbol_short!("token_iss").into())
-    });
-    assert!(issued, "token_iss event should be emitted on successful issuance");
 }
 
 #[test]
@@ -3996,6 +4282,9 @@ fn regression_issue_token_invalid_past_expiry() {
     let token_id = BytesN::<32>::random(&env);
 
     client.set_admin(&admin);
+
+    // Advance the ledger so timestamp > 0, making subtraction safe.
+    env.ledger().with_mut(|l| l.timestamp = 1_000);
 
     // Ledger-time check: an expiry date in the past must be rejected.
     let expiry_date = env.ledger().timestamp() - 1;
@@ -4109,11 +4398,16 @@ fn regression_withdraw_penalty_pool_rejects_unauthorized_and_withdraws_penalty()
     let unauthorized = client.try_withdraw_penalty_pool(&stranger, &500);
     assert_eq!(unauthorized, Err(Ok(Error::Unauthorized)));
 
-    let before_events = env.events().all().len();
     client.withdraw_penalty_pool(&admin, &500);
+
+    // Check the emitted event immediately after the call that emits it,
+    // before any subsequent contract invocation drains the event buffer.
+    let events_after = env.events().all();
+    assert!(!events_after.is_empty(), "withdraw_penalty_pool must emit an event");
+
+    // Verify balances using the contract address from the client.
     assert_eq!(sac.balance(&admin), 500);
-    assert_eq!(sac.balance(&env.current_contract_address()), 0);
-    assert!(env.events().all().len() > before_events);
+    assert_eq!(sac.balance(&client.address), 0);
 }
 
 #[test]

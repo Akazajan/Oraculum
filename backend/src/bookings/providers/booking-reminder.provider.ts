@@ -7,6 +7,26 @@ import { EmailService } from '../../email/email.service';
 import { Booking } from '../entities/booking.entity';
 import { BookingStatus } from '../enums/booking-status.enum';
 
+// B38 — Reminder window is configurable. Default: remind between 24 and
+// 25 hours before the booking start. Already-sent bookings and bookings
+// whose start has passed are never re-reminded.
+const DEFAULT_WINDOW_START_MS = 24 * 60 * 60 * 1000; // 24h
+const DEFAULT_SLOT_MS = 60 * 60 * 1000; // 1h
+
+function configuredWindowStartMs(): number {
+  const raw = process.env.BOOKING_REMINDER_WINDOW_MS;
+  const parsed = raw ? Number(raw) : NaN;
+  return Number.isFinite(parsed) && parsed > 0
+    ? parsed
+    : DEFAULT_WINDOW_START_MS;
+}
+
+function configuredSlotMs(): number {
+  const raw = process.env.BOOKING_REMINDER_SLOT_MS;
+  const parsed = raw ? Number(raw) : NaN;
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_SLOT_MS;
+}
+
 @Injectable()
 export class BookingReminderScheduler {
   constructor(
@@ -24,8 +44,11 @@ export class BookingReminderScheduler {
       ],
       relations: ['user', 'workspace'],
     });
-    const reminderStart = now.getTime() + 24 * 60 * 60 * 1000;
-    const reminderEnd = reminderStart + 60 * 60 * 1000;
+    const nowMs = now.getTime();
+    const windowStart = configuredWindowStartMs();
+    const slot = configuredSlotMs();
+    const reminderStart = nowMs + windowStart;
+    const reminderEnd = reminderStart + slot;
     let sentCount = 0;
 
     for (const booking of bookings) {
@@ -41,6 +64,12 @@ export class BookingReminderScheduler {
       const start = moment
         .tz(booking.startDate, 'YYYY-MM-DD', timezone)
         .valueOf();
+
+      // B38 — Past bookings receive no new reminder, and bookings outside
+      // the configured future window (too soon or too far ahead) are skipped.
+      if (start <= nowMs) {
+        continue;
+      }
       if (start < reminderStart || start >= reminderEnd || !booking.user) {
         continue;
       }

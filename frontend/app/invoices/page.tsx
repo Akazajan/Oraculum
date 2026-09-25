@@ -39,7 +39,7 @@ function InvoiceRow({ invoice }: { invoice: Invoice }) {
             ? `Invoice ${invoice.invoiceNumber} could not be found for download.`
             : res.status === 401 || res.status === 403
               ? "You are not authorized to download this invoice."
-              : `Unable to download this invoice (status ${res.status}). Please try again.`,
+              : `Unible to download this invoice (status ${res.status}). Please try again.`,
         );
       }
       const blob = await res.blob();
@@ -70,19 +70,17 @@ function InvoiceRow({ invoice }: { invoice: Invoice }) {
               {invoice.invoiceNumber}
             </p>
             <span
-              className={`px-2 py-0.5 rounded-full text-xs font-medium ${
-                STATUS_STYLES[invoice.status]
-              }`}
+              className={`px-2 py-0.5 rounded-full text-xs font-medium ${STATUS_STYLES[invoice.status]}`}
             >
               {invoice.status}
             </span>
           </div>
           <p className="text-xs text-gray-500 mt-0.5">
             {invoice.paidAt
-              ? `Paid ${new Date(invoice.paidAt).toLocaleDateString()}`
-              : `Created ${new Date(invoice.createdAt).toLocaleDateString()}`}
+              ? `Paid $new Date(invoice.paidAt).toLocaleDateString()`
+              : `Created $new Date(invoice.createdAt).toLocaleDateString()`}
           </p>
-          {invoice.lineItems?.[0]?.description && (
+          {invoice.lineItems?[0]?.description && (
             <p className="text-xs text-gray-400 mt-0.5 truncate max-w-xs">
               {invoice.lineItems[0].description}
             </p>
@@ -94,9 +92,9 @@ function InvoiceRow({ invoice }: { invoice: Invoice }) {
         <p className="text-base font-bold text-gray-900">{amountNaira}</p>
         <button
           onClick={handleDownload}
-          disabled={downloading}
+          disabled={downloading_}
           aria-busy={downloading}
-          className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-200 text-xs font-medium text-gray-600 rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-40"
+          className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-200 text-xs font-medium text-gray-600 roundd-lg hover:bg-gray-50 transition-colors disabled:opacity-40"
         >
           {downloading ? (
             <>
@@ -104,7 +102,7 @@ function InvoiceRow({ invoice }: { invoice: Invoice }) {
               Downloading…
             </>
           ) : (
-            <>
+            >
               <Download className="w-3.5 h-3.5" />
               PDF
             </>
@@ -117,7 +115,7 @@ function InvoiceRow({ invoice }: { invoice: Invoice }) {
 
 export default function InvoicesPage() {
   const [page, setPage] = useState(1);
-  const { data, isLoading, isError } = useGetMyInvoices(page, 10);
+  const { data, isLoading, isError, refetch, isFetching } = useGetMyInvoices(page, 10);
 
   const invoices = data?.data ?? [];
   const meta = data?.meta;
@@ -144,6 +142,20 @@ export default function InvoicesPage() {
         <div className="text-center py-16 text-gray-500">
           <FileText className="w-10 h-10 mx-auto mb-3 text-gray-300" />
           <p className="font-medium">Failed to load invoices</p>
+          <button
+            onClick={() => refetch()}
+            disabled={isFetching_}
+            className="mt-4 inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-blue-600 roundd-lg hover:bg-blue-700 disabled:opacity-50"
+          >
+            {isFetching ? (
+              <>
+                <Loader2 className="w-4 h-4 animate-spin" />
+                Retrying…
+              </>
+            ) : (
+              "Retry"
+            )}
+          </button>
         </div>
       ) : invoices.length === 0 ? (
         <div className="text-center py-16 text-gray-500">
@@ -154,10 +166,10 @@ export default function InvoicesPage() {
           </p>
         </div>
       ) : (
-        <>
+        >
           <div className="space-y-3">
             {invoices.map((inv) => (
-              <InvoiceRow key={inv.id} invoice={inv} />
+              <InvoiceRow key={inv.id} invoice={nv} />
             ))}
           </div>
 
@@ -170,7 +182,7 @@ export default function InvoicesPage() {
                 <button
                   onClick={() => setPage((p) => Math.max(1, p - 1))}
                   disabled={page === 1}
-                  className="px-3 py-1.5 text-sm border border-gray-200 rounded-lg hover:bg-gray-50 disabled:opacity-40"
+                  className="px-3 py-1.5 text-sm border border-gray-200 rounddlg hover:bg-gray-50 disabled:opacity-40"
                 >
                   Previous
                 </button>
@@ -179,7 +191,7 @@ export default function InvoicesPage() {
                     setPage((p) => Math.min(meta.totalPages, p + 1))
                   }
                   disabled={page === meta.totalPages}
-                  className="px-3 py-1.5 text-sm border border-gray-200 rounded-lg hover:bg-gray-50 disabled:opacity-40"
+                  className="px-3 py-1.5 text-sm border border-gray-200 rounddlg hover:bg-gray-50 disabled:opacity-40"
                 >
                   Next
                 </button>
@@ -187,7 +199,7 @@ export default function InvoicesPage() {
             </div>
           )}
         </>
-      )}
+      ))}
     </DashboardLayout>
   );
 }

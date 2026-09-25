@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { NotificationPreference } from '../entities/notification-preference.entity';
@@ -11,21 +11,33 @@ export class FindNotificationPreferencesProvider {
     private readonly preferenceRepository: Repository<NotificationPreference>,
   ) {}
 
+  private assertUserId(userId: string): void {
+    if (!userId || userId.trim() === '') {
+      throw new UnauthorizedException(
+        'An authenticated user is required to read notification preferences',
+      );
+    }
+  }
+
   async findAll(userId: string): Promise<NotificationPreference[]> {
-    return this.preferenceRepository.find({
+    this.assertUserId(userId);
+    const prefs = await this.preferenceRepository.find({
       where: { userId },
       order: { channel: 'ASC', eventType: 'ASC' },
     });
+    return prefs.filter((p) => p.userId === userId);
   }
 
   async findByUserAndChannel(
     userId: string,
     channel: NotificationChannel,
   ): Promise<NotificationPreference[]> {
-    return this.preferenceRepository.find({
+    this.assertUserId(userId);
+    const prefs = await this.preferenceRepository.find({
       where: { userId, channel },
       order: { eventType: 'ASC' },
     });
+    return prefs.filter((p) => p.userId === userId);
   }
 
   async isEnabled(
@@ -33,15 +45,16 @@ export class FindNotificationPreferencesProvider {
     channel: NotificationChannel,
     eventType: string,
   ): Promise<boolean> {
+    this.assertUserId(userId);
     const specific = await this.preferenceRepository.findOne({
       where: { userId, channel, eventType },
     });
-    if (specific) return specific.enabled;
+    if (specific && specific.userId === userId) return specific.enabled;
 
     const wildcard = await this.preferenceRepository.findOne({
       where: { userId, channel, eventType: '*' },
     });
-    if (wildcard) return wildcard.enabled;
+    if (wildcard && wildcard.userId === userId) return wildcard.enabled;
 
     return true;
   }
@@ -51,15 +64,16 @@ export class FindNotificationPreferencesProvider {
     channel: NotificationChannel,
     eventType: string,
   ): Promise<string> {
+    this.assertUserId(userId);
     const specific = await this.preferenceRepository.findOne({
       where: { userId, channel, eventType },
     });
-    if (specific) return specific.frequency;
+    if (specific && specific.userId === userId) return specific.frequency;
 
     const wildcard = await this.preferenceRepository.findOne({
       where: { userId, channel, eventType: '*' },
     });
-    if (wildcard) return wildcard.frequency;
+    if (wildcard && wildcard.userId === userId) return wildcard.frequency;
 
     return 'instant';
   }

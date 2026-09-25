@@ -5,6 +5,16 @@ import { NotificationPreference } from '../entities/notification-preference.enti
 import { NotificationChannel } from '../enums/notification-channel.enum';
 import { NotificationFrequency } from '../enums/notification-frequency.enum';
 import { NotificationType } from '../../notifications/enums/notification-type.enum';
+import { NotificationPreferenceValidationProvider } from './notification-preference-validation.provider';
+
+const DEFAULT_CHANNELS = [
+  NotificationChannel.IN_APP,
+  NotificationChannel.EMAIL,
+  NotificationChannel.SMS,
+] as const;
+
+const DEFAULT_FREQUENCY = NotificationFrequency.INSTANT;
+const DEFAULT_ENABLED = true;
 
 const DEFAULT_PREFERENCES: Array<{
   channel: NotificationChannel;
@@ -12,12 +22,12 @@ const DEFAULT_PREFERENCES: Array<{
   enabled: boolean;
   frequency: NotificationFrequency;
 }> = [
-  { channel: NotificationChannel.IN_APP, eventType: '*', enabled: true, frequency: NotificationFrequency.INSTANT },
-  { channel: NotificationChannel.EMAIL, eventType: NotificationType.BOOKING_CONFIRMED, enabled: true, frequency: NotificationFrequency.INSTANT },
-  { channel: NotificationChannel.EMAIL, eventType: NotificationType.BOOKING_CANCELLED, enabled: true, frequency: NotificationFrequency.INSTANT },
-  { channel: NotificationChannel.EMAIL, eventType: NotificationType.PAYMENT_SUCCESS, enabled: true, frequency: NotificationFrequency.INSTANT },
-  { channel: NotificationChannel.EMAIL, eventType: NotificationType.PAYMENT_FAILED, enabled: true, frequency: NotificationFrequency.INSTANT },
-  { channel: NotificationChannel.EMAIL, eventType: NotificationType.INVOICE_GENERATED, enabled: true, frequency: NotificationFrequency.INSTANT },
+  { channel: NotificationChannel.IN_APP, eventType: '*', enabled: DEFAULT_ENABLED, frequency: DEFAULT_FREQUENCY },
+  { channel: NotificationChannel.EMAIL, eventType: NotificationType.BOOKING_CONFIRMED, enabled: DEFAULT_ENABLED, frequency: DEFAULT_FREQUENCY },
+  { channel: NotificationChannel.EMAIL, eventType: NotificationType.BOOKING_CANCELLED, enabled: DEFAULT_ENABLED, frequency: DEFAULT_FREQUENCY },
+  { channel: NotificationChannel.EMAIL, eventType: NotificationType.PAYMENT_SUCCESS, enabled: DEFAULT_ENABLED, frequency: DEFAULT_FREQUENCY },
+  { channel: NotificationChannel.EMAIL, eventType: NotificationType.PAYMENT_FAILED, enabled: DEFAULT_ENABLED, frequency: DEFAULT_FREQUENCY },
+  { channel: NotificationChannel.EMAIL, eventType: NotificationType.INVOICE_GENERATED, enabled: DEFAULT_ENABLED, frequency: DEFAULT_FREQUENCY },
 ];
 
 @Injectable()
@@ -25,6 +35,7 @@ export class CreateNotificationPreferencesProvider {
   constructor(
     @InjectRepository(NotificationPreference)
     private readonly preferenceRepository: Repository<NotificationPreference>,
+    private readonly validationProvider: NotificationPreferenceValidationProvider,
   ) {}
 
   async createDefaultPreferences(userId: string): Promise<NotificationPreference[]> {
@@ -46,6 +57,9 @@ export class CreateNotificationPreferencesProvider {
       frequency?: NotificationFrequency;
     },
   ): Promise<NotificationPreference> {
+    const frequency = input.frequency ?? NotificationFrequency.INSTANT;
+    this.validationProvider.validateCombination(input.channel, frequency);
+
     let pref = await this.preferenceRepository.findOne({
       where: {
         userId,
@@ -63,10 +77,20 @@ export class CreateNotificationPreferencesProvider {
         channel: input.channel,
         eventType: input.eventType,
         enabled: input.enabled ?? true,
-        frequency: input.frequency ?? NotificationFrequency.INSTANT,
+        frequency,
+        enabled: input.enabled ?? DEFAULT_ENABLED,
+        frequency: input.frequency ?? DEFAULT_FREQUENCY,
       });
     }
 
     return this.preferenceRepository.save(pref);
+  }
+
+  getDefaultEnabled(): boolean {
+    return DEFAULT_ENABLED;
+  }
+
+  getDefaultFrequency(): NotificationFrequency {
+    return DEFAULT_FREQUENCY;
   }
 }

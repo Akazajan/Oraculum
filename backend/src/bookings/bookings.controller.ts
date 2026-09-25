@@ -37,6 +37,7 @@ import { ApiErrorDto } from '../common/dto/api-error.dto';
 import { Booking } from './entities/booking.entity';
 import { CsvExportService } from '../common/csv-export/csv-export.service';
 import { ExportBookingsProvider } from './providers/export-bookings.provider';
+import { CreateRecurringBookingDto } from '../modules/bookings/recurring-booking';
 
 @ApiTags('bookings')
 @ApiBearerAuth('bearer')
@@ -62,6 +63,17 @@ export class BookingsController {
   ) {
     const booking = await this.bookingsService.create(dto, userId);
     return { message: 'Booking created successfully', data: booking };
+  }
+
+  @Post('recurring')
+  @ApiOperation({ summary: 'Create recurring bookings' })
+  @ApiOkResponse({ description: 'Recurring bookings created', type: [Booking] })
+  async createRecurring(
+    @Body() dto: CreateRecurringBookingDto,
+    @GetCurrentUser('id') userId: string,
+  ) {
+    const bookings = await this.bookingsService.createRecurring(dto, userId);
+    return { message: 'Recurring bookings created successfully', data: bookings };
   }
 
   @Get()

@@ -47,6 +47,11 @@ export class ConfirmBookingProvider {
       if (!booking) {
         throw new NotFoundException(`Booking "${bookingId}" not found`);
       }
+      // B29 – idempotent: repeating confirmation of an already confirmed
+      // booking is a safe no-op that returns the booking unchanged.
+      if (booking.status === BookingStatus.CONFIRMED) {
+        return booking;
+      }
       if (booking.status !== BookingStatus.PENDING) {
         throw new BadRequestException('Only PENDING bookings can be confirmed');
       }

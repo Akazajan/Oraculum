@@ -1,4 +1,11 @@
-import { IsOptional, IsString, IsIn, MaxLength, ValidateNested } from 'class-validator';
+import {
+  IsIn,
+  IsObject,
+  IsOptional,
+  IsString,
+  MaxLength,
+  ValidateNested,
+} from 'class-validator';
 import { Type } from 'class-transformer';
 
 /**
@@ -48,6 +55,7 @@ export class CreateAuditLogDto {
   resourceId?: string;
 
   @IsOptional()
+  @IsObject()
   @ValidateNested()
   @Type(() => AuditMetaDto)
   metadata?: AuditMetaDto;

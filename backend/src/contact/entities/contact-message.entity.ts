@@ -44,6 +44,9 @@ export class ContactMessage {
   @Column('varchar', { length: 100, nullable: true })
   source?: string;
 
+  @Column('varchar', { length: 36, nullable: true })
+  idempotencyKey?: string;
+
   @Column({ type: 'boolean', default: false })
   isRead: boolean;
 

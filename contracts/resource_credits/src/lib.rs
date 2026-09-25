@@ -1,6 +1,7 @@
 #![no_std]
+
 // The env.events().publish() API is deprecated in favour of #[contractevent],
-// but kept here for consistency with the rest of the Oraculum contracts.
+// kept here for consistency with the rest of the Oraculum contracts.
 #![allow(deprecated)]
 
 mod errors;
@@ -26,6 +27,55 @@ pub struct ResourceCreditsContract;
 
 #[contractimpl]
 impl ResourceCreditsContract {
+    // ── Internal helpers ──────────────────────────────────────────────────────
+
+    fn balance_of(env: &Env, member: &Address) -> u128 {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Balance(member.clone()))
+            .unwrap_or(0u128)
+    }
+
+    fn set_balance(env: &Env, member: &Address, amount: u128) {
+        env.storage()
+            .persistent()
+            .set(&DataKey::Balance(member.clone()), &amount);
+    }
+
+    fn supply(env: &Env) -> u128 {
+        env.storage()
+            .instance()
+            .get(&DataKey::TotalSupply)
+            .unwrap_or(0u128)
+    }
+
+    /// Authorize `caller` as the owner of `owner`'s credits.
+    ///
+    /// Credits are only ever moved by the account that holds them, so the
+    /// caller and the owner must be the same address. The mismatch is
+    /// rejected before `require_auth`, so an unrelated caller gets
+    /// `Unauthorized` rather than a signature prompt.
+    fn require_owner(caller: &Address, owner: &Address) -> Result<(), Error> {
+        if caller != owner {
+            return Err(Error::Unauthorized);
+        }
+        owner.require_auth();
+    /// Reject a zero-value credit operation.
+    ///
+    /// Minting, transferring or spending zero credits moves nothing but still
+    /// writes balances and emits an event, which makes the transaction
+    /// history misleading. Every credit-moving entry point runs this before
+    /// touching storage, so a zero-value call fails with no state change.
+    ///
+    /// Distinct from [`Error::InsufficientBalance`]: the amount itself is
+    /// invalid here, regardless of what the account holds.
+    fn require_nonzero(amount: u128) -> Result<(), Error> {
+        if amount == 0 {
+            return Err(Error::InvalidAmount);
+        }
+        Ok(())
+    }
+
     /// Initialize the contract with an admin and payment token.
     pub fn initialize(env: Env, admin: Address, payment_token: Address) -> Result<(), Error> {
         if env.storage().instance().has(&DataKey::Admin) {
@@ -59,10 +109,17 @@ impl ResourceCreditsContract {
         if caller != admin {
             return Err(Error::Unauthorized);
         }
-        if amount == 0 {
-            return Err(Error::InvalidAmount);
-        }
+        Self::require_nonzero(amount)?;
 
+        // Both sums are resolved before either is stored, so an overflow on
+        // the supply cannot leave a credited balance behind.
+        let bal = Self::balance_of(&env, &recipient);
+        let new_bal = bal.checked_add(amount).ok_or(Error::Overflow)?;
+        let new_supply = Self::supply(&env)
+            .checked_add(amount)
+            .ok_or(Error::Overflow)?;
+
+        Self::set_balance(&env, &recipient, new_bal);
         let bal: u128 = env
             .storage()
             .persistent()
@@ -91,8 +148,11 @@ impl ResourceCreditsContract {
     /// Transfer credits from one member to another.
     ///
     /// CT-03: sender balance decremented, recipient balance incremented.
+    ///
+    /// `caller` must be the account the credits are debited from.
     pub fn transfer_credits(
         env: Env,
+        caller: Address,
         from: Address,
         to: Address,
         amount: u128,
@@ -100,8 +160,18 @@ impl ResourceCreditsContract {
         if amount == 0 {
             return Err(Error::InvalidAmount);
         }
+        Self::require_owner(&caller, &from)?;
+        // Checked before `require_auth` so a zero-value transfer fails
+        // outright instead of first prompting the holder for a signature.
+        Self::require_nonzero(amount)?;
         from.require_auth();
 
+        // Reject self-transfers: they are no-ops and emit a misleading event.
+        if from == to {
+            return Err(Error::InvalidAmount);
+        }
+
+        let from_bal = Self::balance_of(&env, &from);
         let from_bal: u128 = env
             .storage()
             .persistent()
@@ -110,11 +180,16 @@ impl ResourceCreditsContract {
         if from_bal < amount {
             return Err(Error::InsufficientBalance);
         }
+        let to_bal = Self::balance_of(&env, &to);
 
-        env.storage()
-            .persistent()
-            .set(&DataKey::Balance(from.clone()), &(from_bal - amount));
+        // Resolve both sides before writing either, so a failure here leaves
+        // both balances exactly as they were. The recipient's addition is
+        // checked: unchecked, a large balance could wrap to a smaller one.
+        let new_from = from_bal.checked_sub(amount).ok_or(Error::Overflow)?;
+        let new_to = to_bal.checked_add(amount).ok_or(Error::Overflow)?;
 
+        Self::set_balance(&env, &from, new_from);
+        Self::set_balance(&env, &to, new_to);
         let to_bal: u128 = env
             .storage()
             .persistent()
@@ -132,10 +207,23 @@ impl ResourceCreditsContract {
     /// Spend (burn) credits from a member's balance.
     ///
     /// CT-04: decrements member balance and TotalSupply.
-    pub fn spend_credits(env: Env, member: Address, amount: u128) -> Result<(), Error> {
+    ///
+    /// `caller` must be the member whose credits are being spent.
+    pub fn spend_credits(
+        env: Env,
+        caller: Address,
+        member: Address,
+        amount: u128,
+    ) -> Result<(), Error> {
         if amount == 0 {
             return Err(Error::InvalidAmount);
         }
+        Self::require_owner(&caller, &member)?;
+
+        let bal = Self::balance_of(&env, &member);
+    pub fn spend_credits(env: Env, member: Address, amount: u128) -> Result<(), Error> {
+        // As in `transfer_credits`: a zero-value spend never reaches auth.
+        Self::require_nonzero(amount)?;
         member.require_auth();
 
         let bal: u128 = env
@@ -147,10 +235,14 @@ impl ResourceCreditsContract {
             return Err(Error::InsufficientBalance);
         }
 
-        env.storage()
-            .persistent()
-            .set(&DataKey::Balance(member.clone()), &(bal - amount));
+        // Checked on both sides: an unchecked `supply - amount` would wrap to
+        // a huge total supply if the two ever drifted apart.
+        let new_bal = bal.checked_sub(amount).ok_or(Error::Overflow)?;
+        let new_supply = Self::supply(&env)
+            .checked_sub(amount)
+            .ok_or(Error::Overflow)?;
 
+        Self::set_balance(&env, &member, new_bal);
         let supply: u128 = env
             .storage()
             .instance()
@@ -158,7 +250,7 @@ impl ResourceCreditsContract {
             .unwrap_or(0u128);
         env.storage()
             .instance()
-            .set(&DataKey::TotalSupply, &(supply - amount));
+            .set(&DataKey::TotalSupply, &new_supply);
 
         env.events()
             .publish((symbol_short!("spend"), member), amount);
@@ -167,14 +259,12 @@ impl ResourceCreditsContract {
 
     /// Get the credit balance of a member.
     pub fn balance(env: Env, member: Address) -> u128 {
-        env.storage()
-            .persistent()
-            .get(&DataKey::Balance(member))
-            .unwrap_or(0u128)
+        Self::balance_of(&env, &member)
     }
 
     /// Get the total supply of credits.
     pub fn total_supply(env: Env) -> u128 {
+        Self::supply(&env)
         env.storage()
             .instance()
             .get(&DataKey::TotalSupply)

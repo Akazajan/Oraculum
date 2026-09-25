@@ -35,6 +35,8 @@ import { AuditAction, AuditService } from '../audit/audit.service';
 import { ErrorCatch } from '../utils/error';
 
 const DEFAULT_PASSWORD_RESET_OTP_MINUTES = 10;
+const MAX_LOGIN_ATTEMPTS = 5;
+const LOCKOUT_MINUTES = 15;
 
 @Injectable()
 export class AuthService {
@@ -277,6 +279,17 @@ export class AuthService {
     const user = await this.userRepository.findOne({
       where: { email: loginUserDto.email },
     });
+
+    // B22 – locked accounts are rejected up-front with the exact same
+    // response shape as bad credentials (no account probing).
+    if (user && user.lockoutUntil && user.lockoutUntil > new Date()) {
+      await this.auditService.authFailure(AuditAction.LOGIN_FAILED, loginUserDto.email, {
+        reason: 'locked',
+        userId: user.id,
+      });
+      throw new UnauthorizedException(UserMessages.INVALID_CREDENTIALS);
+    }
+
     if (
       !user ||
       !(await this.userHelper.verifyPassword(
@@ -284,12 +297,25 @@ export class AuthService {
         user.password,
       ))
     ) {
+      if (user) {
+        await this.bumpLoginFailure(user);
+      }
       await this.auditService.authFailure(
         AuditAction.LOGIN_FAILED,
         loginUserDto.email,
         { reason: !user ? 'unknown_email' : 'bad_password' },
       );
       throw new UnauthorizedException(UserMessages.INVALID_CREDENTIALS);
+    }
+
+    // B22 – a successful authentication resets the failure state.
+    if (user.failedLoginAttempts > 0 || user.lockoutUntil) {
+      await this.userRepository.update(user.id, {
+        failedLoginAttempts: 0,
+        lockoutUntil: null,
+      });
+      user.failedLoginAttempts = 0;
+      user.lockoutUntil = null;
     }
 
     if (!user.isVerified) {
@@ -329,6 +355,23 @@ export class AuthService {
       accessToken,
       refreshToken,
     };
+  }
+
+  /** B22 – increment the failed-login counter; on the exact threshold,
+   * reset it and lock the account for LOCKOUT_MINUTES. */
+  private async bumpLoginFailure(user: User): Promise<void> {
+    const next = (user.failedLoginAttempts ?? 0) + 1;
+    if (next >= MAX_LOGIN_ATTEMPTS) {
+      await this.userRepository.update(user.id, {
+        failedLoginAttempts: 0,
+        lockoutUntil: moment().add(LOCKOUT_MINUTES, 'minutes').toDate(),
+      });
+    } else {
+      await this.userRepository.update(user.id, {
+        failedLoginAttempts: next,
+      });
+      user.failedLoginAttempts = next;
+    }
   }
 
   /**

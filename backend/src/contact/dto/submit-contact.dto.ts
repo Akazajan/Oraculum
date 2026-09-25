@@ -57,4 +57,13 @@ export class SubmitContactDto {
   @MaxLength(5000)
   @SanitizeString()
   message: string;
+
+  @ApiPropertyOptional({
+    example: '9a26b1c0-7f2b-4d3e-9f0c-1a2b3c4d5e6f',
+    maxLength: 36,
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(36)
+  idempotencyKey?: string;
 }

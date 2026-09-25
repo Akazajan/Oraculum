@@ -12,6 +12,10 @@ import { UserRole } from '../users/enums/userRoles.enum';
 import { Booking } from './entities/booking.entity';
 import { PricingService } from './pricing/pricing.service';
 import { PlanType } from './enums/plan-type.enum';
+import {
+  CreateRecurringBookingDto,
+  RecurringBookingService,
+} from '../modules/bookings/recurring-booking';
 
 @Injectable()
 export class BookingsService {
@@ -23,11 +27,16 @@ export class BookingsService {
     private readonly findBookingsProvider: FindBookingsProvider,
     private readonly pricingService: PricingService,
     private readonly exportBookingsProvider: ExportBookingsProvider,
+    private readonly recurringBookingService: RecurringBookingService,
   ) {}
 
   //create booking id
   create(dto: CreateBookingDto, userId: string) {
     return this.createBookingProvider.create(dto, userId);
+  }
+
+  createRecurring(dto: CreateRecurringBookingDto, userId: string) {
+    return this.recurringBookingService.create(dto, userId);
   }
 
   /**

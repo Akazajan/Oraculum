@@ -66,6 +66,24 @@ mod fuzz_arithmetic_tests {
         assert_eq!(per_share.unwrap(), 10_000_000);
     }
 
+        #[path = "../payment_requests.rs"]
+        mod payment_requests;
+
+        use payment_requests::validate_expiry;
+
+        #[test]
+        fn test_payment_request_rejects_expired_timestamp() {
+            assert_eq!(
+                validate_expiry(1_700_000_000, 1_700_000_001),
+                Err("Expired payment request")
+            );
+        }
+
+        #[test]
+        fn test_payment_request_accepts_future_timestamp() {
+            assert_eq!(validate_expiry(1_700_000_002, 1_700_000_001), Ok(()));
+        }
+
     // -----------------------------------------------------------------------
     // #283 — Staking reward overflow scenarios (rewards.rs)
     // -----------------------------------------------------------------------

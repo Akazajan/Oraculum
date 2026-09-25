@@ -17,6 +17,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { toast } from "sonner";
+import { formatDate } from "@/lib/utils";
 
 const STATUS_STYLES: Record<BookingStatus, string> = {
   PENDING: "bg-amber-50 text-amber-700",
@@ -114,14 +115,14 @@ function BookingRow({ booking, onCancelled }: { booking: Booking; onCancelled: (
             {booking.seatCount !== 1 ? "s" : ""}
           </p>
           <p className="text-xs text-gray-400 mt-0.5">
-            {booking.startDate} → {booking.endDate}
+            {formatDate(booking.startDate)} → {formatDate(booking.endDate)}
           </p>
         </div>
 
         <div className="text-right shrink-0">
           <p className="text-base font-bold text-gray-900">{amountNaira}</p>
           <p className="text-xs text-gray-400 mt-0.5">
-            {new Date(booking.createdAt).toLocaleDateString()}
+            {formatDate(booking.createdAt)}
           </p>
         </div>
       </div>

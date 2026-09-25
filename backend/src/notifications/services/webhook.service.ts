@@ -9,6 +9,20 @@ export interface WebhookPayload {
   data: Record<string, any>;
 }
 
+interface SanitizedPayload {
+  eventId: string;
+  eventType: string;
+  dataKeys: string[];
+}
+
+function sanitizePayload(payload: WebhookPayload): SanitizedPayload {
+  return {
+    eventId: payload.eventId,
+    eventType: payload.eventType,
+    dataKeys: Object.keys(payload.data ?? {}),
+  };
+}
+
 @Injectable()
 export class WebhookService {
   private readonly logger = new Logger(WebhookService.name);
@@ -57,8 +71,10 @@ export class WebhookService {
         throw new Error(lastError);
       } catch (error) {
         lastError = error instanceof Error ? error.message : String(error);
+        const sanitized = sanitizePayload(payload);
         this.logger.warn(
           `Webhook delivery failed to ${targetUrl} (Attempt ${attempt}/${maxRetries}): ${lastError}`,
+          sanitized,
         );
 
         if (attempt >= maxRetries) {
@@ -66,7 +82,7 @@ export class WebhookService {
             queueName: 'notification',
             jobId: payload.eventId,
             jobName: 'deliver-webhook',
-            data: { targetUrl, payload },
+            data: { targetUrl, payload: sanitizePayload(payload) },
             errorMessage: lastError,
             totalAttempts: attempt,
             attemptsResult: { targetUrl, lastAttempt: attempt },

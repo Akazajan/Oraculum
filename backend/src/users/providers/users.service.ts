@@ -236,6 +236,12 @@ export class UsersService {
     if (!user) {
       throw new NotFoundException('User not found');
     }
+    // B25 – soft-deleted users are already excluded by the default lookup;
+    // suspended (tenant-inaccessible) users are also treated as not found
+    // on the public lookup path.
+    if (user.isSuspended) {
+      throw new NotFoundException('User not found');
+    }
     const { password, ...userWithoutPassword } = user as any;
     return userWithoutPassword;
   }

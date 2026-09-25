@@ -1,1 +1,131 @@
-"use client";\n\nimport { useEffect, useState, useCallback, useRef } from 'react';\nimport { apiClient } from '@/lib/apiClient';\nimport { useAuthState } from '@/lib/store/authStore';\nimport DashboardLayout from '@/components/dashboard/DashboardLayout';\nimport StatsCards from '@/components/dashboard/StatsCards';\nimport ActivityFeed from '@/components/dashboard/ActivityFeed';\nimport QuickActions from '@/components/dashboard/QuickActions';\nimport AnalyticsChart from '@/components/dashboard/AnalyticsChart';\nimport AdminOverview from '@/components/dashboard/AdminOverview';\nimport AdminUserTable from '@/components/dashboard/AdminUserTable';\nimport MemberStatsCards from '@/components/dashboard/MemberStatsCards';\n\ninterface Stats {\n  totalMembers: number;\n  verifiedMembers: number;\n  activeWorkspaces: number;\n  deskOccupancy: number;\n}\n\ninterface ActivityItem {\n  id: string;\n  type: string;\n  description: string;\n  timestamp: string;\n}\n\ninterface AdminStats {\n  users: {\n    total: number;\n    active: number;\n    suspended: number;\n    newThisMonth: number;\n  };\n  newsletter: {\n    total: number;\n    verified: number;\n    active: number;\n    newThisMonth: number;\n    confirmationRate: number;\n  };\n  registrationTrend: { month: string; count: number }[];\n}\n\ninterface UserRow {\n  id: string;\n  firstname: string;\n  lastname: string;\n  email: string;\n  role: string;\n  isActive: boolean;\n  isSuspended: boolean;\n  isVerified: boolean;\n  createdAt: string;\n  profilePicture?: string;\n}\n\nexport default function DashboardContent() {\n  const { user } } = useAuthState();\n  const isAdmin = user?.role === 'admin';\n\n  const [stats, setStats] = useState<Stats | null>(null);\n  const [activity, setActivity] = useState<ActivityItem[]>([]);\n  const [adminStats, setAdminStats] = useState<AdminStats | null>(null);\n  const [adminUsers, setAdminUsers] = useState<UserRow[]>([]);\n  const [usersMeta, setUsersMeta] = useState({\n    total: 0,\n    page: 1,\n    limit: 10,\n    totalPages: 0,\n  });\n  const [loading, setLoading] = useState(true);\n\n  const pageRef = useRef(1);\n  const limitRef = useRef(10);\n\n  const fetchData = useCallback(async (nextPage?: number) => {\n    setLoading(true);\n    const page = nextPage ?? pageRef.current;\n    const limit = limitRef.current;\n    try {\n      const [statsRes, activityRes] = await Promise.all([\n        apiClient.get<{ success: boolean; data: Stats }>'/dashboard/stats'),\n        apiClient.get<{ success: boolean; data: ActivityItem[] }>('/dashboard/activity'),\n      ]);\n      setStats(statsRes.data);\n      setActivity(activityRes.data);\n\n      if (isAdmin) {\n        const [adminStatsRes, adminUsersRes] = await Promise.all([\n          apiClient.get<{ success: boolean; data: AdminStats }>('/dashboard/admin/stats'),\n          apiClient.get<{\n            success: boolean;\n            data: UserRow[];\n            meta: typeof usersMeta;\n          }>`/dashboard/admin/users?page=${page}&limit=${limit}`),\n        ]);\n        setAdminStats(adminStatsRes.data);\n        setAdminUsers(adminUsersRes.data);\n        setUsersMeta(adminUsersRes.meta);\n        pageRef.current = adminUsersRes.meta.page;\n        limitRef.current = adminUsersRes.meta.limit;\n      }\n    } catch {\n      // API unavailable - show empty state\n    } finally {\n      setLoading(false);\n    }\n  }, [isAdmin]);\n\n  useEffect(() => {\n    fetchData();\n  }, [fetchData]);\n\n  return (\n    <DashboardLayout>\n      <div className=\"mb-8\">\n        <h1 className=\"text-2fl font-bold text-gray-900\">\n          {user ? `Welcome back, ${user.firstname}` : 'Dashboard'}\n        </h1>\n        <p className=\"text-gray-500 mt-1 text-sm\">\n          Here&apos;what&apos;s happening in your workspace.\n        </p>\n      </div>\n\n      {loading ? (\n        <div className=\"space-y-4\">\n          {[1, 2, 3].map((i) => (\n            <div\n              key={i}\n              className=\"bg-white rounded-xl border border-gray-100 h-32 animate-pulse\"\n            />\n          ))}\n        </div>\n      ) : (\n        <div className=\"space-y-6\">\n          {/* Stats cards */}\n          {isAdmin ? (\n            <StatsCards stats={vquart/* stats */} />\n          ) : (\n            <MemberStatsCards />\n          )}\n\n          {/* Middle row — activity + quick actions */}\n          <div className=\"grid lg-grid-cols-2 gap-6\">\n            <ActivityFeed activities={activity} />\n            <QuickActions />\n          </div>\n\n          {/*Admin section [*/}\n          {isAdmin && (\n            <>\n              <div className=\"pt-6 border-t border-gray-200\">\n                <h2 className=\"text-lg font-semibold text-gray-900 mb-4\">\n                  Admin panel\n                </h2>\n              </div>\n\n              <AdminOverview stats={adminStats} />\n\n              {/* Chart */}\n              {adminStats?.registrationTrend && (\n                <AnalyticsChart data={adminStats.registrationTrend} />\n              )}\n\n              {/* User management table */}\n              <AdminUserTable\n                initialData={adminUsers}\n                meta={usersMeta}\n                onRefresh={fetchData}\n              />\n            <>\n          )}\n        </div>\n      )}\n    </DashboardLayout>\n  );\n}\n
+"use client";
+
+import DashboardLayout from "@/components/dashboard/DashboardLayout";
+import StatsCards from "@/components/dashboard/StatsCards";
+import ActivityFeed from "@/components/dashboard/ActivityFeed";
+import QuickActions from "@/components/dashboard/QuickActions";
+import AnalyticsChart from "@/components/dashboard/AnalyticsChart";
+import AdminOverview from "@/components/dashboard/AdminOverview";
+import AdminUserTable from "@/components/dashboard/AdminUserTable";
+import MemberStatsCards from "@/components/dashboard/MemberStatsCards";
+import { useAuthState } from "@/lib/store/authStore";
+import { useGetDashboardStats } from "@/lib/react-query/hooks/dashboard/useGetDashboardStats";
+import { useGetDashboardActivity } from "@/lib/react-query/hooks/dashboard/useGetDashboardActivity";
+import { useGetAdminDashboardStats } from "@/lib/react-query/hooks/dashboard/useGetAdminDashboardStats";
+import { useGetAdminDashboardUsers } from "@/lib/react-query/hooks/dashboard/useGetAdminDashboardUsers";
+
+export default function DashboardContent() {
+  const { user } = useAuthState();
+  const isAdmin = user?.role === "admin";
+
+  const statsQuery = useGetDashboardStats();
+  const activityQuery = useGetDashboardActivity();
+  const adminStatsQuery = useGetAdminDashboardStats(isAdmin);
+  const adminUsersQuery = useGetAdminDashboardUsers(1, 10, isAdmin);
+
+  const isLoading =
+    statsQuery.isLoading ||
+    activityQuery.isLoading ||
+    (isAdmin && (adminStatsQuery.isLoading || adminUsersQuery.isLoading));
+  const error =
+    statsQuery.error ||
+    activityQuery.error ||
+    (isAdmin && (adminStatsQuery.error || adminUsersQuery.error));
+
+  const refresh = () => {
+    void Promise.all([
+      statsQuery.refetch(),
+      activityQuery.refetch(),
+      isAdmin ? adminStatsQuery.refetch() : Promise.resolve(),
+      isAdmin ? adminUsersQuery.refetch() : Promise.resolve(),
+    ]);
+  };
+
+  return (
+    <DashboardLayout>
+      <div className="mb-8">
+        <h1 className="text-2xl font-bold text-gray-900">
+          {user ? `Welcome back, ${user.firstname}` : "Dashboard"}
+        </h1>
+        <p className="text-gray-500 mt-1 text-sm">
+          Here&apos;s what&apos;s happening in your workspace.
+        </p>
+      </div>
+
+      {isLoading ? (
+        <div
+          className="space-y-4"
+          aria-busy="true"
+          aria-label="Loading dashboard"
+        >
+          {[1, 2, 3].map((item) => (
+            <div
+              key={item}
+              className="bg-white rounded-xl border border-gray-100 h-32 animate-pulse"
+            />
+          ))}
+        </div>
+      ) : error ? (
+        <div
+          role="alert"
+          className="rounded-xl border border-red-100 bg-red-50 p-6"
+        >
+          <p className="text-sm text-red-700">
+            We couldn&apos;t load your dashboard.
+          </p>
+          <button
+            type="button"
+            onClick={refresh}
+            className="mt-3 rounded-lg bg-red-700 px-4 py-2 text-sm font-medium text-white hover:bg-red-800 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2"
+          >
+            Try again
+          </button>
+        </div>
+      ) : (
+        <div className="space-y-6">
+          {isAdmin ? (
+            <StatsCards stats={statsQuery.data?.data ?? null} />
+          ) : (
+            <MemberStatsCards />
+          )}
+
+          <div className="grid lg:grid-cols-2 gap-6">
+            <ActivityFeed activities={activityQuery.data?.data ?? []} />
+            <QuickActions />
+          </div>
+
+          {isAdmin && (
+            <>
+              <div className="pt-6 border-t border-gray-200">
+                <h2 className="text-lg font-semibold text-gray-900 mb-4">
+                  Admin panel
+                </h2>
+              </div>
+
+              <AdminOverview stats={adminStatsQuery.data?.data ?? null} />
+
+              {adminStatsQuery.data?.data?.registrationTrend && (
+                <AnalyticsChart
+                  data={adminStatsQuery.data.data.registrationTrend}
+                />
+              )}
+
+              <AdminUserTable
+                initialData={adminUsersQuery.data?.data ?? []}
+                meta={
+                  adminUsersQuery.data?.meta ?? {
+                    total: 0,
+                    page: 1,
+                    limit: 10,
+                    totalPages: 0,
+                  }
+                }
+                onRefresh={refresh}
+              />
+            </>
+          )}
+        </div>
+      )}
+    </DashboardLayout>
+  );
+}

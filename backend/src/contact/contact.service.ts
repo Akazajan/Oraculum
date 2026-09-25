@@ -38,13 +38,29 @@ export class ContactService {
     dto: SubmitContactDto,
     ipAddress?: string | null,
   ): Promise<{ message: string }> {
+    // B14 – a repeated submission with the same idempotency key returns
+    // the original outcome instead of creating a duplicate message.
+    if (dto.idempotencyKey) {
+      const existing = await this.contactRepo.findOne({
+        where: { idempotencyKey: dto.idempotencyKey },
+      });
+      if (existing) {
+        return { message: 'Your message has been sent successfully.' };
+      }
+    }
+
     const contactMessage = this.contactRepo.create({
       ...dto,
       ipAddress: ipAddress || undefined,
     });
 
     await this.contactRepo.save(contactMessage);
-    this.logger.log(`Contact form submitted by ${dto.email}: ${dto.subject}`);
+    this.logger.log(
+      `Contact form submitted by ${dto.email}: ${dto.subject}` +
+        (dto.idempotencyKey
+          ? ` (idempotency ${dto.idempotencyKey.slice(0, 8)}…)`
+          : ''),
+    );
 
     await this.auditService.log({
       action: AuditAction.CONTACT_SUBMITTED,
