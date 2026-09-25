@@ -33,6 +33,19 @@ export class PricingService {
     startDate: string,
     endDate: string,
   ): number {
+    if (hourlyRateKobo < 0) {
+      throw new Error('Hourly rate cannot be negative');
+    }
+
+    if (seatCount < 0) {
+      throw new Error('Seat count cannot be negative');
+    }
+
+    const discount = PLAN_DISCOUNT[planType];
+    if (discount < 0) {
+      throw new Error('Discount cannot be negative');
+    }
+
     let days: number;
 
     if (planType === PlanType.DAILY) {
@@ -45,7 +58,6 @@ export class PricingService {
     }
 
     const gross = hourlyRateKobo * PLAN_WORKING_HOURS * days * seatCount;
-    const discount = PLAN_DISCOUNT[planType];
     return Math.floor(gross * (1 - discount));
   }
 
