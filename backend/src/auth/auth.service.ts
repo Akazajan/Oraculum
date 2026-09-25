@@ -32,6 +32,7 @@ import { VerifyTotpDto } from './dto/verify-totp.dto';
 import { UseBackupCodeDto } from './dto/use-backup-code.dto';
 import { Disable2faDto } from './dto/disable-2fa.dto';
 import { AuditAction, AuditService } from '../audit/audit.service';
+import { ErrorCatch } from '../utils/error';
 import { getCurrentActorFromAls } from '../common/utils/current-actor.util';
 
 const DEFAULT_PASSWORD_RESET_OTP_MINUTES = 10;
@@ -268,9 +269,10 @@ export class AuthService {
 
       return { message: UserMessages.OTP_SENT };
     } catch (error) {
-      throw new InternalServerErrorException(
-        error || 'Error resending verification code',
-      );
+      // #203 — Re-throw typed HTTP exceptions (e.g. BadRequestException,
+      // NotFoundException) unchanged so clients see the real 4xx status;
+      // only unexpected failures are normalised to 500.
+      ErrorCatch(error, 'Error resending verification code');
     }
   }
 
