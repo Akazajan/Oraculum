@@ -128,10 +128,10 @@ export class AdminAnalyticsProvider {
 
   async getTopWorkspaces(limit = 5) {
     return this.dataSource.query<
-      { id: string; name: string; bookings: string; revenueKobo: string }[]
+      { name: string; bookings: string; revenueKobo: string }[]
     >(
       `
-      SELECT w.id, w.name,
+      SELECT w.name,
              COUNT(b.id) AS bookings,
              COALESCE(SUM(p.amount), 0) AS "revenueKobo"
       FROM workspaces w
@@ -147,11 +147,10 @@ export class AdminAnalyticsProvider {
 
   async getTopMembers(limit = 5) {
     return this.dataSource.query<
-      { id: string; fullName: string; totalKobo: string }[]
+      { fullName: string; totalKobo: string }[]
     >(
       `
-      SELECT u.id,
-             CONCAT(u.firstname, ' ', u.lastname) AS "fullName",
+      SELECT CONCAT(u.firstname, ' ', u.lastname) AS "fullName",
              COALESCE(SUM(p.amount), 0) AS "totalKobo"
       FROM users u
       LEFT JOIN payments p ON p."userId" = u.id AND p.status = 'SUCCESS'

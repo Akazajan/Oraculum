@@ -7,12 +7,14 @@ import { ReconciliationReport } from './entities/reconciliation-report.entity';
 import { Invoice } from '../invoices/entities/invoice.entity';
 import { Payment } from '../payments/entities/payment.entity';
 import { AuditModule } from '../audit/audit.module';
+import { InvoicesModule } from '../invoices/invoices.module';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([ReconciliationReport, Invoice, Payment]),
     ScheduleModule.forRoot(),
     AuditModule,
+    InvoicesModule,
   ],
   controllers: [ReconciliationController],
   providers: [ReconciliationService],

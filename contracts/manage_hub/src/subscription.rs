@@ -1,7 +1,7 @@
 // Allow deprecated events API until migration to #[contractevent] macro
 #![allow(deprecated)]
 
-use soroban_sdk::{contracttype, symbol_short, Address, BytesN, Env, Map, String, Vec};
+use soroban_sdk::{contracttype, symbol_short, Address, Bytes, BytesN, Env, Map, String, Vec};
 
 use crate::attendance_log::AttendanceLogModule;
 use crate::errors::Error;
@@ -9,7 +9,7 @@ use crate::membership_token::DataKey as MembershipTokenDataKey;
 use crate::types::{
     AttendanceAction, BillingCycle, CreatePromotionParams, CreateTierParams, MembershipStatus,
     PauseAction, PauseConfig, PauseHistoryEntry, PauseStats, Subscription, SubscriptionTier,
-    TierAnalytics, TierChangeRequest, TierChangeStatus, TierChangeType,
+    TierAnalytics, TierChangeRequest, TierChangeStatus, TierChangeType, TierFeature,
     TierPromotion, UpdateTierParams, UserSubscriptionInfo,
 };
 use common_types::{validate_page_params, PageParams};
@@ -88,9 +88,14 @@ impl SubscriptionContract {
         amount: i128,
         _payer: &Address,
     ) -> Result<bool, Error> {
-        // Check for non-negative amount
-        if amount <= 0 {
+        // Negative amounts are always invalid.
+        if amount < 0 {
             return Err(Error::InvalidPaymentAmount);
+        }
+
+        // Zero-amount subscriptions are free tier — no USDC validation needed.
+        if amount == 0 {
+            return Ok(true);
         }
 
         // Get USDC token contract address from storage
@@ -716,7 +721,25 @@ impl SubscriptionContract {
     /// Generate a deterministic event_id from subscription_id
     fn generate_event_id(env: &Env, subscription_id: &String) -> BytesN<32> {
         // Use a simple hashing mechanism for event_id generation
-        env.crypto().sha256(&subscription_id.to_bytes())
+        env.crypto().sha256(&subscription_id.to_bytes()).to_bytes()
+    }
+
+    /// Render a `u64` in decimal, without requiring the (unavailable in
+    /// `no_std`) `alloc::string::ToString` impl.
+    fn u64_to_string(env: &Env, mut value: u64) -> String {
+        if value == 0 {
+            return String::from_str(env, "0");
+        }
+
+        let mut buf = [0u8; 20];
+        let mut cursor = buf.len();
+        while value > 0 {
+            cursor -= 1;
+            buf[cursor] = b'0' + (value % 10) as u8;
+            value /= 10;
+        }
+
+        String::from_bytes(env, &buf[cursor..])
     }
 
     // ============================================================================
@@ -746,7 +769,9 @@ impl SubscriptionContract {
             features: params.features,
             max_users: params.max_users,
             max_storage: params.max_storage,
-            is_active: params.is_active,
+            // A freshly created tier is immediately purchasable; callers that
+            // want it hidden should create it and then deactivate it.
+            is_active: true,
             created_at: current_time,
             updated_at: current_time,
             deactivated_at: None,
@@ -756,20 +781,28 @@ impl SubscriptionContract {
         env.storage().persistent().set(&tier_key, &tier);
         env.storage().persistent().extend_ttl(&tier_key, 100, 1000);
 
-        // Add tier to the list of all tiers
-        let mut tier_list = Self::get_all_tiers_list(&env);
+        // Add tier to the list of all tiers. The read path
+        // (`get_all_tiers`/`get_all_tiers_paginated`) loads this from
+        // persistent storage, so the write must target the same place.
+        let mut tier_list: Vec<String> = env
+            .storage()
+            .persistent()
+            .get(&SubscriptionDataKey::TierList)
+            .unwrap_or_else(|| Vec::new(&env));
         tier_list.push_back(tier.id.clone());
         env.storage()
-            .instance()
+            .persistent()
             .set(&SubscriptionDataKey::TierList, &tier_list);
 
         // Initialize tier analytics
         let analytics = TierAnalytics {
             tier_id: tier.id.clone(),
-            total_subscriptions: 0,
+            active_subscribers: 0,
             total_revenue: 0,
-            active_subscriptions: 0,
+            upgrades_count: 0,
+            downgrades_count: 0,
             churn_rate: 0, // Placeholder
+            updated_at: current_time,
         };
         env.storage().persistent().set(
             &SubscriptionDataKey::TierAnalytics(tier.id.clone()),
@@ -903,7 +936,7 @@ impl SubscriptionContract {
 
         // Vec::slice panics on out-of-bounds; both ends are guaranteed
         // valid here because `take <= remaining` and `offset < total`.
-        let page_slice = sorted_ids.slice(offset, end);
+        let page_slice = sorted_ids.slice(offset..end);
         let mut out = Vec::new(env);
         for tier_id in page_slice.iter() {
             if let Some(tier) = env
@@ -997,9 +1030,6 @@ impl SubscriptionContract {
         if let Some(name) = params.name {
             tier.name = name;
         }
-        if let Some(level) = params.level {
-            tier.level = level;
-        }
         if let Some(price) = params.price {
             if price < 0 {
                 return Err(Error::InvalidTierPrice);
@@ -1062,9 +1092,7 @@ impl SubscriptionContract {
         // Emit tier reactivated event
         env.events().publish(
             (symbol_short!("tier_rea"), id.clone(), admin.clone()),
-            (now,),
-            (symbol_short!("tier_upd"), tier.id.clone()),
-            (tier.clone(), admin.clone()),
+            (now, tier.id.clone()),
         );
 
         Ok(())
@@ -1163,14 +1191,17 @@ impl SubscriptionContract {
         Ok(())
     }
 
+    /// Builds the deterministic subscription id for a (user, tier) pair.
+    ///
+    /// `soroban_sdk::String` has no in-place append in this SDK version, so the
+    /// parts are concatenated as bytes and decoded once at the end.
     fn generate_subscription_id(env: &Env, user: &Address, tier_id: &String) -> String {
-        // Simple string concatenation for ID generation.
-        // In a real-world scenario, you might use a more robust method.
-        let mut id_parts = String::from_str(env, "sub_");
-        id_parts.append(&user.to_string());
-        id_parts.append(&String::from_str(env, "_"));
-        id_parts.append(tier_id);
-        id_parts
+        let mut bytes = Bytes::new(env);
+        bytes.append(&Bytes::from_slice(env, b"sub_"));
+        bytes.append(&user.to_string().to_bytes());
+        bytes.append(&Bytes::from_slice(env, b"_"));
+        bytes.append(&tier_id.to_bytes());
+        bytes.to_string()
     }
 
     fn calculate_price_and_duration(
@@ -1181,7 +1212,7 @@ impl SubscriptionContract {
     ) -> Result<(i128, u64), Error> {
         let (base_price, duration) = match billing_cycle {
             BillingCycle::Monthly => (tier.price, 2_592_000), // 30 days
-            BillingCycle::Annually => (tier.annual_price, 31_536_000), // 365 days
+            BillingCycle::Annual => (tier.annual_price, 31_536_000), // 365 days
         };
 
         if let Some(code) = promo_code {
@@ -1259,6 +1290,15 @@ impl SubscriptionContract {
             .persistent()
             .get(&promo_key)
             .ok_or(Error::PromotionNotFound)
+    }
+
+    /// Gets a promotion by its identifier.
+    ///
+    /// Promotions are keyed by their promo code, so this is an alias of
+    /// [`Self::get_promotion_by_code`] kept for callers that treat the code as
+    /// the promotion's id.
+    pub fn get_promotion(env: Env, promo_id: String) -> Result<TierPromotion, Error> {
+        Self::get_promotion_by_code(&env, promo_id)
     }
 
     fn get_all_promotions_list(env: &Env) -> Vec<String> {
@@ -1355,15 +1395,14 @@ impl SubscriptionContract {
     }
 
     fn generate_tier_change_request_id(env: &Env, user: &Address, to_tier_id: &String) -> String {
-        let mut id_parts = String::from_str(env, "tcr_");
-        id_parts.append(&user.to_string());
-        id_parts.append(&String::from_str(env, "_"));
-        id_parts.append(to_tier_id);
-        id_parts.append(&String::from_str(
-            env,
-            &env.ledger().timestamp().to_string(),
-        ));
-        id_parts
+        let mut bytes = Bytes::new(env);
+        bytes.append(&Bytes::from_slice(env, b"tcr_"));
+        bytes.append(&user.to_string().to_bytes());
+        bytes.append(&Bytes::from_slice(env, b"_"));
+        bytes.append(&to_tier_id.to_bytes());
+        bytes.append(&Bytes::from_slice(env, b"_"));
+        bytes.append(&Self::u64_to_string(env, env.ledger().timestamp()).to_bytes());
+        bytes.to_string()
     }
 
     fn get_user_tier_change_history(env: &Env, user: &Address) -> Vec<String> {
@@ -1384,16 +1423,16 @@ impl SubscriptionContract {
             .saturating_sub(env.ledger().timestamp());
         let total_time = match subscription.billing_cycle {
             BillingCycle::Monthly => 2_592_000,
-            BillingCycle::Annually => 31_536_000,
+            BillingCycle::Annual => 31_536_000,
         };
 
         let from_price = match subscription.billing_cycle {
             BillingCycle::Monthly => from_tier.price,
-            BillingCycle::Annually => from_tier.annual_price,
+            BillingCycle::Annual => from_tier.annual_price,
         };
         let to_price = match subscription.billing_cycle {
             BillingCycle::Monthly => to_tier.price,
-            BillingCycle::Annually => to_tier.annual_price,
+            BillingCycle::Annual => to_tier.annual_price,
         };
 
         let remaining_value = (from_price * i128::from(remaining_time)) / i128::from(total_time);
@@ -1485,6 +1524,151 @@ impl SubscriptionContract {
         Ok(())
     }
 
+    /// Processes a pending tier change request.
+    ///
+    /// The request must still be `Pending`, belong to `caller` (the admin may
+    /// also process it on the user's behalf), and the supplied
+    /// `subscription_id` must be that user's subscription. Any prorated upgrade
+    /// amount is validated against `payment_token` before the request is marked
+    /// `Completed` and the change is applied.
+    pub fn process_tier_change(
+        env: Env,
+        caller: Address,
+        change_request_id: String,
+        subscription_id: String,
+        payment_token: Address,
+    ) -> Result<(), Error> {
+        caller.require_auth();
+
+        let request_key = SubscriptionDataKey::TierChangeRequest(change_request_id);
+        let mut request: TierChangeRequest = env
+            .storage()
+            .persistent()
+            .get(&request_key)
+            .ok_or(Error::TierChangeNotFound)?;
+
+        if request.status != TierChangeStatus::Pending {
+            return Err(Error::TierChangeAlreadyProcessed);
+        }
+
+        // Only the requester may process their own change; the admin may
+        // process on the user's behalf.
+        if caller != request.user {
+            Self::require_admin(&env, &caller)?;
+        }
+
+        // The subscription being processed must belong to the request's user.
+        let subscription = Self::get_subscription(env.clone(), subscription_id)?;
+        if subscription.user != request.user {
+            return Err(Error::Unauthorized);
+        }
+
+        if request.prorated_amount > 0 {
+            Self::validate_payment(
+                &env,
+                &payment_token,
+                request.prorated_amount,
+                &request.user,
+            )?;
+        }
+
+        request.status = TierChangeStatus::Completed;
+        env.storage().persistent().set(&request_key, &request);
+        env.storage()
+            .persistent()
+            .extend_ttl(&request_key, 100, 1000);
+
+        // Apply the change (moves the subscription and updates analytics).
+        Self::apply_tier_change(&env, &request)?;
+
+        env.events().publish(
+            (symbol_short!("tier_cmp"), request.user.clone()),
+            (request.from_tier.clone(), request.to_tier.clone()),
+        );
+
+        Ok(())
+    }
+
+    /// Cancels a pending tier change request.
+    ///
+    /// Only the user who created the request may cancel it, and only while it
+    /// is still `Pending`.
+    pub fn cancel_tier_change(
+        env: Env,
+        user: Address,
+        change_request_id: String,
+    ) -> Result<(), Error> {
+        user.require_auth();
+
+        let request_key = SubscriptionDataKey::TierChangeRequest(change_request_id);
+        let mut request: TierChangeRequest = env
+            .storage()
+            .persistent()
+            .get(&request_key)
+            .ok_or(Error::TierChangeNotFound)?;
+
+        if request.user != user {
+            return Err(Error::Unauthorized);
+        }
+        if request.status != TierChangeStatus::Pending {
+            return Err(Error::TierChangeAlreadyProcessed);
+        }
+
+        request.status = TierChangeStatus::Cancelled;
+        env.storage().persistent().set(&request_key, &request);
+        env.storage()
+            .persistent()
+            .extend_ttl(&request_key, 100, 1000);
+
+        env.events().publish(
+            (symbol_short!("tier_cnc"), request.user.clone()),
+            (env.ledger().timestamp(),),
+        );
+
+        Ok(())
+    }
+
+    /// Returns whether the given subscription's tier grants `feature`.
+    ///
+    /// Inactive or expired subscriptions never grant access, even when the tier
+    /// lists the feature.
+    pub fn check_feature_access(
+        env: Env,
+        subscription_id: String,
+        feature: TierFeature,
+    ) -> Result<bool, Error> {
+        let subscription = Self::get_subscription(env.clone(), subscription_id)?;
+
+        if subscription.status != MembershipStatus::Active {
+            return Ok(false);
+        }
+        if subscription.expires_at < env.ledger().timestamp() {
+            return Ok(false);
+        }
+
+        let tier = Self::get_tier(env, subscription.tier_id)?;
+        for tier_feature in tier.features.iter() {
+            if tier_feature == feature {
+                return Ok(true);
+            }
+        }
+
+        Ok(false)
+    }
+
+    /// Enforces feature access, returning [`Error::FeatureNotAvailable`] when
+    /// the subscription's tier does not grant `feature`.
+    pub fn require_feature_access(
+        env: Env,
+        subscription_id: String,
+        feature: TierFeature,
+    ) -> Result<(), Error> {
+        if !Self::check_feature_access(env, subscription_id, feature)? {
+            return Err(Error::FeatureNotAvailable);
+        }
+        Ok(())
+    }
+
     // ============================================================================
     // Analytics Functions
     // ============================================================================
@@ -1501,9 +1685,9 @@ impl SubscriptionContract {
             .get(&key)
             .ok_or(Error::TierNotFound)?; // Should not happen if tier exists
 
-        analytics.total_subscriptions += 1;
-        analytics.active_subscriptions += 1;
+        analytics.active_subscribers += 1;
         analytics.total_revenue += amount;
+        analytics.updated_at = env.ledger().timestamp();
 
         env.storage().persistent().set(&key, &analytics);
         Ok(())
@@ -1515,15 +1699,21 @@ impl SubscriptionContract {
         to_tier_id: &String,
     ) -> Result<(), Error> {
         // Decrement from_tier active count
+        let now = env.ledger().timestamp();
+
         let from_key = SubscriptionDataKey::TierAnalytics(from_tier_id.clone());
         let mut from_analytics: TierAnalytics = env.storage().persistent().get(&from_key).unwrap();
-        from_analytics.active_subscriptions -= 1;
+        from_analytics.active_subscribers = from_analytics.active_subscribers.saturating_sub(1);
+        from_analytics.downgrades_count += 1;
+        from_analytics.updated_at = now;
         env.storage().persistent().set(&from_key, &from_analytics);
 
         // Increment to_tier active count
         let to_key = SubscriptionDataKey::TierAnalytics(to_tier_id.clone());
         let mut to_analytics: TierAnalytics = env.storage().persistent().get(&to_key).unwrap();
-        to_analytics.active_subscriptions += 1;
+        to_analytics.active_subscribers += 1;
+        to_analytics.upgrades_count += 1;
+        to_analytics.updated_at = now;
         env.storage().persistent().set(&to_key, &to_analytics);
 
         Ok(())
@@ -1552,14 +1742,20 @@ impl SubscriptionContract {
             .get(&sub_id_key)
             .ok_or(Error::SubscriptionNotFound)?;
 
-        let subscription = Self::get_subscription(env, subscription_id)?;
+        let subscription = Self::get_subscription(env.clone(), subscription_id)?;
+        let tier = Self::get_tier(env.clone(), subscription.tier_id.clone())?;
+
+        let now = env.ledger().timestamp();
+        let is_expired = subscription.expires_at < now;
+        let seconds_remaining = subscription.expires_at.saturating_sub(now);
 
         Ok(UserSubscriptionInfo {
-            id: subscription.id,
-            status: subscription.status,
-            expires_at: subscription.expires_at,
-            tier_id: subscription.tier_id,
-            billing_cycle: subscription.billing_cycle,
+            tier_name: tier.name.clone(),
+            tier_level: tier.level.clone(),
+            features: tier.features.clone(),
+            days_remaining: seconds_remaining / 86_400,
+            is_expired,
+            subscription,
         })
     }
 }
