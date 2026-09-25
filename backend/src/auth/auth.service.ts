@@ -2,7 +2,6 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
-  InternalServerErrorException,
   Logger,
   NotFoundException,
   UnauthorizedException,
@@ -600,9 +599,10 @@ export class AuthService {
 
       return { message: UserMessages.OTP_SENT };
     } catch (error) {
-      throw new InternalServerErrorException(
-        error || 'Error resending verification code',
-      );
+      // #204 — Re-throw typed HTTP exceptions (e.g. BadRequestException,
+      // NotFoundException) unchanged so clients see the real 4xx status;
+      // only unexpected failures are normalised to 500.
+      ErrorCatch(error, 'Error resending verification code');
     }
   }
 
