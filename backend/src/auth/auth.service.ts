@@ -10,7 +10,7 @@ import {
 import { CreateUserDto } from './dto/create-user.dto';
 import { LoginUserDto } from './dto/login-user.dto';
 import { User } from '../users/entities/user.entity';
-import { IsNull, MoreThan, Repository } from 'typeorm';
+import { MoreThan, Repository } from 'typeorm';
 import { UserHelper } from './helper/user-helper';
 import { InjectRepository } from '@nestjs/typeorm';
 import { UserMessages } from './helper/user-messages';
@@ -33,6 +33,7 @@ import { UseBackupCodeDto } from './dto/use-backup-code.dto';
 import { Disable2faDto } from './dto/disable-2fa.dto';
 import { AuditAction, AuditService } from '../audit/audit.service';
 import { ErrorCatch } from '../utils/error';
+import { getCurrentActorFromAls } from '../common/utils/current-actor.util';
 
 const DEFAULT_PASSWORD_RESET_OTP_MINUTES = 10;
 const MAX_LOGIN_ATTEMPTS = 5;
@@ -879,30 +880,3 @@ export class AuthService {
     };
   }
 }
-
-/**
- * Snapshot the actor from the AsyncLocalStorage context opened by the
- * correlation-id middleware so audit rows recorded during background
- * flows (e.g. admin-issued register-admin) automatically pick up the
- * caller's identity, role, and contact details.
- */
-import {
-  getCorrelationId,
-  getCurrentRequestUser,
-  getRequestIp,
-  getUserAgent,
-} from '../common/context/correlation-context';
-function getCurrentActorFromAls() {
-  const current = getCurrentRequestUser();
-  return {
-    id: current?.id ?? null,
-    email: current?.email ?? null,
-    role: current?.role ?? null,
-  };
-}
-// Suppress unused import lint warnings — these references are kept for
-// future expansion (e.g. attaching IP/UA into audit metadata).
-void getCorrelationId;
-void getRequestIp;
-void getUserAgent;
-void IsNull;
