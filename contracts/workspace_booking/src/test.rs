@@ -1348,3 +1348,71 @@ fn test_c13_cancelled_booking_frees_slot_for_rebook() {
     let rebooked = client.get_booking(&String::from_str(&env, "free-2"));
     assert_eq!(rebooked.status, BookingStatus::Active);
 }
+
+#[test]
+fn test_active_index_shrinks_after_cancel_and_slot_reopens() {
+    let (env, client, admin, member, workspace_id) = setup_booked_workspace();
+
+    let booking_id = String::from_str(&env, "b1");
+    client.create_booking(
+        &member,
+        &booking_id,
+        &workspace_id,
+        &100,
+        &200,
+    );
+
+    // Slot is taken.
+    assert!(!client.check_availability(&workspace_id, &100, &200));
+
+    client.cancel_booking(&admin, &booking_id);
+
+    // After cancellation, the active index must be empty and the exact
+    // same slot must be bookable again.
+    let active = env.as_contract(&client.address, || {
+        env.storage()
+            .persistent()
+            .get::<_, soroban_sdk::Vec<String>>(&DataKey::ActiveWorkspaceBookings(workspace_id.clone()))
+            .unwrap_or(soroban_sdk::Vec::new(&env))
+    });
+    assert_eq!(active.len(), 0);
+    assert!(client.check_availability(&workspace_id, &100, &200));
+
+    // Full history is untouched — get_workspace_bookings still returns it.
+    let history = client.get_workspace_bookings(&workspace_id);
+    assert_eq!(history.len(), 1);
+}
+
+#[test]
+fn test_is_slot_available_ignores_terminal_bookings_after_many_cycles() {
+    let (env, client, admin, member, workspace_id) = setup_booked_workspace();
+
+    // Create and cancel several non-overlapping bookings to simulate
+    // history accumulating without inflating the active index.
+    for i in 0..5u32 {
+        let id = String::from_str(&env, &format!("hist-{}", i));
+        let start = 1_000 + (i as u64) * 500;
+        let end = start + 100;
+        client.create_booking(&member, &id, &workspace_id, &start, &end);
+        client.cancel_booking(&admin, &id);
+    }
+
+    let active = env.as_contract(&client.address, || {
+        env.storage()
+            .persistent()
+            .get::<_, soroban_sdk::Vec<String>>(&DataKey::ActiveWorkspaceBookings(workspace_id.clone()))
+            .unwrap_or(soroban_sdk::Vec::new(&env))
+    });
+    assert_eq!(active.len(), 0, "active index must not accumulate terminal bookings");
+
+    // A brand new booking in a previously-used slot must succeed.
+    let new_id = String::from_str(&env, "fresh");
+    client.create_booking(&member, &new_id, &workspace_id, &1_000, &1_100);
+    let active_after = env.as_contract(&client.address, || {
+        env.storage()
+            .persistent()
+            .get::<_, soroban_sdk::Vec<String>>(&DataKey::ActiveWorkspaceBookings(workspace_id.clone()))
+            .unwrap_or(soroban_sdk::Vec::new(&env))
+    });
+    assert_eq!(active_after.len(), 1);
+}
