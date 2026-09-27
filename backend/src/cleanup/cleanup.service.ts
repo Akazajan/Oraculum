@@ -10,6 +10,7 @@ import { ConfigService } from '@nestjs/config';
 export class CleanupService {
   private readonly logger = new Logger(CleanupService.name);
   private readonly auditLogRetentionDays: number;
+  private readonly locks = new Map<string, Promise<void>>();
 
   constructor(
     @InjectRepository(RefreshToken)
@@ -23,48 +24,76 @@ export class CleanupService {
     );
   }
 
+  private async acquireLock(
+    lockKey: string,
+    operation: () => Promise<void>
+  ): Promise<void> {
+    const currentLock = this.locks.get(lockKey) || Promise.resolve();
+    const newLock = currentLock
+      .then(async () => {
+        try {
+          await operation();
+        } finally {
+          this.locks.delete(lockKey);
+        }
+      })
+      .catch(async (error) => {
+        this.locks.delete(lockKey);
+        throw error;
+      });
+
+    this.locks.set(lockKey, newLock);
+    return newLock;
+  }
+
   @Cron(CronExpression.EVERY_1ST_DAY_OF_MONTH_AT_MIDNIGHT)
   async handleExpiredRefreshTokens(): Promise<void> {
-    this.logger.log('Running expired refresh token cleanup…');
+    return this.acquireLock('expired-refresh-tokens', async () => {
+      this.logger.log('Running expired refresh token cleanup…');
 
-    const result = await this.refreshTokenRepository.delete({
-      expiresAt: LessThan(new Date()),
+      const result = await this.refreshTokenRepository.delete({
+        expiresAt: LessThan(new Date()),
+      });
+
+      this.logger.log(
+        `Removed ${result.affected ?? 0} expired refresh token(s).`,
+      );
     });
-
-    this.logger.log(
-      `Removed ${result.affected ?? 0} expired refresh token(s).`,
-    );
   }
 
   @Cron(CronExpression.EVERY_DAY_AT_2AM)
   async handleStaleTemporaryUploads(): Promise<void> {
-    this.logger.log('Running stale temporary upload cleanup…');
+    return this.acquireLock('stale-temporary-uploads', async () => {
+      this.logger.log('Running stale temporary upload cleanup…');
 
-    const revoked = await this.refreshTokenRepository.delete({
-      revoked: true,
-      createdAt: LessThan(
-        new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),
-      ),
+      const revoked = await this.refreshTokenRepository.delete({
+        revoked: true,
+        createdAt: LessThan(
+          new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),
+        ),
+      });
+
+      this.logger.log(
+        `Removed ${revoked.affected ?? 0} revoked refresh token(s) older than 7 days.`,
+      );
     });
-
-    this.logger.log(
-      `Removed ${revoked.affected ?? 0} revoked refresh token(s) older than 7 days.`,
-    );
   }
 
   @Cron(CronExpression.EVERY_1ST_DAY_OF_MONTH_AT_MIDNIGHT)
   async handleOldAuditLogs(): Promise<void> {
-    this.logger.log('Running old audit log cleanup…');
+    return this.acquireLock('old-audit-logs', async () => {
+      this.logger.log('Running old audit log cleanup…');
 
-    const cutoff = new Date();
-    cutoff.setDate(cutoff.getDate() - this.auditLogRetentionDays);
+      const cutoff = new Date();
+      cutoff.setDate(cutoff.getDate() - this.auditLogRetentionDays);
 
-    const result = await this.auditLogRepository.delete({
-      createdAt: LessThan(cutoff),
+      const result = await this.auditLogRepository.delete({
+        createdAt: LessThan(cutoff),
+      });
+
+      this.logger.log(
+        `Removed ${result.affected ?? 0} audit log(s) older than ${this.auditLogRetentionDays} day(s).`,
+      );
     });
-
-    this.logger.log(
-      `Removed ${result.affected ?? 0} audit log(s) older than ${this.auditLogRetentionDays} day(s).`,
-    );
   }
 }
