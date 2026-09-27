@@ -209,4 +209,4 @@ Built on [Stellar](https://stellar.org) and Soroban. Inspired by **CeloSense** (
 
 *Oraculum — Ask Anything. Pay Only For What You Use.*
 
-</div
+</div>
