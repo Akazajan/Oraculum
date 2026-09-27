@@ -431,3 +431,65 @@ fn test_resolve_dispute_releases_to_beneficiary() {
     assert_eq!(escrow.status, EscrowStatus::Released);
     assert!(escrow.resolved_at.is_some());
 }
+
+
+#[test]
+fn test_initialize_rejects_fee_bps_above_10000() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = setup_contract(&env);
+    let client = PaymentEscrowContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let token = Address::generate(&env);
+
+    let result = client.try_initialize(&admin, &token, &DISPUTE_WINDOW, &admin, &10_001u32);
+    assert_eq!(result, Err(Ok(Error::InvalidFeeBps)));
+
+    // Rejected init must leave no partial state — a valid initialize call
+    // afterwards must still succeed as if the first call never happened.
+    client.initialize(&admin, &token, &DISPUTE_WINDOW, &admin, &250u32);
+}
+
+#[test]
+fn test_initialize_accepts_fee_bps_at_exactly_10000() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = setup_contract(&env);
+    let client = PaymentEscrowContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let token = Address::generate(&env);
+
+    // 10,000 bps (100%) is the legal boundary, not an off-by-one error.
+    client.initialize(&admin, &token, &DISPUTE_WINDOW, &admin, &10_000u32);
+    assert_eq!(client.fee_bps(), 10_000u32);
+}
+
+#[test]
+fn test_set_fee_bps_rejects_value_above_10000() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = setup_contract(&env);
+    let admin = Address::generate(&env);
+    let token = Address::generate(&env);
+    let client = init(&env, &contract_id, &admin, &token);
+
+    let before = client.fee_bps();
+    let result = client.try_set_fee_bps(&admin, &10_001u32);
+    assert_eq!(result, Err(Ok(Error::InvalidFeeBps)));
+
+    // Rejected update must leave the previously-configured fee untouched.
+    assert_eq!(client.fee_bps(), before);
+}
+
+#[test]
+fn test_set_fee_bps_accepts_valid_value() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = setup_contract(&env);
+    let admin = Address::generate(&env);
+    let token = Address::generate(&env);
+    let client = init(&env, &contract_id, &admin, &token);
+
+    client.set_fee_bps(&admin, &500u32);
+    assert_eq!(client.fee_bps(), 500u32);
+}

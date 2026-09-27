@@ -26,9 +26,12 @@ pub enum Error {
     DepositorIsBeneficiary = 12,
     /// A settlement deadline is not strictly after the escrow creation time.
     InvalidDeadline = 13,
-    /// The escrow has already reached a terminal state and cannot be treated
+       /// The escrow has already reached a terminal state and cannot be treated
     /// as pending or resolved again.
     EscrowAlreadySettled = 14,
+    /// `fee_bps` exceeds 10,000 (100%). A fee above this would attempt to
+    /// transfer more than the deposited amount and underflow at settlement.
+    InvalidFeeBps = 15,
 
     // -----------------------------
     // Token Transfer Failures (100–199)
