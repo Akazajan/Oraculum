@@ -1,6 +1,7 @@
 "use client";
 
 import { useAuthActions } from "@/lib/store/authStore";
+import { apiClient } from "@/lib/apiClient";
 import { useMutation } from "@tanstack/react-query";
 import { mutationKeys } from "../../keys/mutationKeys";
 import { RegisterUser } from "@/lib/types/user";
@@ -32,6 +33,29 @@ export const useRegisterUser = () => {
     },
     onError: () => {
       toast.error("Error creating user");
+    },
+  });
+};
+
+export interface ResendVerificationOtpRequest {
+  email: string;
+}
+
+/**
+ * Requests a fresh email verification code.
+ *
+ * The mutation carries no feedback of its own: `ResendButton` owns the pending,
+ * cooldown, success and failure states so the outcome is announced exactly once
+ * through the control's live region.
+ */
+export const useResendVerificationOtp = () => {
+  return useMutation({
+    mutationKey: mutationKeys.auth.resendVerificationOtp,
+    mutationFn: async (data: ResendVerificationOtpRequest) => {
+      return await apiClient.post<{ message?: string }>(
+        "/auth/resend-verification-otp",
+        data
+      );
     },
   });
 };

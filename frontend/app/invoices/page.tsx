@@ -7,6 +7,7 @@ import { Invoice, InvoiceStatus } from "@/lib/types/invoice";
 import { FileText, Download, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { storage } from "@/lib/storage";
+import { env } from "@/utils/env";
 
 const STATUS_STYLES: Record<InvoiceStatus, string> = {
   PAID: "bg-green-50 text-green-700",
@@ -28,8 +29,7 @@ function InvoiceRow({ invoice }: { invoice: Invoice }) {
     setDownloading(true);
     try {
       const token = storage.getToken();
-      const API_BASE =
-        process.env.NEXT_PUBLIC_API_URL || "http://localhost:6001/api";
+      const API_BASE = env.NEXT_PUBLIC_API_URL;
       const res = await fetch(`${API_BASE}/invoices/${invoice.id}/download`, {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       });

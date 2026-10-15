@@ -6,6 +6,7 @@ import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useAuthState, useAuthActions } from "@/lib/store/authStore";
 import { apiClient } from "@/lib/apiClient";
+import { env } from "@/utils/env";
 import DashboardLayout from "@/components/dashboard/DashboardLayout";
 import { Camera } from "lucide-react";
 
@@ -79,7 +80,7 @@ export default function ProfilePage() {
 
     try {
       const res = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL || "http://localhost:6001/api"}/users/${user.id}/profile-picture`,
+        `${env.NEXT_PUBLIC_API_URL}/users/${user.id}/profile-picture`,
         {
           method: "POST",
           headers: {

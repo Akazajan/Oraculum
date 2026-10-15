@@ -6,8 +6,8 @@
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-blue?style=flat-square&logo=typescript)]()
 
 Covers `apps/web`, `apps/mini-app`, `apps/cli`. See [Root README](../../README.md) · [Backend](../../packages/gateway/README.md) · [Contracts](../../packages/contracts/README.md).
-  // ...compat.extends("next/core-web-vitals", "next/typescript"),
----,
+
+---
 
 ## What Lives Here
 
@@ -148,8 +148,25 @@ npm run build --workspace=apps/web
 
 ## Environment Variables
 
+### `NEXT_PUBLIC_API_URL` (required in production)
+
+Base URL of the backend API, for example `https://api.oraculum.app`. Trailing
+slashes are trimmed.
+
+- **Production:** must be set. A missing value fails fast at startup with a
+  `ConfigurationError` instead of silently pointing production clients at a
+  developer machine.
+- **Development / test:** when unset, the client falls back to the documented
+  `http://localhost:3000/api` default so the local stack keeps working.
+
+```bash
+# .env.local
+NEXT_PUBLIC_API_URL=http://localhost:3001/api
+```
+
 | Variable | Description |
 |---|---|
+| `NEXT_PUBLIC_API_URL` | Base URL of the backend API (required in production) |
 | `NEXT_PUBLIC_ORACULUM_GATEWAY_URL` | Base URL of the backend Gateway |
 | `NEXT_PUBLIC_STELLAR_NETWORK` | `testnet` or `mainnet` |
 | `NEXT_PUBLIC_USDC_CONTRACT_ID` | Stellar Asset Contract ID for USDC |
