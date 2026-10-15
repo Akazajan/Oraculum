@@ -20,6 +20,7 @@ import { cn } from "@/lib/utils";
 import {
   personalInfoSchema,
   accountSetupSchema,
+  PASSWORD_REQUIREMENTS,
   type PersonalInfoForm,
   type AccountSetupForm,
 } from "@/lib/schemas/auth";
@@ -386,7 +387,13 @@ function AccountSetupStep({
         <label className="block text-sm font-medium text-gray-700 mb-3">
           I am a *
         </label>
-        <div className="grid grid-cols-1 gap-3">
+        {/* `aria-invalid` is not supported on a plain group, so the message is
+            associated with the group instead. */}
+        <div
+          className="grid grid-cols-1 gap-3"
+          role="group"
+          aria-describedby={errors.userType ? "userType-error" : undefined}
+        >
           {userTypeOptions.map((option) => (
             <button
               key={option.id}
@@ -407,7 +414,9 @@ function AccountSetupStep({
           ))}
         </div>
         {errors.userType && (
-          <p className="text-sm text-red-600 mt-1">{errors.userType.message}</p>
+          <p id="userType-error" className="text-sm text-red-600 mt-1">
+            {errors.userType.message}
+          </p>
         )}
       </div>
 
@@ -444,11 +453,14 @@ function AccountSetupStep({
             placeholder="Create a strong password"
             {...register("password")}
             error={errors.password?.message}
+            aria-describedby="password-requirements"
             icon={<Lock className="w-5 h-5" />}
           />
           <button
             type="button"
             onClick={() => setShowPassword(!showPassword)}
+            aria-label={showPassword ? "Hide password" : "Show password"}
+            aria-pressed={showPassword}
             className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
           >
             {showPassword ? (
@@ -458,6 +470,11 @@ function AccountSetupStep({
             )}
           </button>
         </div>
+        {/* Mirrors the backend's @StrongPassword rule, so the requirement is
+            stated before a request is ever made. */}
+        <p id="password-requirements" className="text-xs text-gray-500 mt-1">
+          {PASSWORD_REQUIREMENTS}
+        </p>
       </div>
 
       {/* Confirm Password */}
@@ -480,6 +497,10 @@ function AccountSetupStep({
           <button
             type="button"
             onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+            aria-label={
+              showConfirmPassword ? "Hide confirmation" : "Show confirmation"
+            }
+            aria-pressed={showConfirmPassword}
             className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
           >
             {showConfirmPassword ? (
@@ -498,6 +519,10 @@ function AccountSetupStep({
             id="agreeToTerms"
             type="checkbox"
             {...register("agreeToTerms")}
+            aria-invalid={errors.agreeToTerms ? true : undefined}
+            aria-describedby={
+              errors.agreeToTerms ? "agreeToTerms-error" : undefined
+            }
             className="mt-1 h-4 w-4 text-gray-900 border-gray-300 rounded focus:ring-gray-300"
           />
           <label htmlFor="agreeToTerms" className="text-sm text-gray-700">
@@ -518,7 +543,7 @@ function AccountSetupStep({
           </label>
         </div>
         {errors.agreeToTerms && (
-          <p className="text-sm text-red-600 mt-1">
+          <p id="agreeToTerms-error" className="text-sm text-red-600 mt-1">
             {errors.agreeToTerms.message}
           </p>
         )}
