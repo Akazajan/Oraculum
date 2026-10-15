@@ -10,6 +10,7 @@ import {
 } from "../types/user";
 import { apiClient } from "../apiClient";
 import { storage } from "../storage";
+import { canRenderPath } from "../auth/routePolicy";
 
 interface AuthActions {
   // Authentication actions
@@ -128,7 +129,8 @@ export const useAuthStore = create<AuthStore>()(
               throw new Error("No token available");
             }
 
-            const response = await apiClient.post<AuthResponse>(
+            // The refresh call must never itself trigger the 401 refresh flow.
+            const response = await apiClient.postWithoutRefresh<AuthResponse>(
               "/auth/refresh-token"
             );
 
@@ -236,6 +238,13 @@ export const useAuthState = () =>
     }))
   );
 
+/**
+ * Whether the current account may reach `pathname` under the canonical route
+ * policy. Role checks live in `lib/auth/routePolicy`, not in presentation code.
+ */
+export const useCanAccessPath = (pathname: string): boolean =>
+  useAuthStore((state) => canRenderPath(state.user, pathname));
+
 export const useAuthActions = () => {
   const login = useAuthStore((state) => state.login);
   const register = useAuthStore((state) => state.register);
@@ -254,4 +263,24 @@ export const useAuthActions = () => {
     initializeAuth,
     clearAuth,
   };
+};
+
+/**
+ * Keeps the API client's bearer token in step with the auth store.
+ *
+ * Every write to `accessToken` — login, register, refresh, initialize, logout,
+ * clearAuth — therefore reaches the client through this one path, instead of
+ * each action remembering to call `apiClient.setToken` itself. That is what
+ * stops a newly authenticated user from inheriting a previous session's token.
+ *
+ * @returns an unsubscribe function.
+ */
+export const bindApiClientToAuthStore = (): (() => void) => {
+  apiClient.setToken(useAuthStore.getState().accessToken);
+
+  return useAuthStore.subscribe((state, previousState) => {
+    if (state.accessToken !== previousState.accessToken) {
+      apiClient.setToken(state.accessToken);
+    }
+  });
 };

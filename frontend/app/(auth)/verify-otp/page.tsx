@@ -6,8 +6,10 @@ import { toast } from "sonner";
 import { apiClient } from "@/lib/apiClient";
 import { useAuthStore } from "@/lib/store/authStore";
 import { storage } from "@/lib/storage";
-import { Mail, ArrowLeft, Loader2, Send, Clock } from "lucide-react";
+import { Mail, ArrowLeft, Loader2 } from "lucide-react";
 import Link from "next/link";
+import ResendButton from "@/components/auth/ResendButton";
+import { useResendVerificationOtp } from "@/lib/react-query/hooks/auth/useRegisterUser";
 
 export default function VerifyOtpPage() {
   const router = useRouter();
@@ -16,16 +18,8 @@ export default function VerifyOtpPage() {
 
   const [otp, setOtp] = useState(["", "", "", ""]);
   const [isVerifying, setIsVerifying] = useState(false);
-  const [isResending, setIsResending] = useState(false);
-  const [countdown, setCountdown] = useState(0);
   const inputRefs = useRef<(HTMLInputElement | null)[]>([]);
-
-  useEffect(() => {
-    if (countdown > 0) {
-      const timer = setTimeout(() => setCountdown(countdown - 1), 1000);
-      return () => clearTimeout(timer);
-    }
-  }, [countdown]);
+  const resendOtp = useResendVerificationOtp();
 
   useEffect(() => {
     inputRefs.current[0]?.focus();
@@ -93,20 +87,15 @@ export default function VerifyOtpPage() {
     }
   };
 
+  /**
+   * `ResendButton` owns the pending, cooldown and failure states, so this handler
+   * only performs the request and resets the code inputs once it succeeds. Errors
+   * are propagated for the button to announce.
+   */
   const handleResend = async () => {
-    if (countdown > 0) return;
-    setIsResending(true);
-    try {
-      await apiClient.post("/auth/resend-verification-otp", { email });
-      toast.success("A new verification code has been sent");
-      setCountdown(60);
-      setOtp(["", "", "", ""]);
-      inputRefs.current[0]?.focus();
-    } catch (error: any) {
-      toast.error(error.message || "Failed to resend code");
-    } finally {
-      setIsResending(false);
-    }
+    await resendOtp.mutateAsync({ email });
+    setOtp(["", "", "", ""]);
+    inputRefs.current[0]?.focus();
   };
 
   return (
@@ -182,28 +171,7 @@ export default function VerifyOtpPage() {
             </div>
           </div>
 
-          <button
-            onClick={handleResend}
-            disabled={isResending || countdown > 0}
-            className="w-full mt-4 bg-gray-900 text-white py-3 px-4 rounded-lg font-medium hover:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-gray-300 focus:ring-offset-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center"
-          >
-            {countdown > 0 ? (
-              <>
-                <Clock className="h-5 w-5 mr-2" />
-                Resend in {countdown}s
-              </>
-            ) : isResending ? (
-              <>
-                <Loader2 className="w-5 h-5 animate-spin mr-2" />
-                Sending...
-              </>
-            ) : (
-              <>
-                <Send className="h-5 w-5 mr-2" />
-                Resend Code
-              </>
-            )}
-          </button>
+          <ResendButton onResend={handleResend} className="mt-4" />
 
           <div className="relative mt-6">
             <div className="absolute inset-0 flex items-center">

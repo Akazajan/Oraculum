@@ -19,6 +19,7 @@ import {
   X,
   Loader2,
 } from "lucide-react";
+import { queryPanelState } from "@/lib/queryPanel";
 
 const WORKSPACE_TYPES: { label: string; value: WorkspaceType | "" }[] = [
   { label: "All Types", value: "" },
@@ -105,11 +106,26 @@ export default function WorkspacesPage() {
   const { data, isLoading, isError, isFetching } = useGetWorkspaces(
     toWorkspaceQuery({ search, type }, page, PAGE_SIZE)
   );
+  const { data, isLoading, isError, refetch, isFetching } = useGetWorkspaces({
+    search: search || undefined,
+    type: type || undefined,
+    page,
+    limit: 9,
+  });
 
   const workspaces = data?.data ?? [];
   const meta = data?.meta;
 
   const hasActiveFilters = searchInput !== "" || type !== "";
+  // One explicit state per outcome, so loading, failure, empty and success can
+  // never be mistaken for one another.
+  const panel = queryPanelState({
+    isLoading,
+    isError,
+    isEmpty: workspaces.length === 0,
+  });
+
+  const hasActiveFilters = search !== "" || type !== "";
 
   const handleClearFilters = () => {
     settleSearch.cancel();
@@ -181,7 +197,7 @@ export default function WorkspacesPage() {
       </div>
 
       {/* Content */}
-      {isLoading ? (
+      {panel === "loading" ? (
         <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-5">
           {[1, 2, 3, 4, 5, 6].map((i) => (
             <div
@@ -190,13 +206,29 @@ export default function WorkspacesPage() {
             />
           ))}
         </div>
-      ) : isError ? (
-        <div className="text-center py-16 text-gray-500">
+      ) : panel === "error" ? (
+        <div className="text-center py-16 text-gray-500" role="alert">
           <Building2 className="w-10 h-10 mx-auto mb-3 text-gray-300" />
           <p className="font-medium">Failed to load workspaces</p>
-          <p className="text-sm mt-1">Please try again later.</p>
+          <p className="text-sm mt-1">Check your connection and try again.</p>
+          <button
+            type="button"
+            onClick={() => refetch()}
+            disabled={isFetching}
+            aria-busy={isFetching}
+            className="mt-4 inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-gray-900 rounded-lg hover:bg-gray-800 disabled:opacity-50"
+          >
+            {isFetching ? (
+              <>
+                <Loader2 className="w-4 h-4 animate-spin" />
+                Retrying…
+              </>
+            ) : (
+              "Try again"
+            )}
+          </button>
         </div>
-      ) : workspaces.length === 0 ? (
+      ) : panel === "empty" ? (
         <div className="text-center py-16 text-gray-500">
           <Building2 className="w-10 h-10 mx-auto mb-3 text-gray-300" />
           <p className="font-medium">No workspaces found</p>

@@ -1,6 +1,7 @@
 "use client";
 
 import { useAuthActions } from "@/lib/store/authStore";
+import { ApiError } from "@/lib/apiClient";
 import { useMutation } from "@tanstack/react-query";
 import { mutationKeys } from "../../keys/mutationKeys";
 import { LoginUser } from "@/lib/types/user";
@@ -37,19 +38,33 @@ export const useLoginUser = () => {
         router.push("/dashboard");
       }
     },
-    onError: (error: any) => {
-      if (error?.twoFactorRequired) {
+    onError: (error: unknown) => {
+      const challenge = error as {
+        twoFactorRequired?: boolean;
+        unverified?: boolean;
+        tempToken?: string;
+        email?: string;
+      };
+
+      if (challenge?.twoFactorRequired) {
         router.push(
-          `/verify-2fa?tempToken=${encodeURIComponent(error.tempToken)}&email=${encodeURIComponent(error.email)}`
+          `/verify-2fa?tempToken=${encodeURIComponent(challenge.tempToken ?? "")}&email=${encodeURIComponent(challenge.email ?? "")}`
         );
         return;
       }
-      if (error?.unverified) {
+      if (challenge?.unverified) {
         toast.info("Please verify your email to continue.");
-        router.push(`/verify-otp?email=${encodeURIComponent(error.email)}`);
+        router.push(`/verify-otp?email=${encodeURIComponent(challenge.email ?? "")}`);
         return;
       }
-      toast.error("Login failed. Please check your credentials.");
+
+      // Prefer the API's own message (for example "Invalid credentials"); fall
+      // back to the generic copy when the server did not send one.
+      toast.error(
+        error instanceof ApiError && error.serverMessage
+          ? error.serverMessage
+          : "Login failed. Please check your credentials."
+      );
     },
   });
 };

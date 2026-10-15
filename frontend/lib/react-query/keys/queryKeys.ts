@@ -63,3 +63,16 @@ export const queryKeys = {
     analytics: (params?: unknown) => ["admin", "analytics", params] as const,
   },
 } as const;
+
+/**
+ * Prefixes to invalidate after a booking is created, cancelled or updated: the
+ * member's booking list and detail views, plus the workspace caches that carry
+ * the seats the booking was holding.
+ *
+ * Declared here so every booking mutation reconciles the same caches instead of
+ * each hook guessing at them.
+ */
+export const bookingAffectedKeys = [
+  queryKeys.bookings.all,
+  queryKeys.workspaces.all,
+] as const;
