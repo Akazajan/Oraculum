@@ -11,6 +11,11 @@ import { useInitializePayment } from "@/lib/react-query/hooks/payments/useInitia
 import { useAuthState } from "@/lib/store/authStore";
 import { PlanType } from "@/lib/types/booking";
 import {
+  hasBookingErrors,
+  validateBookingDates,
+} from "@/lib/bookingValidation";
+import { createSubmissionGate } from "@/lib/bookingSubmission";
+import {
   ArrowLeft,
   ArrowRight,
   Check,
@@ -62,6 +67,10 @@ export default function BookingForm() {
   const [seatCount, setSeatCount] = useState(1);
   const [notes, setNotes] = useState("");
   const [bookingId, setBookingId] = useState<string | null>(null);
+  const [showValidation, setShowValidation] = useState(false);
+  const [serverError, setServerError] = useState<string | null>(null);
+  // One gate per mounted form: it collapses a burst of clicks into one request.
+  const [submissionGate] = useState(createSubmissionGate);
 
   const { data: workspaceData } = useGetWorkspaceById(workspaceId);
   const workspace = workspaceData?.data;
@@ -71,8 +80,21 @@ export default function BookingForm() {
   );
   const allWorkspaces = allWorkspacesData?.data ?? [];
 
+  const today = new Date().toISOString().split("T")[0];
+
+  const dateErrors = validateBookingDates({
+    startDate,
+    endDate,
+    planType,
+    today,
+  });
+  // Messages stay hidden until the user has engaged with the form, so an
+  // untouched form is not covered in red text.
+  const visibleDateErrors = showValidation ? dateErrors : {};
+  const hasValidDates = !hasBookingErrors(dateErrors);
+
   const estimateParams =
-    workspaceId && planType && startDate && endDate && seatCount
+    workspaceId && planType && startDate && endDate && seatCount && hasValidDates
       ? { workspaceId, planType, startDate, endDate, seatCount }
       : null;
 
@@ -101,26 +123,46 @@ export default function BookingForm() {
   }, []);
    // ...compat.extends("next/core-web-vitals", "next/typescript"),
 
-  const today = new Date().toISOString().split("T")[0];
-
   const canProceedStep0 =
-    workspaceId && planType && startDate && endDate && seatCount > 0;
+    Boolean(workspaceId) &&
+    Boolean(planType) &&
+    startDate !== "" &&
+    endDate !== "" &&
+    seatCount > 0 &&
+    hasValidDates;
 
   async function handleConfirmBooking() {
-    if (!canProceedStep0) return;
+    setServerError(null);
+    setShowValidation(true);
+
+    if (!canProceedStep0) {
+      setStep(0);
+      return;
+    }
+
     try {
-      const res = await createBooking({
-        workspaceId,
-        planType,
-        startDate,
-        endDate,
-        seatCount,
-        notes: notes || undefined,
-      });
-      setBookingId(res.data.id);
+      const outcome = await submissionGate.run(() =>
+        createBooking({
+          workspaceId,
+          planType,
+          startDate,
+          endDate,
+          seatCount,
+          notes: notes || undefined,
+        })
+      );
+
+      // A second click while the first request is in flight is dropped here.
+      if (outcome.status === "ignored") return;
+
+      setBookingId(outcome.value.data.id);
       setStep(2);
-    } catch {
-      // error toast handled in hook
+    } catch (error) {
+      setServerError(
+        error instanceof Error && error.message
+          ? error.message
+          : "We couldn't create your booking. Please try again."
+      );
     }
   }
 
@@ -273,28 +315,76 @@ export default function BookingForm() {
           {/* Dates */}
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1.5">
+              <label
+                htmlFor="booking-start-date"
+                className="block text-sm font-medium text-gray-700 mb-1.5"
+              >
                 Start Date <span className="text-red-500">*</span>
               </label>
               <input
+                id="booking-start-date"
                 type="date"
                 value={startDate}
                 min={today}
+                aria-invalid={visibleDateErrors.startDate ? true : undefined}
+                aria-describedby={
+                  visibleDateErrors.startDate
+                    ? "booking-start-date-error"
+                    : undefined
+                }
                 onChange={(e) => setStartDate(e.target.value)}
-                className="w-full px-3.5 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-gray-200"
+                onBlur={() => setShowValidation(true)}
+                className={`w-full px-3.5 py-2.5 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-gray-200 ${
+                  visibleDateErrors.startDate
+                    ? "border-red-300"
+                    : "border-gray-200"
+                }`}
               />
+              {visibleDateErrors.startDate && (
+                <p
+                  id="booking-start-date-error"
+                  role="alert"
+                  className="mt-1 text-xs text-red-600"
+                >
+                  {visibleDateErrors.startDate}
+                </p>
+              )}
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1.5">
+              <label
+                htmlFor="booking-end-date"
+                className="block text-sm font-medium text-gray-700 mb-1.5"
+              >
                 End Date <span className="text-red-500">*</span>
               </label>
               <input
+                id="booking-end-date"
                 type="date"
                 value={endDate}
                 min={startDate || today}
+                aria-invalid={visibleDateErrors.endDate ? true : undefined}
+                aria-describedby={
+                  visibleDateErrors.endDate
+                    ? "booking-end-date-error"
+                    : undefined
+                }
                 onChange={(e) => setEndDate(e.target.value)}
-                className="w-full px-3.5 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-gray-200"
+                onBlur={() => setShowValidation(true)}
+                className={`w-full px-3.5 py-2.5 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-gray-200 ${
+                  visibleDateErrors.endDate
+                    ? "border-red-300"
+                    : "border-gray-200"
+                }`}
               />
+              {visibleDateErrors.endDate && (
+                <p
+                  id="booking-end-date-error"
+                  role="alert"
+                  className="mt-1 text-xs text-red-600"
+                >
+                  {visibleDateErrors.endDate}
+                </p>
+              )}
             </div>
           </div>
 
@@ -363,9 +453,22 @@ export default function BookingForm() {
             </div>
           )}
 
+          {serverError && (
+            <div
+              role="alert"
+              className="p-3 text-sm text-red-700 bg-red-50 border border-red-100 rounded-lg"
+            >
+              {serverError}
+            </div>
+          )}
+
           <button
-            onClick={() => setStep(1)}
-            disabled={!canProceedStep0}
+            onClick={() => {
+              setShowValidation(true);
+              if (!canProceedStep0) return;
+              setStep(1);
+            }}
+            disabled={!workspaceId}
             className="flex items-center justify-center gap-2 w-full py-2.5 bg-gray-900 text-white text-sm font-medium rounded-lg hover:bg-gray-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
           >
             Continue to review
@@ -422,6 +525,15 @@ export default function BookingForm() {
             Your booking will be created as <strong>PENDING</strong>. You will
             be redirected to payment immediately after.
           </p>
+
+          {serverError && (
+            <div
+              role="alert"
+              className="p-3 text-sm text-red-700 bg-red-50 border border-red-100 rounded-lg"
+            >
+              {serverError}
+            </div>
+          )}
 
           <div className="flex gap-3">
             <button
