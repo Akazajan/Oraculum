@@ -3514,6 +3514,69 @@ fn test_unstake_tokens_after_lock_period() {
     assert!(client.get_stake_info(&staker).is_none());
 }
 
+/// CT-37: a withdrawal is a one-time terminal transition. Once the principal
+/// and rewards have been paid, a repeated call must fail and must not move any
+/// additional tokens.
+#[test]
+fn test_unstake_tokens_twice_moves_no_additional_tokens() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (client, _admin, sac) = setup_staking_env(&env);
+
+    let staker = Address::generate(&env);
+    sac.mint(&staker, &10_000);
+    client.stake_tokens(&staker, &String::from_str(&env, "bronze"), &5_000);
+
+    // Advance past the 1-day lock period.
+    env.ledger().with_mut(|li| {
+        li.timestamp += 86_400 + 1;
+    });
+
+    // First withdrawal pays the principal out and clears the stake.
+    client.unstake_tokens(&staker);
+    assert!(client.get_stake_info(&staker).is_none());
+    let balance_after_first = sac.balance(&staker);
+
+    // Second withdrawal must be rejected...
+    let second = client.try_unstake_tokens(&staker);
+    assert!(second.is_err(), "second withdrawal must be rejected");
+
+    // ...and must leave the balance untouched.
+    assert_eq!(
+        sac.balance(&staker),
+        balance_after_first,
+        "repeated withdrawal must not move additional tokens"
+    );
+    assert!(client.get_stake_info(&staker).is_none());
+}
+
+/// CT-37: emergency unstake is likewise terminal — a repeated call must not
+/// move any further tokens.
+#[test]
+fn test_emergency_unstake_twice_moves_no_additional_tokens() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (client, _admin, sac) = setup_staking_env(&env);
+
+    let staker = Address::generate(&env);
+    sac.mint(&staker, &10_000);
+    client.stake_tokens(&staker, &String::from_str(&env, "bronze"), &5_000);
+
+    client.emergency_unstake(&staker);
+    assert!(client.get_stake_info(&staker).is_none());
+    let balance_after_first = sac.balance(&staker);
+
+    let second = client.try_emergency_unstake(&staker);
+    assert!(second.is_err(), "second emergency unstake must be rejected");
+    assert_eq!(
+        sac.balance(&staker),
+        balance_after_first,
+        "repeated emergency unstake must not move additional tokens"
+    );
+}
+
 #[test]
 fn test_unstake_tokens_before_lock_period_fails() {
     let env = Env::default();
