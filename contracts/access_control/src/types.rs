@@ -228,6 +228,7 @@ impl ProposalAction {
             ProposalAction::TransferAdmin(_) => ProposalType::Critical,
             ProposalAction::UpdateMultisigConfig(_) => ProposalType::Critical,
             ProposalAction::EmergencyPause(_) => ProposalType::Emergency,
+            ProposalAction::ClearEmergencyMode => ProposalType::Emergency,
             ProposalAction::BatchBlacklist(_) => ProposalType::Critical,
             ProposalAction::ScheduleUpgrade(_, _) => ProposalType::TimeLocked,
             ProposalAction::EmergencyAdminTransfer(_) => ProposalType::Emergency,

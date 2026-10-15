@@ -38,6 +38,12 @@ pub enum DataKey {
 /// Prevents resource exhaustion / oversized proposal execution.
 pub const MAX_BATCH_SIZE: u32 = 50;
 
+/// CT-27: Upper bound on the number of expired proposals a single
+/// `cleanup_expired_proposals` invocation will remove. Keeps the per-call work
+/// deterministic regardless of how large the pending set has grown, while
+/// repeated calls still make monotonic progress.
+pub const MAX_CLEANUP_PER_CALL: u32 = 20;
+
 pub struct AccessControlModule;
 
 impl AccessControlModule {
@@ -927,10 +933,8 @@ impl AccessControlModule {
                     .persistent()
                     .set(&DataKey::EmergencyMode, &false);
 
-                env.events().publish(
-                    (symbol_short!("clr_emrg"),),
-                    proposal.proposer.clone(),
-                );
+                env.events()
+                    .publish((symbol_short!("clr_emrg"),), proposal.proposer.clone());
             }
             ProposalAction::BatchBlacklist(users) => {
                 // Size pre-validated; process every address exactly once
@@ -1032,12 +1036,10 @@ impl AccessControlModule {
                     env.storage()
                         .persistent()
                         .set(&DataKey::UserRole(new_admin.clone()), &UserRole::Admin);
-                    env.storage()
-                        .persistent()
-                        .set(
-                            &DataKey::UserRole(proposal.proposer.clone()),
-                            &UserRole::Guest,
-                        );
+                    env.storage().persistent().set(
+                        &DataKey::UserRole(proposal.proposer.clone()),
+                        &UserRole::Guest,
+                    );
                 } else {
                     // Single-admin mode: transfer ownership via DataKey::Admin
                     let current_admin =
@@ -1056,10 +1058,7 @@ impl AccessControlModule {
                         .set(&DataKey::UserRole(new_admin.clone()), &UserRole::Admin);
                     env.storage()
                         .persistent()
-                        .set(
-                            &DataKey::UserRole(current_admin.clone()),
-                            &UserRole::Guest,
-                        );
+                        .set(&DataKey::UserRole(current_admin.clone()), &UserRole::Guest);
                 }
 
                 env.events().publish(
@@ -1137,8 +1136,7 @@ impl AccessControlModule {
         // A proposal can be rejected once enough admins can block its approval threshold.
         let multisig_config =
             Self::get_multisig_config(env).ok_or(AccessControlError::MultisigNotEnabled)?;
-        let rejection_threshold =
-            multisig_config.admins.len() - proposal.required_signatures + 1;
+        let rejection_threshold = multisig_config.admins.len() - proposal.required_signatures + 1;
 
         if proposal.rejections.len() >= rejection_threshold {
             // Proposal rejected - clean it up using the dedicated helper
@@ -1237,6 +1235,12 @@ impl AccessControlModule {
     }
 
     /// Clean up expired proposals (can be called by anyone)
+    ///
+    /// CT-27: removes at most [`MAX_CLEANUP_PER_CALL`] expired proposals per
+    /// invocation, giving the call a deterministic upper bound on work even
+    /// when the pending set is near its maximum. Callers repeat the call to
+    /// drain a larger backlog; progress is monotonic, so expired entries can
+    /// never permanently block new proposals.
     pub fn cleanup_expired_proposals(env: &Env) -> AccessControlResult<u32> {
         let pending_list: Vec<u64> = env
             .storage()
@@ -1248,6 +1252,9 @@ impl AccessControlModule {
         let mut cleaned_count = 0u32;
 
         for proposal_id in pending_list.iter() {
+            if cleaned_count >= MAX_CLEANUP_PER_CALL {
+                break;
+            }
             if let Some(proposal) = env
                 .storage()
                 .persistent()
@@ -1316,7 +1323,7 @@ impl AccessControlModule {
             .set(&DataKey::ProposalStats, &stats);
 
         env.events()
-            .publish((symbol_short!("rejected_cleanup"), proposal_id), ());
+            .publish((symbol_short!("rej_clean"), proposal_id), ());
 
         Ok(())
     }

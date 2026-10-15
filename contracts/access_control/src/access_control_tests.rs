@@ -1604,12 +1604,8 @@ fn test_multisig_admin_transfer_via_proposal() {
         .is_ok());
 
         // Old admin (admin1) should not be able to perform admin operations
-        let result = AccessControlModule::set_role(
-            &env,
-            admin1.clone(),
-            user.clone(),
-            UserRole::Member,
-        );
+        let result =
+            AccessControlModule::set_role(&env, admin1.clone(), user.clone(), UserRole::Member);
         assert_eq!(
             result.unwrap_err(),
             AccessControlError::AdminRequired,
@@ -1631,8 +1627,7 @@ fn test_multisig_transfer_admin_to_self_fails() {
 
         // Transferring to self should be blocked
         let action = ProposalAction::TransferAdmin(admin1.clone());
-        let result =
-            AccessControlModule::create_proposal(&env, admin1.clone(), action);
+        let result = AccessControlModule::create_proposal(&env, admin1.clone(), action);
         // The proposal should still be creatable, but execution should fail
         assert!(result.is_ok());
 
@@ -1670,7 +1665,8 @@ fn test_multisig_prevents_direct_admin_transfer() {
         AccessControlModule::initialize_multisig(&env, admins, 2, None).unwrap();
 
         // Direct admin transfer should be blocked in multisig mode
-        let result = AccessControlModule::propose_admin_transfer(&env, admin1.clone(), new_admin.clone());
+        let result =
+            AccessControlModule::propose_admin_transfer(&env, admin1.clone(), new_admin.clone());
         assert_eq!(result.unwrap_err(), AccessControlError::InvalidAddress);
     });
 }
@@ -1776,4 +1772,153 @@ fn test_failed_access_persists_attempt() {
             Some(1)
         );
     });
+}
+
+// ==================== CT-26 / CT-27: execution lifecycle + cleanup bound ====================
+
+fn advance_ledger_time(env: &Env, seconds: u64) {
+    env.ledger().set(LedgerInfo {
+        timestamp: env.ledger().timestamp() + seconds,
+        protocol_version: 23,
+        sequence_number: 10,
+        network_id: [0; 32],
+        base_reserve: 10,
+        min_temp_entry_ttl: 10,
+        min_persistent_entry_ttl: 10,
+        max_entry_ttl: 6_312_000,
+    });
+}
+
+#[test]
+fn test_proposal_executes_after_time_lock_and_only_once() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(crate::AccessControl, ());
+    let admin1 = Address::generate(&env);
+    let admin2 = Address::generate(&env);
+    let admin3 = Address::generate(&env);
+
+    env.as_contract(&contract_id, || {
+        let admins = Vec::from_array(&env, [admin1.clone(), admin2.clone(), admin3.clone()]);
+        AccessControlModule::initialize_multisig(&env, admins, 2, None).unwrap();
+
+        // Pause is a Critical, time-locked action: it needs the critical
+        // threshold (3 of 3) and must wait out the time lock.
+        let proposal_id =
+            AccessControlModule::create_proposal(&env, admin1.clone(), ProposalAction::Pause)
+                .unwrap();
+        AccessControlModule::approve_proposal(&env, admin2.clone(), proposal_id).unwrap();
+        AccessControlModule::approve_proposal(&env, admin3.clone(), proposal_id).unwrap();
+
+        // Fully approved, but the time lock has not elapsed yet.
+        assert_eq!(
+            AccessControlModule::execute_proposal(&env, proposal_id).unwrap_err(),
+            AccessControlError::TimeLockActive
+        );
+
+        advance_ledger_time(&env, 86_401);
+
+        // Now it executes, applying the paused state...
+        AccessControlModule::execute_proposal(&env, proposal_id).unwrap();
+        assert!(AccessControlModule::is_paused(&env));
+
+        // ...and it is one-time.
+        assert_eq!(
+            AccessControlModule::execute_proposal(&env, proposal_id).unwrap_err(),
+            AccessControlError::ProposalAlreadyExecuted
+        );
+    });
+}
+
+#[test]
+fn test_expired_proposal_cannot_execute() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(crate::AccessControl, ());
+    let admin1 = Address::generate(&env);
+    let admin2 = Address::generate(&env);
+    let admin3 = Address::generate(&env);
+    let user = Address::generate(&env);
+
+    env.as_contract(&contract_id, || {
+        let admins = Vec::from_array(&env, [admin1.clone(), admin2.clone(), admin3.clone()]);
+        AccessControlModule::initialize_multisig(&env, admins, 2, None).unwrap();
+
+        let proposal_id = AccessControlModule::create_proposal(
+            &env,
+            admin1.clone(),
+            ProposalAction::SetRole(user.clone(), UserRole::Member),
+        )
+        .unwrap();
+
+        advance_ledger_time(&env, 604_801);
+
+        assert_eq!(
+            AccessControlModule::execute_proposal(&env, proposal_id).unwrap_err(),
+            AccessControlError::ProposalExpired
+        );
+        assert_eq!(
+            AccessControlModule::get_role(&env, user.clone()),
+            UserRole::Guest
+        );
+    });
+}
+
+#[test]
+fn test_execute_proposal_is_callable_via_contract_interface() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(crate::AccessControl, ());
+    let client = crate::AccessControlClient::new(&env, &contract_id);
+    let admin1 = Address::generate(&env);
+    let admin2 = Address::generate(&env);
+    let admin3 = Address::generate(&env);
+
+    let admins = Vec::from_array(&env, [admin1.clone(), admin2.clone(), admin3.clone()]);
+    client.initialize_multisig(&admins, &2);
+
+    let proposal_id = client.create_proposal(&admin1, &ProposalAction::Pause);
+    client.approve_proposal(&admin2, &proposal_id);
+    client.approve_proposal(&admin3, &proposal_id);
+
+    advance_ledger_time(&env, 86_401);
+
+    client.execute_proposal(&proposal_id);
+    assert_eq!(client.get_proposal_stats().total_executed, 1);
+}
+
+#[test]
+fn test_cleanup_expired_proposals_is_bounded_per_call() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(crate::AccessControl, ());
+    let client = crate::AccessControlClient::new(&env, &contract_id);
+    let admin1 = Address::generate(&env);
+    let admin2 = Address::generate(&env);
+    let admin3 = Address::generate(&env);
+    let user = Address::generate(&env);
+
+    let admins = Vec::from_array(&env, [admin1.clone(), admin2.clone(), admin3.clone()]);
+    client.initialize_multisig(&admins, &2);
+
+    // Build a backlog larger than the per-call cleanup bound.
+    for _ in 0..22 {
+        client.create_proposal(
+            &admin1,
+            &ProposalAction::SetRole(user.clone(), UserRole::Member),
+        );
+    }
+    assert_eq!(client.get_pending_proposals().len(), 22);
+
+    // Expire them all.
+    advance_ledger_time(&env, 604_801);
+
+    // Each call removes at most MAX_CLEANUP_PER_CALL (20).
+    assert_eq!(client.cleanup_expired_proposals(), 20);
+    assert_eq!(client.cleanup_expired_proposals(), 2);
+    assert_eq!(client.get_pending_proposals().len(), 0);
+
+    // Progress is complete: a new proposal is no longer blocked.
+    client.create_proposal(&admin1, &ProposalAction::SetRole(user, UserRole::Member));
+    assert_eq!(client.get_pending_proposals().len(), 1);
 }
