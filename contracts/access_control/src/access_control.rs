@@ -1369,6 +1369,72 @@ impl AccessControlModule {
         Err(AccessControlError::AdminRequired)
     }
 
+    /// Build a full multisig configuration from raw parameters and route it
+    /// through the multisig proposal flow.
+    ///
+    /// Unlike [`Self::update_multisig_config`], which rejects direct calls
+    /// outright, this is the supported entry point for reconfiguration: the
+    /// assembled configuration must pass [`MultiSigConfig::validate`], and the
+    /// change is recorded as a `UpdateMultisigConfig` proposal that other
+    /// signers must approve before it takes effect. Returns the new proposal
+    /// id. The caller's authorization is enforced by
+    /// [`Self::create_proposal`].
+    #[allow(clippy::too_many_arguments)]
+    pub fn propose_multisig_config(
+        env: &Env,
+        caller: Address,
+        admins: Vec<Address>,
+        required_signatures: u32,
+        critical_threshold: u32,
+        emergency_threshold: u32,
+        time_lock_duration: u64,
+        max_pending_proposals: u32,
+        proposal_expiry_duration: u64,
+    ) -> AccessControlResult<u64> {
+        let new_config = MultiSigConfig {
+            admins,
+            required_signatures,
+            critical_threshold,
+            emergency_threshold,
+            time_lock_duration,
+            max_pending_proposals,
+            proposal_expiry_duration,
+        };
+
+        Self::validate_multisig_input(&new_config)?;
+
+        Self::create_proposal(
+            env,
+            caller,
+            ProposalAction::UpdateMultisigConfig(new_config),
+        )
+    }
+
+    /// Validate the raw parameters of a multisig configuration, returning the
+    /// most specific error for the violation.
+    ///
+    /// Shared by first-time initialization and reconfiguration so both paths
+    /// enforce the same `1 <= threshold <= signer_count` rule and reject
+    /// duplicate signers.
+    fn validate_multisig_input(config: &MultiSigConfig) -> AccessControlResult<()> {
+        if config.admins.is_empty() {
+            return Err(AccessControlError::InvalidAddress);
+        }
+        if config.required_signatures == 0 {
+            return Err(AccessControlError::ThresholdTooLow);
+        }
+        if config.required_signatures > config.admins.len() {
+            return Err(AccessControlError::ThresholdTooHigh);
+        }
+        if config.has_duplicate_admins() {
+            return Err(AccessControlError::DuplicateAdmin);
+        }
+        if !config.validate() {
+            return Err(AccessControlError::InvalidMultisigConfig);
+        }
+        Ok(())
+    }
+
     /// Check if emergency mode is active
     pub fn is_emergency_mode(env: &Env) -> bool {
         env.storage()

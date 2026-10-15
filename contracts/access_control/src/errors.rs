@@ -123,8 +123,12 @@ impl AccessControlError {
             AccessControlError::DuplicateAdmin => "Duplicate admin address",
             AccessControlError::NotMultisigAdmin => "Not authorized as multisig admin",
             AccessControlError::ProposalRejected => "Proposal rejection threshold reached",
-            AccessControlError::UserBlacklisted => "User is blacklisted and cannot be elevated to admin",
-            AccessControlError::BatchSizeExceeded => "Batch size exceeds the maximum allowed for access-control operations",
+            AccessControlError::UserBlacklisted => {
+                "User is blacklisted and cannot be elevated to admin"
+            }
+            AccessControlError::BatchSizeExceeded => {
+                "Batch size exceeds the maximum allowed for access-control operations"
+            }
         }
     }
 
@@ -174,7 +178,9 @@ mod tests {
         assert!(!AccessControlError::Unauthorized.description().is_empty());
         assert!(!AccessControlError::AdminRequired.description().is_empty());
         assert!(!AccessControlError::InvalidRole.description().is_empty());
-        assert!(!AccessControlError::BatchSizeExceeded.description().is_empty());
+        assert!(!AccessControlError::BatchSizeExceeded
+            .description()
+            .is_empty());
     }
 
     #[test]
