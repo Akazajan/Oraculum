@@ -551,10 +551,12 @@ impl AccessControlModule {
     }
 
     pub fn remove_role(env: &Env, caller: Address, user: Address) -> AccessControlResult<()> {
+        // CT-29: `require_admin` already binds the caller's signature (both the
+        // single-admin and multisig branches call `require_auth`). Binding it a
+        // second time here made every authorized removal fail the host's
+        // "frame is already authorized" check, so authenticate exactly once,
+        // before any state is touched.
         Self::require_admin(env, &caller)?;
-        // C02 / issue #460: bind Soroban auth on role removal. The single-admin
-        // branch of require_admin previously skipped require_auth.
-        caller.require_auth();
 
         if let Some(admin) = Self::get_admin(env) {
             if user == admin {
@@ -922,15 +924,36 @@ impl AccessControlModule {
                     proposal.proposer.clone(),
                 );
             }
+            ProposalAction::EmergencyPause(reason) => {
+                // CT-30: Emergency mode activation policy.
+                //
+                // This action is classified `ProposalType::Emergency`, so it
+                // requires the multisig `emergency_threshold` (the highest
+                // threshold) and is intentionally NOT time-locked: emergency
+                // activation must be able to take effect as soon as the
+                // emergency quorum approves it. It cannot bypass multisig
+                // because reaching this arm already required those approvals.
+                //
+                // Effect: raise the emergency flag and pause the contract,
+                // halting all guarded mutations until the emergency quorum
+                // clears it via `ClearEmergencyMode`.
+                env.storage()
+                    .persistent()
+                    .set(&DataKey::EmergencyMode, &true);
+                env.storage().persistent().set(&DataKey::Paused, &true);
+
+                env.events().publish(
+                    (symbol_short!("emrg_on"), reason),
+                    proposal.proposer.clone(),
+                );
+            }
             ProposalAction::ClearEmergencyMode => {
                 env.storage()
                     .persistent()
                     .set(&DataKey::EmergencyMode, &false);
 
-                env.events().publish(
-                    (symbol_short!("clr_emrg"),),
-                    proposal.proposer.clone(),
-                );
+                env.events()
+                    .publish((symbol_short!("clr_emrg"),), proposal.proposer.clone());
             }
             ProposalAction::BatchBlacklist(users) => {
                 // Size pre-validated; process every address exactly once
@@ -1032,12 +1055,10 @@ impl AccessControlModule {
                     env.storage()
                         .persistent()
                         .set(&DataKey::UserRole(new_admin.clone()), &UserRole::Admin);
-                    env.storage()
-                        .persistent()
-                        .set(
-                            &DataKey::UserRole(proposal.proposer.clone()),
-                            &UserRole::Guest,
-                        );
+                    env.storage().persistent().set(
+                        &DataKey::UserRole(proposal.proposer.clone()),
+                        &UserRole::Guest,
+                    );
                 } else {
                     // Single-admin mode: transfer ownership via DataKey::Admin
                     let current_admin =
@@ -1056,10 +1077,7 @@ impl AccessControlModule {
                         .set(&DataKey::UserRole(new_admin.clone()), &UserRole::Admin);
                     env.storage()
                         .persistent()
-                        .set(
-                            &DataKey::UserRole(current_admin.clone()),
-                            &UserRole::Guest,
-                        );
+                        .set(&DataKey::UserRole(current_admin.clone()), &UserRole::Guest);
                 }
 
                 env.events().publish(
@@ -1137,8 +1155,7 @@ impl AccessControlModule {
         // A proposal can be rejected once enough admins can block its approval threshold.
         let multisig_config =
             Self::get_multisig_config(env).ok_or(AccessControlError::MultisigNotEnabled)?;
-        let rejection_threshold =
-            multisig_config.admins.len() - proposal.required_signatures + 1;
+        let rejection_threshold = multisig_config.admins.len() - proposal.required_signatures + 1;
 
         if proposal.rejections.len() >= rejection_threshold {
             // Proposal rejected - clean it up using the dedicated helper
@@ -1175,6 +1192,12 @@ impl AccessControlModule {
         if proposal.proposer != proposer {
             return Err(AccessControlError::Unauthorized);
         }
+
+        // CT-29: cancelling a proposal is a state mutation and must be bound to
+        // the proposer's signature. Comparing addresses alone is not
+        // authentication: without this check any account could cancel another
+        // admin's proposal by passing the proposer's public address.
+        proposer.require_auth();
 
         if proposal.executed {
             return Err(AccessControlError::ProposalAlreadyExecuted);
@@ -1316,7 +1339,7 @@ impl AccessControlModule {
             .set(&DataKey::ProposalStats, &stats);
 
         env.events()
-            .publish((symbol_short!("rejected_cleanup"), proposal_id), ());
+            .publish((symbol_short!("rej_clean"), proposal_id), ());
 
         Ok(())
     }
