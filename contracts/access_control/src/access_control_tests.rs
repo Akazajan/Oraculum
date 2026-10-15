@@ -1,6 +1,6 @@
 use crate::access_control::{AccessControlModule, DataKey};
 use crate::errors::AccessControlError;
-use crate::types::{AccessControlConfig, ProposalAction, ProposalType, UserRole};
+use crate::types::{AccessControlConfig, MultiSigConfig, ProposalAction, ProposalType, UserRole};
 use soroban_sdk::{
     testutils::{Address as _, Events, Ledger, LedgerInfo},
     Address, Env, Vec,
@@ -1773,6 +1773,28 @@ fn test_failed_access_persists_attempt() {
         );
     });
 }
+
+// ==================== CT-24 / CT-25: threshold + duplicate approvals ====================
+
+#[test]
+fn test_initialize_multisig_rejects_out_of_range_thresholds() {
+    let env = Env::default();
+    let contract_id = env.register(crate::AccessControl, ());
+    let admin1 = Address::generate(&env);
+    let admin2 = Address::generate(&env);
+
+    env.as_contract(&contract_id, || {
+        let zero = Vec::from_array(&env, [admin1.clone(), admin2.clone()]);
+        assert_eq!(
+            AccessControlModule::initialize_multisig(&env, zero, 0, None).unwrap_err(),
+            AccessControlError::ThresholdTooLow
+        );
+
+        let too_high = Vec::from_array(&env, [admin1.clone(), admin2.clone()]);
+        assert_eq!(
+            AccessControlModule::initialize_multisig(&env, too_high, 3, None).unwrap_err(),
+            AccessControlError::ThresholdTooHigh
+        );
 // ==================== CT-23 / CT-24: multisig configuration ====================
 
 #[test]
@@ -1819,6 +1841,8 @@ fn test_update_multisig_config_full_creates_proposal() {
 }
 
 #[test]
+fn test_initialize_multisig_rejects_duplicate_signers() {
+    let env = Env::default();
 fn test_multisig_config_rejects_duplicate_signers() {
     let env = Env::default();
     env.mock_all_auths();
@@ -1827,6 +1851,11 @@ fn test_multisig_config_rejects_duplicate_signers() {
     let admin2 = Address::generate(&env);
 
     env.as_contract(&contract_id, || {
+        let dup = Vec::from_array(&env, [admin1.clone(), admin1.clone(), admin2.clone()]);
+        assert_eq!(
+            AccessControlModule::initialize_multisig(&env, dup, 2, None).unwrap_err(),
+            AccessControlError::DuplicateAdmin
+        );
         let seeded = Vec::from_array(&env, [admin1.clone(), admin2.clone()]);
         AccessControlModule::initialize_multisig(&env, seeded, 2, None).unwrap();
 
@@ -1848,6 +1877,7 @@ fn test_multisig_config_rejects_duplicate_signers() {
 }
 
 #[test]
+fn test_reconfiguration_rejects_duplicate_signers() {
 fn test_multisig_config_rejects_out_of_range_thresholds() {
     let env = Env::default();
     env.mock_all_auths();
@@ -1857,6 +1887,35 @@ fn test_multisig_config_rejects_out_of_range_thresholds() {
 
     env.as_contract(&contract_id, || {
         let admins = Vec::from_array(&env, [admin1.clone(), admin2.clone()]);
+        AccessControlModule::initialize_multisig(&env, admins, 2, None).unwrap();
+
+        // A reconfiguration proposal carrying a duplicate signer is rejected by
+        // the shared validator before it is recorded.
+        let duplicate = MultiSigConfig {
+            admins: Vec::from_array(&env, [admin1.clone(), admin1.clone()]),
+            required_signatures: 1,
+            critical_threshold: 1,
+            emergency_threshold: 1,
+            time_lock_duration: 86_400,
+            max_pending_proposals: 50,
+            proposal_expiry_duration: 604_800,
+        };
+        assert_eq!(
+            AccessControlModule::validate_multisig_input(&duplicate).unwrap_err(),
+            AccessControlError::DuplicateAdmin
+        );
+
+        // Valid configurations still pass.
+        let valid = MultiSigConfig {
+            admins: Vec::from_array(&env, [admin1.clone(), admin2.clone()]),
+            required_signatures: 2,
+            critical_threshold: 2,
+            emergency_threshold: 2,
+            time_lock_duration: 86_400,
+            max_pending_proposals: 50,
+            proposal_expiry_duration: 604_800,
+        };
+        assert!(AccessControlModule::validate_multisig_input(&valid).is_ok());
         AccessControlModule::initialize_multisig(&env, admins.clone(), 2, None).unwrap();
 
         // Zero threshold.
@@ -1896,6 +1955,54 @@ fn test_multisig_config_rejects_out_of_range_thresholds() {
 }
 
 #[test]
+fn test_duplicate_approval_is_rejected_and_counted_once() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(crate::AccessControl, ());
+    let admin1 = Address::generate(&env);
+    let admin2 = Address::generate(&env);
+    let admin3 = Address::generate(&env);
+    let user = Address::generate(&env);
+
+    env.as_contract(&contract_id, || {
+        let admins = Vec::from_array(&env, [admin1.clone(), admin2.clone(), admin3.clone()]);
+        AccessControlModule::initialize_multisig(&env, admins, 2, None).unwrap();
+
+        let proposal_id = AccessControlModule::create_proposal(
+            &env,
+            admin1.clone(),
+            ProposalAction::SetRole(user.clone(), UserRole::Member),
+        )
+        .unwrap();
+
+        // The proposer is counted exactly once.
+        assert_eq!(
+            AccessControlModule::get_proposal(&env, proposal_id)
+                .unwrap()
+                .approvals
+                .len(),
+            1
+        );
+
+        // Repeated approval by the same signer is explicitly rejected and does
+        // not increase the approval count.
+        assert_eq!(
+            AccessControlModule::approve_proposal(&env, admin1.clone(), proposal_id).unwrap_err(),
+            AccessControlError::AlreadyApproved
+        );
+        assert_eq!(
+            AccessControlModule::get_proposal(&env, proposal_id)
+                .unwrap()
+                .approvals
+                .len(),
+            1
+        );
+
+        // A distinct signer reaches the threshold and executes the proposal.
+        AccessControlModule::approve_proposal(&env, admin2.clone(), proposal_id).unwrap();
+        assert_eq!(
+            AccessControlModule::get_role(&env, user.clone()),
+            UserRole::Member
 fn test_initialize_multisig_rejects_invalid_thresholds_and_duplicates() {
     let env = Env::default();
     env.mock_all_auths();

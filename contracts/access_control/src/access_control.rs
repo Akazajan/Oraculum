@@ -150,6 +150,32 @@ impl AccessControlModule {
         Ok(())
     }
 
+    /// Validate the raw parameters of a multisig configuration, returning the
+    /// most specific error for the violation.
+    ///
+    /// Enforces `1 <= required_signatures <= signer_count`, a non-empty signer
+    /// set, and rejects duplicate signers so a single address cannot satisfy
+    /// more than one slot of a quorum. Shared by initialization and every
+    /// reconfiguration path that builds a [`MultiSigConfig`].
+    pub fn validate_multisig_input(config: &MultiSigConfig) -> AccessControlResult<()> {
+        if config.admins.is_empty() {
+            return Err(AccessControlError::InvalidAddress);
+        }
+        if config.required_signatures == 0 {
+            return Err(AccessControlError::ThresholdTooLow);
+        }
+        if config.required_signatures > config.admins.len() {
+            return Err(AccessControlError::ThresholdTooHigh);
+        }
+        if config.has_duplicate_admins() {
+            return Err(AccessControlError::DuplicateAdmin);
+        }
+        if !config.validate() {
+            return Err(AccessControlError::InvalidMultisigConfig);
+        }
+        Ok(())
+    }
+
     pub fn set_role(
         env: &Env,
         caller: Address,
@@ -770,8 +796,6 @@ impl AccessControlModule {
         approver: Address,
         proposal_id: u64,
     ) -> AccessControlResult<()> {
-        Self::require_admin(env, &approver)?;
-
         let mut proposal: PendingProposal = env
             .storage()
             .persistent()
@@ -788,6 +812,10 @@ impl AccessControlModule {
             return Err(AccessControlError::ProposalExpired);
         }
 
+        // One signer, one vote: detect a repeated approval (or an approval
+        // after a rejection) before any authorization work. This keeps the
+        // approval count monotonically increasing by exactly one per signer
+        // and makes a duplicate call a cheap, explicit no-op rejection.
         if proposal.approvals.contains(&approver) {
             return Err(AccessControlError::AlreadyApproved);
         }
@@ -795,6 +823,8 @@ impl AccessControlModule {
         if proposal.rejections.contains(&approver) {
             return Err(AccessControlError::AlreadyRejected);
         }
+
+        Self::require_admin(env, &approver)?;
 
         proposal.approvals.push_back(approver.clone());
 
@@ -897,9 +927,9 @@ impl AccessControlModule {
                 );
             }
             ProposalAction::UpdateMultisigConfig(new_config) => {
-                if !new_config.validate() {
-                    return Err(AccessControlError::InvalidMultisigConfig);
-                }
+                // Reconfiguration must satisfy the same threshold and
+                // duplicate-signer rules as first-time initialization.
+                Self::validate_multisig_input(&new_config)?;
                 env.storage()
                     .persistent()
                     .set(&DataKey::MultiSigConfig, &new_config);

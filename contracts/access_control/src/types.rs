@@ -333,4 +333,71 @@ mod tests {
         assert_eq!(UserRole::parse_from_str("guest"), Some(UserRole::Guest));
         assert_eq!(UserRole::parse_from_str("invalid"), None);
     }
+
+    #[test]
+    fn test_multisig_config_validate_rejects_duplicate_signers() {
+        use soroban_sdk::testutils::Address as _;
+
+        let env = soroban_sdk::Env::default();
+        let a = Address::generate(&env);
+        let b = Address::generate(&env);
+
+        let duplicate = MultiSigConfig {
+            admins: Vec::from_array(&env, [a.clone(), a.clone(), b.clone()]),
+            required_signatures: 2,
+            critical_threshold: 2,
+            emergency_threshold: 2,
+            time_lock_duration: 86_400,
+            max_pending_proposals: 50,
+            proposal_expiry_duration: 604_800,
+        };
+        assert!(duplicate.has_duplicate_admins());
+        assert!(!duplicate.validate());
+
+        let distinct = MultiSigConfig {
+            admins: Vec::from_array(&env, [a.clone(), b.clone()]),
+            required_signatures: 2,
+            critical_threshold: 2,
+            emergency_threshold: 2,
+            time_lock_duration: 86_400,
+            max_pending_proposals: 50,
+            proposal_expiry_duration: 604_800,
+        };
+        assert!(!distinct.has_duplicate_admins());
+        assert!(distinct.validate());
+    }
+
+    #[test]
+    fn test_multisig_config_validate_bounds_threshold() {
+        use soroban_sdk::testutils::Address as _;
+
+        let env = soroban_sdk::Env::default();
+        let a = Address::generate(&env);
+        let b = Address::generate(&env);
+        let admins = Vec::from_array(&env, [a, b]);
+
+        // required_signatures == 0 is invalid
+        assert!(!MultiSigConfig {
+            admins: admins.clone(),
+            required_signatures: 0,
+            critical_threshold: 1,
+            emergency_threshold: 1,
+            time_lock_duration: 86_400,
+            max_pending_proposals: 50,
+            proposal_expiry_duration: 604_800,
+        }
+        .validate());
+
+        // required_signatures > signer count is invalid
+        assert!(!MultiSigConfig {
+            admins: admins.clone(),
+            required_signatures: 3,
+            critical_threshold: 3,
+            emergency_threshold: 3,
+            time_lock_duration: 86_400,
+            max_pending_proposals: 50,
+            proposal_expiry_duration: 604_800,
+        }
+        .validate());
+    }
 }
