@@ -614,6 +614,20 @@ impl PageParams {
     pub fn range(offset: u32, limit: u32) -> Self {
         Self { offset, limit }
     }
+
+    /// Validate these parameters against the shared pagination rules.
+    ///
+    /// Convenience wrapper around [`validate_page_params`] for callers that
+    /// already hold a [`PageParams`], so every list/query entry point fails
+    /// oversized or empty page requests through the *same* validation instead
+    /// of re-deriving the limits locally.
+    ///
+    /// # Errors
+    /// Mirrors [`validate_page_params`]: returns `Err` when `limit == 0` or
+    /// `limit > MAX_PAGE_SIZE`.
+    pub fn validate(&self) -> Result<(), &'static str> {
+        validate_page_params(self.offset, self.limit)
+    }
 }
 
 /// Validates raw offset/limit pagination values.
@@ -908,7 +922,7 @@ mod tests {
     #[test]
     fn test_validate_address_accepts_generated() {
         let env = soroban_sdk::Env::default();
-        let addr = soroban_sdk::testutils::Address::generate(&env);
+        let addr = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
         assert!(validate_address(&addr).is_ok());
     }
 
