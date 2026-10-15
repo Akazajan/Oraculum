@@ -101,6 +101,17 @@ impl AccessControl {
         AccessControlModule::approve_proposal(&env, approver, proposal_id).unwrap()
     }
 
+    /// Explicitly execute a proposal once it has reached its approval
+    /// threshold and cleared any time lock.
+    ///
+    /// CT-26: makes the approval -> time-lock -> execution lifecycle callable
+    /// from the contract interface. Execution is one-time; a proposal that has
+    /// already run, or one that is expired / under-approved / still
+    /// time-locked, is rejected.
+    pub fn execute_proposal(env: Env, proposal_id: u64) {
+        AccessControlModule::execute_proposal(&env, proposal_id).unwrap()
+    }
+
     pub fn is_multisig_enabled(env: Env) -> bool {
         AccessControlModule::is_multisig_enabled(&env)
     }

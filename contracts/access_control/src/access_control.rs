@@ -38,6 +38,12 @@ pub enum DataKey {
 /// Prevents resource exhaustion / oversized proposal execution.
 pub const MAX_BATCH_SIZE: u32 = 50;
 
+/// CT-27: Upper bound on the number of expired proposals a single
+/// `cleanup_expired_proposals` invocation will remove. Keeps the per-call work
+/// deterministic regardless of how large the pending set has grown, while
+/// repeated calls still make monotonic progress.
+pub const MAX_CLEANUP_PER_CALL: u32 = 20;
+
 pub struct AccessControlModule;
 
 impl AccessControlModule {
@@ -1246,6 +1252,12 @@ impl AccessControlModule {
     }
 
     /// Clean up expired proposals (can be called by anyone)
+    ///
+    /// CT-27: removes at most [`MAX_CLEANUP_PER_CALL`] expired proposals per
+    /// invocation, giving the call a deterministic upper bound on work even
+    /// when the pending set is near its maximum. Callers repeat the call to
+    /// drain a larger backlog; progress is monotonic, so expired entries can
+    /// never permanently block new proposals.
     pub fn cleanup_expired_proposals(env: &Env) -> AccessControlResult<u32> {
         let pending_list: Vec<u64> = env
             .storage()
@@ -1257,6 +1269,9 @@ impl AccessControlModule {
         let mut cleaned_count = 0u32;
 
         for proposal_id in pending_list.iter() {
+            if cleaned_count >= MAX_CLEANUP_PER_CALL {
+                break;
+            }
             if let Some(proposal) = env
                 .storage()
                 .persistent()
