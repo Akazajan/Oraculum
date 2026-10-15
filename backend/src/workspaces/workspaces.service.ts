@@ -55,10 +55,17 @@ export class WorkspacesService {
     return this.deleteWorkspaceProvider.restore(id);
   }
 
-  checkAvailability(workspaceId: string, requestedSeats?: number) {
+  checkAvailability(
+    workspaceId: string,
+    requestedSeats?: number,
+    startDate?: string,
+    endDate?: string,
+  ) {
     return this.checkWorkspaceAvailabilityProvider.check(
       workspaceId,
       requestedSeats,
+      startDate,
+      endDate,
     );
   }
 }
