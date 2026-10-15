@@ -3,7 +3,7 @@ use crate::errors::AccessControlError;
 use crate::types::{AccessControlConfig, MultiSigConfig, ProposalAction, ProposalType, UserRole};
 use soroban_sdk::{
     testutils::{Address as _, Events, Ledger, LedgerInfo},
-    Address, Env, Vec,
+    Address, Env, String, Vec,
 };
 
 fn setup_test_env() -> (Env, Address, Address, Address, Address) {
@@ -1774,6 +1774,53 @@ fn test_failed_access_persists_attempt() {
     });
 }
 
+// ==================== CT-29 / CT-30: authorization + emergency policy ====================
+
+#[test]
+fn test_unauthorized_mutations_leave_storage_unchanged() {
+    let (env, contract_id, _admin, user1, user2) = setup_initialized_env();
+
+    env.as_contract(&contract_id, || {
+        let role_before = AccessControlModule::get_role(&env, user2.clone());
+        let config_before = AccessControlModule::get_config(&env);
+        let paused_before = AccessControlModule::is_paused(&env);
+        let blacklisted_before = AccessControlModule::is_blacklisted(&env, &user2);
+
+        // Every mutator must reject a non-admin caller...
+        assert_eq!(
+            AccessControlModule::set_role(&env, user1.clone(), user2.clone(), UserRole::Admin)
+                .unwrap_err(),
+            AccessControlError::AdminRequired
+        );
+        assert_eq!(
+            AccessControlModule::remove_role(&env, user1.clone(), user2.clone()).unwrap_err(),
+            AccessControlError::AdminRequired
+        );
+        assert_eq!(
+            AccessControlModule::pause(&env, user1.clone()).unwrap_err(),
+            AccessControlError::AdminRequired
+        );
+        assert_eq!(
+            AccessControlModule::blacklist_user(&env, user1.clone(), user2.clone()).unwrap_err(),
+            AccessControlError::AdminRequired
+        );
+        assert_eq!(
+            AccessControlModule::update_config(&env, user1.clone(), AccessControlConfig::default())
+                .unwrap_err(),
+            AccessControlError::AdminRequired
+        );
+
+        // ...and leave all storage untouched.
+        assert_eq!(
+            AccessControlModule::get_role(&env, user2.clone()),
+            role_before
+        );
+        assert_eq!(AccessControlModule::get_config(&env), config_before);
+        assert_eq!(AccessControlModule::is_paused(&env), paused_before);
+        assert_eq!(
+            AccessControlModule::is_blacklisted(&env, &user2),
+            blacklisted_before
+        );
 // ==================== CT-26 / CT-27: execution lifecycle + cleanup bound ====================
 
 fn advance_ledger_time(env: &Env, seconds: u64) {
@@ -1958,6 +2005,7 @@ fn test_multisig_config_rejects_duplicate_signers() {
 }
 
 #[test]
+fn test_cancel_proposal_requires_proposer_and_changes_nothing_otherwise() {
 fn test_execute_proposal_is_callable_via_contract_interface() {
     let env = Env::default();
     env.mock_all_auths();
@@ -1966,10 +2014,29 @@ fn test_execute_proposal_is_callable_via_contract_interface() {
     let admin1 = Address::generate(&env);
     let admin2 = Address::generate(&env);
     let admin3 = Address::generate(&env);
+    let user = Address::generate(&env);
 
     let admins = Vec::from_array(&env, [admin1.clone(), admin2.clone(), admin3.clone()]);
     client.initialize_multisig(&admins, &2);
 
+    let proposal_id = client.create_proposal(
+        &admin1,
+        &ProposalAction::SetRole(user.clone(), UserRole::Member),
+    );
+
+    // A non-proposer cannot cancel, and the proposal is left untouched.
+    assert!(client.try_cancel_proposal(&admin2, &proposal_id).is_err());
+    assert!(client.get_proposal(&proposal_id).is_some());
+    assert_eq!(client.get_pending_proposals().len(), 1);
+
+    // The proposer can cancel (authorization is bound to the caller).
+    client.cancel_proposal(&admin1, &proposal_id);
+    assert!(client.get_proposal(&proposal_id).is_none());
+    assert_eq!(client.get_pending_proposals().len(), 0);
+}
+
+#[test]
+fn test_emergency_classification_requires_emergency_threshold_and_skips_time_lock() {
     let proposal_id = client.create_proposal(&admin1, &ProposalAction::Pause);
     client.approve_proposal(&admin2, &proposal_id);
     client.approve_proposal(&admin3, &proposal_id);
@@ -2071,6 +2138,17 @@ fn test_duplicate_approval_is_rejected_and_counted_once() {
     let admin1 = Address::generate(&env);
     let admin2 = Address::generate(&env);
     let admin3 = Address::generate(&env);
+
+    // Both emergency actions are classified as Emergency.
+    assert_eq!(
+        ProposalAction::EmergencyPause(String::from_str(&env, "incident")).classify_type(),
+        ProposalType::Emergency
+    );
+    assert_eq!(
+        ProposalAction::ClearEmergencyMode.classify_type(),
+        ProposalType::Emergency
+    );
+
     let user = Address::generate(&env);
 
     let admins = Vec::from_array(&env, [admin1.clone(), admin2.clone(), admin3.clone()]);
@@ -2103,6 +2181,50 @@ fn test_duplicate_approval_is_rejected_and_counted_once() {
         let proposal_id = AccessControlModule::create_proposal(
             &env,
             admin1.clone(),
+            ProposalAction::EmergencyPause(String::from_str(&env, "incident")),
+        )
+        .unwrap();
+
+        let proposal = AccessControlModule::get_proposal(&env, proposal_id).unwrap();
+        // Emergency uses the highest threshold and is deliberately not
+        // time-locked so it can respond immediately once quorum is reached.
+        assert_eq!(proposal.required_signatures, 3);
+        assert!(proposal.time_lock_until.is_none());
+        assert!(!AccessControlModule::is_emergency_mode(&env));
+    });
+}
+
+#[test]
+fn test_emergency_mode_lifecycle_respects_multisig() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(crate::AccessControl, ());
+    let client = crate::AccessControlClient::new(&env, &contract_id);
+    let admin1 = Address::generate(&env);
+    let admin2 = Address::generate(&env);
+    let admin3 = Address::generate(&env);
+
+    let admins = Vec::from_array(&env, [admin1.clone(), admin2.clone(), admin3.clone()]);
+    client.initialize_multisig(&admins, &2);
+
+    // Activate emergency mode through the emergency quorum.
+    let pause_id = client.create_proposal(
+        &admin1,
+        &ProposalAction::EmergencyPause(String::from_str(&env, "incident")),
+    );
+    client.approve_proposal(&admin2, &pause_id);
+    client.approve_proposal(&admin3, &pause_id);
+    assert!(client.is_emergency_mode());
+
+    // It cannot be switched off by a single admin bypassing the multisig.
+    assert!(client.try_deactivate_emergency_mode(&admin1).is_err());
+    assert!(client.is_emergency_mode());
+
+    // Clearing it goes through the emergency quorum, symmetrically.
+    let clear_id = client.create_proposal(&admin1, &ProposalAction::ClearEmergencyMode);
+    client.approve_proposal(&admin2, &clear_id);
+    client.approve_proposal(&admin3, &clear_id);
+    assert!(!client.is_emergency_mode());
             ProposalAction::SetRole(user.clone(), UserRole::Member),
         )
         .unwrap();
