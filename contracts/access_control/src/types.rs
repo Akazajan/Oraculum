@@ -228,6 +228,7 @@ impl ProposalAction {
             ProposalAction::TransferAdmin(_) => ProposalType::Critical,
             ProposalAction::UpdateMultisigConfig(_) => ProposalType::Critical,
             ProposalAction::EmergencyPause(_) => ProposalType::Emergency,
+            ProposalAction::ClearEmergencyMode => ProposalType::Emergency,
             ProposalAction::BatchBlacklist(_) => ProposalType::Critical,
             ProposalAction::ScheduleUpgrade(_, _) => ProposalType::TimeLocked,
             ProposalAction::EmergencyAdminTransfer(_) => ProposalType::Emergency,
@@ -260,7 +261,12 @@ impl MultiSigConfig {
         }
     }
 
-    /// Validate configuration parameters
+    /// Validate configuration parameters.
+    ///
+    /// Enforces `1 <= required_signatures <= admins.len()` plus a consistent
+    /// escalation of the critical and emergency thresholds. The signer set
+    /// must be non-empty and free of duplicates: a repeated address would let
+    /// a single signer satisfy more than one slot of a quorum.
     pub fn validate(&self) -> bool {
         !self.admins.is_empty()
             && self.required_signatures > 0
@@ -271,6 +277,20 @@ impl MultiSigConfig {
             && self.time_lock_duration > 0
             && self.max_pending_proposals > 0
             && self.proposal_expiry_duration > 0
+            && !self.has_duplicate_admins()
+    }
+
+    /// `true` when the same address appears more than once in `admins`.
+    pub fn has_duplicate_admins(&self) -> bool {
+        let len = self.admins.len();
+        for i in 0..len {
+            for j in (i + 1)..len {
+                if self.admins.get(i).unwrap() == self.admins.get(j).unwrap() {
+                    return true;
+                }
+            }
+        }
+        false
     }
 
     /// Get required signatures for a specific proposal type

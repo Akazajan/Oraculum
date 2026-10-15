@@ -167,19 +167,34 @@ impl AccessControl {
         AccessControlModule::deactivate_emergency_mode(&env, caller).unwrap()
     }
 
+    /// Propose a full multisig reconfiguration.
+    ///
+    /// Validates the supplied parameters and records them as a proposal that
+    /// must reach the required approval threshold before applying. Returns the
+    /// id of the created proposal. Replaces the previous success-shaped no-op.
     #[allow(clippy::too_many_arguments)]
     pub fn update_multisig_config_full(
-        _env: Env,
-        _admins: Vec<Address>,
-        _required_signatures: u32,
-        _critical_threshold: u32,
-        _emergency_threshold: u32,
-        _time_lock_duration: u64,
-        _max_pending_proposals: u32,
-        _proposal_expiry_duration: u64,
+        env: Env,
+        caller: Address,
+        admins: Vec<Address>,
+        required_signatures: u32,
+        critical_threshold: u32,
+        emergency_threshold: u32,
+        time_lock_duration: u64,
+        max_pending_proposals: u32,
+        proposal_expiry_duration: u64,
     ) -> u64 {
-        // This is a helper function - actual usage should call create_proposal directly
-        // Return 0 as placeholder - this function should not be used in production
-        0
+        AccessControlModule::propose_multisig_config(
+            &env,
+            caller,
+            admins,
+            required_signatures,
+            critical_threshold,
+            emergency_threshold,
+            time_lock_duration,
+            max_pending_proposals,
+            proposal_expiry_duration,
+        )
+        .unwrap()
     }
 }
