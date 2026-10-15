@@ -1,56 +1,34 @@
 import { NextRequest, NextResponse } from "next/server";
+import { isProtectedPath } from "@/lib/auth/routePolicy";
 
 const publicRoutes = ["/", "/login", "/register", "/forgot-password"];
 
-const protectedRoutes = {
-  "/dashboard": ["users", "admin"],
-  "/profile": ["users", "admin"],
-  "/settings": ["users", "admin"],
-  "/workspaces": ["users", "admin"],
-  "/bookings": ["users", "admin"],
-  "/invoices": ["users", "admin"],
-  "/check-in": ["users", "admin"],
-  "/notifications": ["users", "admin"],
-  "/admin": ["admin"],
-  "/users": ["admin"],
-} as const;
-  // ...compat.extends("next/core-web-vitals", "next/typescript"),
-   // ...compat.extends("next/core-web-vitals", "next/typescript"),
 export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
   const token = request.cookies.get("authToken")?.value;
   const isPublicRoute = publicRoutes.includes(pathname);
-  const isPrivateRoute = Object.keys(protectedRoutes).some((route) =>
-    pathname.startsWith(route),
-  );
 
-  // Check if the route is public
   if (isPublicRoute) {
-    // If user is authenticated and trying to access auth pages, redirect to dashboard
+    // An authenticated visitor has no business on the sign-in/registration pages.
     if (token && (pathname === "/login" || pathname === "/register")) {
       return NextResponse.redirect(new URL("/dashboard", request.url));
     }
- // ...compat.extends("next/core-web-vitals", "next/typescript"),
-    // If not authenticated, Let the request continue as normal (take them to the public route they were trying to go to).
     return NextResponse.next();
   }
 
-  // Check if the route is protected and need authentication
-  if (isPrivateRoute) {
-    // if no token, redirect to login
-    if (!token) {
-      const loginUrl = new URL("/login", request.url);
-      loginUrl.searchParams.set("redirect", pathname);
-      return NextResponse.redirect(loginUrl);
-    }
-
-    // For role-based protection, we'll handle this in the component level
-    // since we need to decode the JWT to get user role
+  // Which paths are private comes from the canonical policy, so middleware and
+  // components cannot disagree about it.
+  if (isProtectedPath(pathname) && !token) {
+    const loginUrl = new URL("/login", request.url);
+    loginUrl.searchParams.set("redirect", pathname);
+    return NextResponse.redirect(loginUrl);
   }
 
+  // Role enforcement stays in the components: the JWT payload is not decoded
+  // here. `lib/auth/routePolicy` is the matrix both layers read from.
   return NextResponse.next();
 }
-// export default nextConfig;
+
 export const config = {
   matcher: [
     /*

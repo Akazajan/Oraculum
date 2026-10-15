@@ -10,6 +10,7 @@ import {
 } from "../types/user";
 import { apiClient } from "../apiClient";
 import { storage } from "../storage";
+import { canRenderPath } from "../auth/routePolicy";
 
 interface AuthActions {
   // Authentication actions
@@ -235,6 +236,13 @@ export const useAuthState = () =>
       isLoading: state.isLoading,
     }))
   );
+
+/**
+ * Whether the current account may reach `pathname` under the canonical route
+ * policy. Role checks live in `lib/auth/routePolicy`, not in presentation code.
+ */
+export const useCanAccessPath = (pathname: string): boolean =>
+  useAuthStore((state) => canRenderPath(state.user, pathname));
 
 export const useAuthActions = () => {
   const login = useAuthStore((state) => state.login);
