@@ -113,13 +113,29 @@ export class WorkspacesController {
   @Public()
   @ApiOperation({ summary: 'Check workspace seat availability' })
   @ApiQuery({ name: 'seats', required: false, type: Number })
+  @ApiQuery({
+    name: 'startDate',
+    required: false,
+    type: String,
+    description: 'Inclusive start of the requested [startDate, endDate) range',
+  })
+  @ApiQuery({
+    name: 'endDate',
+    required: false,
+    type: String,
+    description: 'Exclusive end of the requested [startDate, endDate) range',
+  })
   async checkAvailability(
     @Param('id', ParseUUIDPipe) id: string,
     @Query('seats') seats?: number,
+    @Query('startDate') startDate?: string,
+    @Query('endDate') endDate?: string,
   ) {
     const result = await this.workspacesService.checkAvailability(
       id,
       seats ? Number(seats) : 1,
+      startDate,
+      endDate,
     );
     return { message: 'Availability checked', data: result };
   }
