@@ -8,6 +8,10 @@ import { useGetWorkspaces } from "@/lib/react-query/hooks/workspaces/useGetWorks
 import { useCreateBooking } from "@/lib/react-query/hooks/bookings/useCreateBooking";
 import { usePriceEstimate } from "@/lib/react-query/hooks/bookings/usePriceEstimate";
 import { useInitializePayment } from "@/lib/react-query/hooks/payments/useInitializePayment";
+import {
+  isPaymentConfirmed,
+  paymentStatusMessage,
+} from "@/lib/paymentAttempt";
 import { useAuthState } from "@/lib/store/authStore";
 import { PlanType } from "@/lib/types/booking";
 import {
@@ -87,8 +91,14 @@ export default function BookingForm() {
 
   const { mutateAsync: createBooking, isPending: creatingBooking } =
     useCreateBooking();
-  const { mutateAsync: initializePayment, isPending: initializingPayment } =
-    useInitializePayment();
+  const {
+    mutateAsync: initializePayment,
+    isPending: initializingPayment,
+    attempt: paymentAttempt,
+    markProviderOpened,
+    markSubmitted,
+    markProviderClosed,
+  } = useInitializePayment();
 
   // Inject Paystack script once
   useEffect(() => {
@@ -141,15 +151,19 @@ export default function BookingForm() {
         email: user?.email || "",
         amount: totalAmount,
         ref: reference,
-        onClose: () => toast.info("Payment window closed"),
+        onClose: () => markProviderClosed(),
         callback: () => {
-          toast.success("Payment submitted! Your booking will be confirmed shortly.");
+          // The provider callback means "submitted", not "paid". Only the backend
+          // confirms a payment, so this is deliberately not a success message.
+          markSubmitted();
+          toast.info("Payment submitted — we'll confirm it shortly.");
           router.push("/bookings");
         },
       });
       // Use access_code to avoid needing user email again
       void accessCode;
       handler.openIframe();
+      markProviderOpened();
     } catch {
       // error toast handled in hook
     }
@@ -476,9 +490,17 @@ export default function BookingForm() {
             </div>
           </div>
 
+          <p
+            role="status"
+            aria-live="polite"
+            className="text-center text-xs text-gray-500 min-h-4"
+          >
+            {paymentStatusMessage(paymentAttempt) ?? ""}
+          </p>
+
           <button
             onClick={handlePay}
-            disabled={initializingPayment}
+            disabled={initializingPayment || isPaymentConfirmed(paymentAttempt)}
             className="flex items-center justify-center gap-2 w-full py-3 bg-gray-900 text-white text-sm font-medium rounded-lg hover:bg-gray-700 transition-colors disabled:opacity-40"
           >
             {initializingPayment ? (
