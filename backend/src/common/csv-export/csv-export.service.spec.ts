@@ -71,4 +71,32 @@ describe('CsvExportService', () => {
     const csv = service.toCsv(data, columns);
     expect(csv).toContain('2026-01-15T10:00:00.000Z');
   });
+
+  describe('formula injection prevention', () => {
+    const columns = [{ key: 'value', header: 'Value' }];
+
+    it.each([
+      ['=SUM(A1:A10)', "'=SUM(A1:A10)"],
+      ['+cmd|"/C calc"!A0', "\"'+cmd|\"\"/C calc\"\"!A0\""],
+      ['-1+2', "'-1+2"],
+      ['@SUM(1+1)', "'@SUM(1+1)"],
+    ])('neutralises formula-triggering value %s', (input, expected) => {
+      const csv = service.toCsv([{ value: input }], columns);
+      const lines = csv.trim().split('\n');
+      // The cell content (possibly CSV-quoted) must contain the prefixed value
+      expect(lines[1]).toContain(expected);
+    });
+
+    it('does not alter ordinary text fields', () => {
+      const csv = service.toCsv([{ value: 'Hello World' }], columns);
+      const lines = csv.trim().split('\n');
+      expect(lines[1]).toBe('Hello World');
+    });
+
+    it('does not alter numeric fields', () => {
+      const csv = service.toCsv([{ value: 12345 }], columns);
+      const lines = csv.trim().split('\n');
+      expect(lines[1]).toBe('12345');
+    });
+  });
 });
