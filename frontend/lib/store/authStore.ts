@@ -264,3 +264,23 @@ export const useAuthActions = () => {
     clearAuth,
   };
 };
+
+/**
+ * Keeps the API client's bearer token in step with the auth store.
+ *
+ * Every write to `accessToken` — login, register, refresh, initialize, logout,
+ * clearAuth — therefore reaches the client through this one path, instead of
+ * each action remembering to call `apiClient.setToken` itself. That is what
+ * stops a newly authenticated user from inheriting a previous session's token.
+ *
+ * @returns an unsubscribe function.
+ */
+export const bindApiClientToAuthStore = (): (() => void) => {
+  apiClient.setToken(useAuthStore.getState().accessToken);
+
+  return useAuthStore.subscribe((state, previousState) => {
+    if (state.accessToken !== previousState.accessToken) {
+      apiClient.setToken(state.accessToken);
+    }
+  });
+};
