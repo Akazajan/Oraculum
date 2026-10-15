@@ -7,6 +7,9 @@ import { Invoice, InvoiceDownload, InvoiceStatus } from "@/lib/types/invoice";
 import { FileText, Download, Loader2 } from "lucide-react";
 import { apiClient, sanitizeDownloadFilename } from "@/lib/apiClient";
 import { formatDate } from "@/lib/utils";
+import { toast } from "sonner";
+import { storage } from "@/lib/storage";
+import { env } from "@/utils/env";
 
 const STATUS_STYLES: Record<InvoiceStatus, string> = {
   PAID: "bg-green-50 text-green-700",
@@ -61,6 +64,19 @@ function InvoiceRow({ invoice }: { invoice: Invoice }) {
         anchor.click();
       } finally {
         URL.revokeObjectURL(url);
+      const token = storage.getToken();
+      const API_BASE = env.NEXT_PUBLIC_API_URL;
+      const res = await fetch(`${API_BASE}/invoices/${invoice.id}/download`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!res.ok) {
+        throw new Error(
+          res.status === 404
+            ? `Invoice ${invoice.invoiceNumber} could not be found for download.`
+            : res.status === 401 || res.status === 403
+              ? "You are not authorized to download this invoice."
+              : `Unible to download this invoice (status ${res.status}). Please try again.`,
+        );
       }
     } catch (cause) {
       setError(

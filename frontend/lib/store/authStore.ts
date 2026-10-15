@@ -129,7 +129,8 @@ export const useAuthStore = create<AuthStore>()(
               throw new Error("No token available");
             }
 
-            const response = await apiClient.post<AuthResponse>(
+            // The refresh call must never itself trigger the 401 refresh flow.
+            const response = await apiClient.postWithoutRefresh<AuthResponse>(
               "/auth/refresh-token"
             );
 
