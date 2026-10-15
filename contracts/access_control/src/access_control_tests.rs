@@ -1604,12 +1604,8 @@ fn test_multisig_admin_transfer_via_proposal() {
         .is_ok());
 
         // Old admin (admin1) should not be able to perform admin operations
-        let result = AccessControlModule::set_role(
-            &env,
-            admin1.clone(),
-            user.clone(),
-            UserRole::Member,
-        );
+        let result =
+            AccessControlModule::set_role(&env, admin1.clone(), user.clone(), UserRole::Member);
         assert_eq!(
             result.unwrap_err(),
             AccessControlError::AdminRequired,
@@ -1631,8 +1627,7 @@ fn test_multisig_transfer_admin_to_self_fails() {
 
         // Transferring to self should be blocked
         let action = ProposalAction::TransferAdmin(admin1.clone());
-        let result =
-            AccessControlModule::create_proposal(&env, admin1.clone(), action);
+        let result = AccessControlModule::create_proposal(&env, admin1.clone(), action);
         // The proposal should still be creatable, but execution should fail
         assert!(result.is_ok());
 
@@ -1670,7 +1665,8 @@ fn test_multisig_prevents_direct_admin_transfer() {
         AccessControlModule::initialize_multisig(&env, admins, 2, None).unwrap();
 
         // Direct admin transfer should be blocked in multisig mode
-        let result = AccessControlModule::propose_admin_transfer(&env, admin1.clone(), new_admin.clone());
+        let result =
+            AccessControlModule::propose_admin_transfer(&env, admin1.clone(), new_admin.clone());
         assert_eq!(result.unwrap_err(), AccessControlError::InvalidAddress);
     });
 }
@@ -1774,6 +1770,159 @@ fn test_failed_access_persists_attempt() {
                 .persistent()
                 .get::<DataKey, u32>(&DataKey::AccessAttempts(user1)),
             Some(1)
+        );
+    });
+}
+// ==================== CT-23 / CT-24: multisig configuration ====================
+
+#[test]
+fn test_update_multisig_config_full_creates_proposal() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(crate::AccessControl, ());
+    let admin1 = Address::generate(&env);
+    let admin2 = Address::generate(&env);
+    let admin3 = Address::generate(&env);
+
+    env.as_contract(&contract_id, || {
+        let admins = Vec::from_array(&env, [admin1.clone(), admin2.clone(), admin3.clone()]);
+        AccessControlModule::initialize_multisig(&env, admins.clone(), 2, None).unwrap();
+
+        // Reconfiguring returns a real proposal id instead of the old
+        // success-shaped `0` no-op.
+        let proposal_id = AccessControlModule::propose_multisig_config(
+            &env,
+            admin1.clone(),
+            admins.clone(),
+            3,
+            3,
+            3,
+            86_400,
+            50,
+            604_800,
+        )
+        .unwrap();
+
+        let pending = AccessControlModule::get_pending_proposals(&env);
+        assert_eq!(pending.len(), 1);
+        assert!(pending.contains(&proposal_id));
+
+        let proposal = AccessControlModule::get_proposal(&env, proposal_id).unwrap();
+        match proposal.action {
+            ProposalAction::UpdateMultisigConfig(config) => {
+                assert_eq!(config.required_signatures, 3);
+                assert_eq!(config.admins.len(), 3);
+            }
+            other => panic!("expected UpdateMultisigConfig, got {other:?}"),
+        }
+    });
+}
+
+#[test]
+fn test_multisig_config_rejects_duplicate_signers() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(crate::AccessControl, ());
+    let admin1 = Address::generate(&env);
+    let admin2 = Address::generate(&env);
+
+    env.as_contract(&contract_id, || {
+        let seeded = Vec::from_array(&env, [admin1.clone(), admin2.clone()]);
+        AccessControlModule::initialize_multisig(&env, seeded, 2, None).unwrap();
+
+        // admin1 appears twice: a single signer must not fill two quorum slots.
+        let dup = Vec::from_array(&env, [admin1.clone(), admin1.clone(), admin2.clone()]);
+        let result = AccessControlModule::propose_multisig_config(
+            &env,
+            admin1.clone(),
+            dup,
+            2,
+            2,
+            2,
+            86_400,
+            50,
+            604_800,
+        );
+        assert_eq!(result.unwrap_err(), AccessControlError::DuplicateAdmin);
+    });
+}
+
+#[test]
+fn test_multisig_config_rejects_out_of_range_thresholds() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(crate::AccessControl, ());
+    let admin1 = Address::generate(&env);
+    let admin2 = Address::generate(&env);
+
+    env.as_contract(&contract_id, || {
+        let admins = Vec::from_array(&env, [admin1.clone(), admin2.clone()]);
+        AccessControlModule::initialize_multisig(&env, admins.clone(), 2, None).unwrap();
+
+        // Zero threshold.
+        assert_eq!(
+            AccessControlModule::propose_multisig_config(
+                &env,
+                admin1.clone(),
+                admins.clone(),
+                0,
+                0,
+                0,
+                86_400,
+                50,
+                604_800,
+            )
+            .unwrap_err(),
+            AccessControlError::ThresholdTooLow
+        );
+
+        // Threshold larger than the signer set.
+        assert_eq!(
+            AccessControlModule::propose_multisig_config(
+                &env,
+                admin1.clone(),
+                admins.clone(),
+                3,
+                3,
+                3,
+                86_400,
+                50,
+                604_800,
+            )
+            .unwrap_err(),
+            AccessControlError::ThresholdTooHigh
+        );
+    });
+}
+
+#[test]
+fn test_initialize_multisig_rejects_invalid_thresholds_and_duplicates() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin1 = Address::generate(&env);
+    let admin2 = Address::generate(&env);
+
+    let contract_id = env.register(crate::AccessControl, ());
+    env.as_contract(&contract_id, || {
+        let zero = Vec::from_array(&env, [admin1.clone(), admin2.clone()]);
+        assert_eq!(
+            AccessControlModule::initialize_multisig(&env, zero, 0, None).unwrap_err(),
+            AccessControlError::ThresholdTooLow
+        );
+
+        let too_high = Vec::from_array(&env, [admin1.clone(), admin2.clone()]);
+        assert_eq!(
+            AccessControlModule::initialize_multisig(&env, too_high, 3, None).unwrap_err(),
+            AccessControlError::ThresholdTooHigh
+        );
+    });
+
+    let contract_id2 = env.register(crate::AccessControl, ());
+    env.as_contract(&contract_id2, || {
+        let dup = Vec::from_array(&env, [admin1.clone(), admin1.clone()]);
+        assert_eq!(
+            AccessControlModule::initialize_multisig(&env, dup, 1, None).unwrap_err(),
+            AccessControlError::DuplicateAdmin
         );
     });
 }
