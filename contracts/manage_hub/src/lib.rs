@@ -70,6 +70,7 @@ mod fractionalization;
 mod guards;
 pub mod multisig_guards;
 mod membership_token;
+mod metrics;
 mod migration;
 mod pause_errors;
 mod rewards;

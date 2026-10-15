@@ -11,11 +11,27 @@ use soroban_sdk::{symbol_short, Env, Vec};
 
 pub struct BatchModule;
 
-/// Implementation of batch operations for the MembershipTokenContract.
+/// Implementation of batch operations for the [`MembershipTokenContract`].
 ///
-/// Each batch entry returns a [`BatchItemResult`]. Authorization and batch-size
-/// checks still fail the whole call; per-item failures are reported individually
-/// so callers know which index caused the problem without a full revert.
+/// # Atomicity and per-item failure semantics
+///
+/// Batch processing deliberately distinguishes two tiers of failure so the
+/// implementation and the API agree on what a failure means:
+///
+/// * **Invocation-level failures** — a batch-size violation
+///   ([`BatchValidator::validate_batch_size`]) or an authorization/host failure
+///   (for example a `require_auth` that traps) abort the whole call. Nothing is
+///   persisted and no [`BatchItemResult`] is returned.
+/// * **Per-item failures** — an individual entry that fails its own validation
+///   (already-issued id, missing token, …) is *caught* and reported as a
+///   [`BatchItemResult`] with `success == false` and a non-zero `error_code`.
+///   Processing continues with the remaining entries and the call returns `Ok`.
+///   Because a Soroban invocation commits as a unit, the entries that already
+///   succeeded in the same call **are** persisted: a failed entry does not roll
+///   back its siblings.
+///
+/// The returned vector always contains exactly one [`BatchItemResult`] per input
+/// item, in input order, with `index` equal to the input position.
 impl BatchModule {
     /// Mints multiple tokens in a single transaction.
     /// Requires admin authorization for each mint if issue_token requires it.
