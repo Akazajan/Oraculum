@@ -28,13 +28,13 @@ export class CsvExportService {
    * Stream large datasets as CSV for memory efficiency.
    * Uses a generator to yield CSV chunks.
    */
-  *toCsvStream(
+  async *toCsvStream(
     dataIterator: AsyncIterable<Record<string, unknown>>,
     columns: Array<{ key: string; header: string }>,
-  ): Generator<string, void, unknown> {
+  ): AsyncGenerator<string, void, unknown> {
     yield columns.map((c) => c.header).join(',') + '\n';
 
-    for (const row of dataIterator) {
+    for await (const row of dataIterator) {
       yield columns
         .map((col) => {
           const value = row[col.key];
@@ -45,10 +45,18 @@ export class CsvExportService {
   }
 
   private escapeField(value: string): string {
-    if (value.includes(',') || value.includes('"') || value.includes('\n')) {
-      return `"${value.replace(/"/g, '""')}"`;
+    // Neutralise spreadsheet formula injection: prefix dangerous leading
+    // characters with a single-quote so the cell is treated as plain text.
+    const sanitized = /^[=+\-@\t\r]/.test(value) ? `'${value}` : value;
+
+    if (
+      sanitized.includes(',') ||
+      sanitized.includes('"') ||
+      sanitized.includes('\n')
+    ) {
+      return `"${sanitized.replace(/"/g, '""')}"`;
     }
-    return value;
+    return sanitized;
   }
 
   private formatValue(value: unknown): string {
