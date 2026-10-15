@@ -37,6 +37,13 @@ impl TestTypesContract {
         let _membership = status;
         Symbol::new(&_env, "success")
     }
+
+    /// Exposes the shared pagination validation through a real contract entry
+    /// point so tests can confirm invalid/oversized requests are rejected by
+    /// the common rules.
+    pub fn validate_page(_env: Env, offset: u32, limit: u32) -> bool {
+        crate::validate_page_params(offset, limit).is_ok()
+    }
 }
 
 #[contract]
@@ -182,9 +189,76 @@ mod tests {
     }
 }
 
+/// #757 (CT-38) — shared pagination validation.
+///
+/// Covers the zero (invalid), maximum (valid), and overflow (invalid) inputs
+/// required by the issue, through both the pure helper and a contract entry
+/// point.
+#[cfg(test)]
+mod pagination_tests {
+    use super::*;
+    use crate::{validate_page_params, PageParams, MAX_PAGE_SIZE};
+
+    #[test]
+    fn zero_limit_is_rejected() {
+        assert!(validate_page_params(0, 0).is_err());
+        assert!(PageParams::range(0, 0).validate().is_err());
+    }
+
+    #[test]
+    fn maximum_limit_is_accepted() {
+        assert!(validate_page_params(0, MAX_PAGE_SIZE).is_ok());
+        assert!(PageParams::range(0, MAX_PAGE_SIZE).validate().is_ok());
+    }
+
+    #[test]
+    fn oversized_limit_is_rejected() {
+        assert!(validate_page_params(0, MAX_PAGE_SIZE + 1).is_err());
+        assert!(PageParams::range(0, MAX_PAGE_SIZE + 1).validate().is_err());
+    }
+
+    #[test]
+    fn overflow_limit_is_rejected() {
+        // `u32::MAX` is the overflow input; it must fail as oversized rather
+        // than wrap or truncate.
+        assert!(validate_page_params(0, u32::MAX).is_err());
+    }
+
+    #[test]
+    fn offset_is_unbounded_and_saturates() {
+        // A huge offset is valid (an out-of-range page is simply empty)...
+        assert!(validate_page_params(u32::MAX, 1).is_ok());
+        // ...and page-index arithmetic saturates rather than overflowing.
+        let page = PageParams::page(u32::MAX);
+        assert_eq!(page.offset, u32::MAX);
+        assert_eq!(page.limit, PageParams::default().limit);
+    }
+
+    #[test]
+    fn default_page_params_are_valid() {
+        let params = PageParams::default();
+        assert_eq!(params.offset, 0);
+        assert!(params.validate().is_ok());
+    }
+
+    #[test]
+    fn contract_entry_point_uses_shared_validation() {
+        let env = Env::default();
+        let contract_id = env.register(TestTypesContract, ());
+        let client = TestTypesContractClient::new(&env, &contract_id);
+
+        assert!(client.validate_page(&0, &MAX_PAGE_SIZE));
+        assert!(!client.validate_page(&0, &0));
+        assert!(!client.validate_page(&0, &(MAX_PAGE_SIZE + 1)));
+        assert!(!client.validate_page(&0, &u32::MAX));
+        assert!(client.validate_page(&u32::MAX, &1));
+    }
+}
+
 #[cfg(test)]
 mod storage_version_tests {
     use super::*;
+    use soroban_sdk::testutils::Address as _;
 
     #[test]
     fn test_storage_version_end_to_end_migration() {
@@ -220,7 +294,7 @@ mod storage_version_tests {
 
         // Verify old data is still accessible after migration
         let retrieved = client.get_test_data(&key);
-        assert_eq!(retrieved, Some(value));
+        assert_eq!(retrieved, Some(value.clone()));
 
         // Verify migration to same version fails
         // The contract method uses unwrap, so this would panic if called
