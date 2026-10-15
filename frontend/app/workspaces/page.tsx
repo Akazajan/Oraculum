@@ -1,11 +1,17 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import DashboardLayout from "@/components/dashboard/DashboardLayout";
 import { useGetWorkspaces } from "@/lib/react-query/hooks/workspaces/useGetWorkspaces";
 import { WorkspaceType } from "@/lib/types/workspace";
 import WorkspaceCard from "@/components/workspaces/WorkspaceCard";
+import { createDebounced } from "@/lib/debounce";
+import {
+  filtersFromSearchParams,
+  searchParamsFromFilters,
+  toWorkspaceQuery,
+} from "@/lib/workspaceFilters";
 import {
   Search,
   SlidersHorizontal,
@@ -24,35 +30,82 @@ const WORKSPACE_TYPES: { label: string; value: WorkspaceType | "" }[] = [
   { label: "Dedicated Desk", value: "DEDICATED_DESK" },
 ];
 
+const WORKSPACE_TYPE_VALUES: readonly WorkspaceType[] = WORKSPACE_TYPES.map(
+  (t) => t.value
+).filter((value): value is WorkspaceType => value !== "");
+
+const PAGE_SIZE = 9;
+
+/**
+ * How long typing has to pause before the term is sent to the API. The input
+ * stays responsive on every keystroke; only the settled term reaches the query.
+ */
+const SEARCH_DEBOUNCE_MS = 300;
+
 export default function WorkspacesPage() {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
 
-  const initialSearch = searchParams.get("search") ?? "";
-  const initialType = searchParams.get("type") ?? "";
-
-  const [search, setSearch] = useState(initialSearch);
-  const [type, setType] = useState<WorkspaceType | "">(
-    WORKSPACE_TYPES.some((t) => t.value === initialType)
-      ? (initialType as WorkspaceType | "")
-      : ""
+  const [initialFilters] = useState(() =>
+    filtersFromSearchParams(
+      new URLSearchParams(searchParams.toString()),
+      WORKSPACE_TYPE_VALUES
+    )
   );
+
+  // `searchInput` is what the box shows; `search` is the settled term the query
+  // and the URL are built from.
+  const [searchInput, setSearchInput] = useState(initialFilters.search);
+  const [search, setSearch] = useState(initialFilters.search);
+  const [type, setType] = useState<WorkspaceType | "">(initialFilters.type);
   const [page, setPage] = useState(1);
 
+  const settleSearch = useMemo(
+    () =>
+      createDebounced((value: string) => {
+        setSearch(value);
+        setPage(1);
+      }, SEARCH_DEBOUNCE_MS),
+    []
+  );
+
   useEffect(() => {
-    const params = new URLSearchParams();
+    settleSearch.schedule(searchInput);
+    return () => settleSearch.cancel();
+  }, [searchInput, settleSearch]);
 
-    if (search) params.set("search", search);
-    if (type) params.set("type", type);
+  // Outbound: the settled filters are the single source of truth for the URL.
+  const lastWrittenUrl = useRef<string | null>(null);
 
-    const query = params.toString();
+  useEffect(() => {
+    const next = searchParamsFromFilters({ search, type });
+    if (next === searchParams.toString()) return;
 
-    router.replace(query ? `${pathname}?${query}` : pathname, {
-      scroll: false,
-    });
-  }, [search, type, pathname, router]);
+    lastWrittenUrl.current = next;
+    router.replace(next ? `${pathname}?${next}` : pathname, { scroll: false });
+  }, [search, type, pathname, router, searchParams]);
 
+  // Inbound: restoring a URL we did not write (back/forward, or a shared link)
+  // puts the controls back the way the URL describes.
+  useEffect(() => {
+    const current = searchParams.toString();
+    if (current === lastWrittenUrl.current) return;
+
+    const fromUrl = filtersFromSearchParams(
+      new URLSearchParams(current),
+      WORKSPACE_TYPE_VALUES
+    );
+
+    setSearchInput(fromUrl.search);
+    setSearch(fromUrl.search);
+    setType(fromUrl.type);
+    setPage(1);
+  }, [searchParams]);
+
+  const { data, isLoading, isError, isFetching } = useGetWorkspaces(
+    toWorkspaceQuery({ search, type }, page, PAGE_SIZE)
+  );
   const { data, isLoading, isError, refetch, isFetching } = useGetWorkspaces({
     search: search || undefined,
     type: type || undefined,
@@ -63,6 +116,7 @@ export default function WorkspacesPage() {
   const workspaces = data?.data ?? [];
   const meta = data?.meta;
 
+  const hasActiveFilters = searchInput !== "" || type !== "";
   // One explicit state per outcome, so loading, failure, empty and success can
   // never be mistaken for one another.
   const panel = queryPanelState({
@@ -74,6 +128,8 @@ export default function WorkspacesPage() {
   const hasActiveFilters = search !== "" || type !== "";
 
   const handleClearFilters = () => {
+    settleSearch.cancel();
+    setSearchInput("");
     setSearch("");
     setType("");
     setPage(1);
@@ -94,20 +150,25 @@ export default function WorkspacesPage() {
         <div className="relative flex-1">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
           <input
-            type="text"
+            type="search"
             placeholder="Search workspaces..."
-            value={search}
-            onChange={(e) => {
-              setSearch(e.target.value);
-              setPage(1);
-            }}
-            className="w-full pl-9 pr-4 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-gray-200"
+            aria-label="Search workspaces"
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
+            className="w-full pl-9 pr-9 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-gray-200"
           />
+          {isFetching && !isLoading && (
+            <Loader2
+              aria-hidden="true"
+              className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 animate-spin"
+            />
+          )}
         </div>
 
         <div className="relative">
           <SlidersHorizontal className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
           <select
+            aria-label="Filter by workspace type"
             value={type}
             onChange={(e) => {
               setType(e.target.value as WorkspaceType | "");
@@ -174,7 +235,7 @@ export default function WorkspacesPage() {
           <p className="text-sm mt-1">Try adjusting your search or filters.</p>
         </div>
       ) : (
-        <>
+        <div aria-busy={isFetching}>
           <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-5">
             {workspaces.map((ws) => (
               <WorkspaceCard key={ws.id} workspace={ws} />
@@ -185,8 +246,8 @@ export default function WorkspacesPage() {
           {meta && meta.totalPages > 1 && (
             <div className="flex items-center justify-between mt-8">
               <p className="text-sm text-gray-500">
-                Showing {(page - 1) * 9 + 1}-
-                {Math.min(page * 9, meta.total)} of {meta.total}
+                Showing {(page - 1) * PAGE_SIZE + 1}-
+                {Math.min(page * PAGE_SIZE, meta.total)} of {meta.total}
               </p>
 
               <div className="flex gap-2">
@@ -208,7 +269,7 @@ export default function WorkspacesPage() {
               </div>
             </div>
           )}
-        </>
+        </div>
       )}
     </DashboardLayout>
   );
