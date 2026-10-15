@@ -59,8 +59,10 @@ export class CreateBookingProvider {
         .andWhere('b.status IN (:...statuses)', {
           statuses: [BookingStatus.PENDING, BookingStatus.CONFIRMED],
         })
-        .andWhere('b.startDate <= :endDate', { endDate: dto.endDate })
-        .andWhere('b.endDate >= :startDate', { startDate: dto.startDate })
+        // Bookings use half-open intervals [startDate, endDate), so touching
+        // reservations do not overlap.
+        .andWhere('b.startDate < :endDate', { endDate: dto.endDate })
+        .andWhere('b.endDate > :startDate', { startDate: dto.startDate })
         .getRawOne<{ booked: string }>();
 
       const alreadyBooked = Number(overlap?.booked ?? 0);

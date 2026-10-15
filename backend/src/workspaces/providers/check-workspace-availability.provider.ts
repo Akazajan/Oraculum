@@ -1,7 +1,8 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { Workspace } from '../entities/workspace.entity';
+import { Booking } from '../../bookings/entities/booking.entity';
+import { BookingStatus } from '../../bookings/enums/booking-status.enum';
 import { FindWorkspaceByIdProvider } from './find-workspace-by-id.provider';
 
 export interface AvailabilityResult {
@@ -14,15 +15,33 @@ export interface AvailabilityResult {
 @Injectable()
 export class CheckWorkspaceAvailabilityProvider {
   constructor(
-    @InjectRepository(Workspace)
-    private readonly workspacesRepository: Repository<Workspace>,
+    @InjectRepository(Booking)
+    private readonly bookingsRepository: Repository<Booking>,
     private readonly findWorkspaceByIdProvider: FindWorkspaceByIdProvider,
   ) {}
 
   async check(
     workspaceId: string,
     requestedSeats: number = 1,
+    startDate?: string,
+    endDate?: string,
   ): Promise<AvailabilityResult> {
+    if ((startDate === undefined) !== (endDate === undefined)) {
+      throw new BadRequestException(
+        'startDate and endDate must be provided together',
+      );
+    }
+
+    if (startDate !== undefined && endDate !== undefined) {
+      const start = new Date(startDate).getTime();
+      const end = new Date(endDate).getTime();
+      if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
+        throw new BadRequestException(
+          'endDate must be a valid date after startDate',
+        );
+      }
+    }
+
     const workspace =
       await this.findWorkspaceByIdProvider.findById(workspaceId);
 
@@ -35,14 +54,33 @@ export class CheckWorkspaceAvailabilityProvider {
       };
     }
 
-    const available = workspace.availableSeats >= requestedSeats;
+    let availableSeats = workspace.availableSeats;
+    if (startDate !== undefined && endDate !== undefined) {
+      const bookings = await this.bookingsRepository
+        .createQueryBuilder('b')
+        .select('COALESCE(SUM(b.seatCount), 0)', 'booked')
+        .where('b.workspaceId = :workspaceId', { workspaceId })
+        .andWhere('b.status IN (:...statuses)', {
+          statuses: [BookingStatus.PENDING, BookingStatus.CONFIRMED],
+        })
+        // Match creation's half-open [startDate, endDate) overlap rule.
+        .andWhere('b.startDate < :endDate', { endDate })
+        .andWhere('b.endDate > :startDate', { startDate })
+        .getRawOne<{ booked: string }>();
+      availableSeats = Math.max(
+        0,
+        workspace.totalSeats - Number(bookings?.booked ?? 0),
+      );
+    }
+
+    const available = availableSeats >= requestedSeats;
     return {
       available,
-      availableSeats: workspace.availableSeats,
+      availableSeats,
       totalSeats: workspace.totalSeats,
       message: available
         ? undefined
-        : `Only ${workspace.availableSeats} seats available`,
+        : `Only ${availableSeats} seats available`,
     };
   }
 }
