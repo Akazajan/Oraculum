@@ -11,6 +11,6 @@ export default defineConfig({
   test: {
     css: false,
     environment: "jsdom",
-    include: ["lib/**/*.test.ts"],
+    include: ["lib/**/*.test.ts", "utils/**/*.test.ts"],
   },
 });
