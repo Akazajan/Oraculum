@@ -432,6 +432,93 @@ fn test_batch_transfer_reports_missing_token() {
 }
 
 // ---------------------------------------------------------------------------
+// #752 (CT-33) — Batch atomicity and per-item failure semantics
+// ---------------------------------------------------------------------------
+
+/// A single failing item must not roll back the items that already succeeded
+/// in the same invocation: the successful mint is persisted, the failing one
+/// is reported as a per-item outcome, and the call still returns `Ok`.
+#[test]
+fn test_batch_mint_persists_successful_items_after_a_failure() {
+    let (env, _admin, contract_id) = setup_contract();
+    let client = ContractClient::new(&env, &contract_id);
+
+    let user = Address::generate(&env);
+    let expiry = env.ledger().timestamp() + 86_400;
+
+    let id_ok = BytesN::<32>::random(&env);
+    let id_dup = id_ok.clone();
+
+    // Pre-issue the id used by the *second* entry so it collides.
+    client.issue_token(&id_dup, &user, &expiry);
+
+    let mut batch = soroban_sdk::Vec::new(&env);
+    // First entry: a fresh id that should succeed.
+    batch.push_back(crate::types::BatchMintParams {
+        id: id_ok.clone(),
+        user: user.clone(),
+        expiry_date: expiry,
+    });
+    // Second entry: the already-issued id that must fail.
+    batch.push_back(crate::types::BatchMintParams {
+        id: id_dup.clone(),
+        user: user.clone(),
+        expiry_date: expiry,
+    });
+
+    // A mixed batch returns Ok with one outcome per item (no full revert).
+    let results = client.batch_mint(&batch);
+    assert_eq!(results.len(), 2);
+    assert!(results.get(0).unwrap().success);
+    assert!(!results.get(1).unwrap().success);
+
+    // Persisted state after the failure: the successful entry is committed
+    // (reading it back would error if a sibling failure had rolled it back).
+    let created = client.get_token(&id_ok);
+    assert_eq!(created.user, user);
+}
+
+/// When every item fails, the call still returns `Ok` with one failure outcome
+/// per item (and persists nothing new).
+#[test]
+fn test_batch_mint_all_failures_reports_every_item() {
+    let (env, _admin, contract_id) = setup_contract();
+    let client = ContractClient::new(&env, &contract_id);
+
+    let user = Address::generate(&env);
+    let expiry = env.ledger().timestamp() + 86_400;
+
+    let id_a = BytesN::<32>::random(&env);
+    let id_b = BytesN::<32>::random(&env);
+    // Pre-issue both so both batch entries collide.
+    client.issue_token(&id_a, &user, &expiry);
+    client.issue_token(&id_b, &user, &expiry);
+
+    let mut batch = soroban_sdk::Vec::new(&env);
+    batch.push_back(crate::types::BatchMintParams {
+        id: id_a.clone(),
+        user: user.clone(),
+        expiry_date: expiry,
+    });
+    batch.push_back(crate::types::BatchMintParams {
+        id: id_b.clone(),
+        user: user.clone(),
+        expiry_date: expiry,
+    });
+
+    let results = client.batch_mint(&batch);
+    assert_eq!(results.len(), 2);
+    for (i, item) in results.iter().enumerate() {
+        assert_eq!(item.index, i as u32);
+        assert!(!item.success);
+        assert_eq!(
+            item.error_code,
+            u32::from(crate::errors::Error::TokenAlreadyIssued)
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
 // #282 — Paginated list_tokens
 // ---------------------------------------------------------------------------
 

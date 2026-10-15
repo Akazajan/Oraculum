@@ -794,14 +794,17 @@ impl SubscriptionContract {
             .persistent()
             .set(&SubscriptionDataKey::TierList, &tier_list);
 
-        // Initialize tier analytics
+        // Initialize tier analytics. A brand-new tier has no subscribers, so
+        // its churn rate is 0; this is derived through the shared helper
+        // (rather than a hard-coded placeholder) so the value stays consistent
+        // with `get_tier_analytics`.
         let analytics = TierAnalytics {
             tier_id: tier.id.clone(),
             active_subscribers: 0,
             total_revenue: 0,
             upgrades_count: 0,
             downgrades_count: 0,
-            churn_rate: 0, // Placeholder
+            churn_rate: crate::metrics::calculate_churn_rate(0, 0),
             updated_at: current_time,
         };
         env.storage().persistent().set(
@@ -1720,10 +1723,28 @@ impl SubscriptionContract {
     }
 
     pub fn get_tier_analytics(env: Env, tier_id: String) -> Result<TierAnalytics, Error> {
-        env.storage()
+        let mut analytics: TierAnalytics = env
+            .storage()
             .persistent()
             .get(&SubscriptionDataKey::TierAnalytics(tier_id))
-            .ok_or(Error::TierNotFound)
+            .ok_or(Error::TierNotFound)?;
+
+        // CT-31: derive the churn rate from an explicit reporting period rather
+        // than emitting a hard-coded placeholder. The subscriber base at the
+        // start of the period is everyone currently active plus everyone who
+        // left the tier (recorded as a downgrade); the base at the end is the
+        // current active set. A tier with no subscribers therefore reports 0,
+        // a steady base reports 0, and a base that shrank reports a positive
+        // percentage (see `metrics::calculate_churn_rate`).
+        let subscribers_at_start = analytics
+            .active_subscribers
+            .saturating_add(analytics.downgrades_count);
+        analytics.churn_rate = crate::metrics::calculate_churn_rate(
+            subscribers_at_start,
+            analytics.active_subscribers,
+        );
+
+        Ok(analytics)
     }
 
     // ============================================================================
