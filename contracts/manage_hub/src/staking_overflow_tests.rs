@@ -334,3 +334,74 @@ fn test_emergency_unstake_penalty_overflow_propagates() {
         "i128::MAX * 10_000 must overflow and return None"
     );
 }
+
+// ---------------------------------------------------------------------------
+// CT-36 — accumulating stakes is overflow-safe and performs no partial writes
+// ---------------------------------------------------------------------------
+
+/// Adding to an existing stake must validate the accumulated principal with
+/// checked arithmetic *before* the external token transfer. When the
+/// accumulation overflows, the call must return a stable contract error and
+/// move no tokens (no partial write).
+#[test]
+fn test_stake_accumulation_overflow_moves_no_tokens() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(Contract, ());
+    let client = ContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+
+    // Real staking token + reward pool so the transfer path is exercised.
+    let staking_token = env.register_stellar_asset_contract_v2(admin.clone());
+    let reward_token = env.register_stellar_asset_contract_v2(admin.clone());
+    let sac = soroban_sdk::token::StellarAssetClient::new(&env, &staking_token.address());
+
+    let config = StakingConfig {
+        staking_enabled: true,
+        emergency_unstake_penalty_bps: 500,
+        staking_token: staking_token.address(),
+        reward_pool: reward_token.address(),
+    };
+    client.set_staking_config(&admin, &config);
+
+    // min_stake_amount == 1 so the near-max stake is accepted.
+    let tier = make_tier(&env, "acc_overflow_tier", 100);
+    client.create_staking_tier(&admin, &tier);
+
+    let staker = Address::generate(&env);
+    sac.mint(&staker, &i128::MAX);
+
+    // First stake locks i128::MAX - 1, leaving exactly 1 token.
+    client.stake_tokens(
+        &staker,
+        &String::from_str(&env, "acc_overflow_tier"),
+        &(i128::MAX - 1),
+    );
+    assert_eq!(sac.balance(&staker), 1);
+    assert_eq!(
+        client.get_stake_info(&staker).unwrap().amount,
+        i128::MAX - 1
+    );
+
+    // A second stake would overflow the accumulated principal. It must fail
+    // before any transfer, so the staker keeps their last token and the
+    // recorded stake stays untouched.
+    let result = client.try_stake_tokens(
+        &staker,
+        &String::from_str(&env, "acc_overflow_tier"),
+        &10,
+    );
+    assert!(result.is_err(), "overflowing accumulation must be rejected");
+    assert_eq!(
+        sac.balance(&staker),
+        1,
+        "no tokens may move when accumulation overflows"
+    );
+    assert_eq!(
+        client.get_stake_info(&staker).unwrap().amount,
+        i128::MAX - 1,
+        "recorded stake must be unchanged when accumulation overflows"
+    );
+}
