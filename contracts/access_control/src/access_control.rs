@@ -84,19 +84,6 @@ impl AccessControlModule {
             return Err(AccessControlError::ConfigurationError);
         }
 
-        if admins.is_empty() || required_signatures == 0 || required_signatures > admins.len() {
-            return Err(AccessControlError::InvalidAddress);
-        }
-
-        // Validate no duplicate admins
-        for i in 0..admins.len() {
-            for j in (i + 1)..admins.len() {
-                if admins.get(i).unwrap() == admins.get(j).unwrap() {
-                    return Err(AccessControlError::DuplicateAdmin);
-                }
-            }
-        }
-
         // Set reasonable defaults for thresholds
         let critical_threshold = (required_signatures + 1).min(admins.len());
         let emergency_threshold = (critical_threshold + 1).min(admins.len());
@@ -111,9 +98,9 @@ impl AccessControlModule {
             proposal_expiry_duration: 604800, // 7 days default
         };
 
-        if !multisig_config.validate() {
-            return Err(AccessControlError::InvalidMultisigConfig);
-        }
+        // Reject empty signer sets, out-of-range thresholds and duplicate
+        // signers before any state is written.
+        Self::validate_multisig_input(&multisig_config)?;
 
         env.storage()
             .persistent()
@@ -160,6 +147,32 @@ impl AccessControlModule {
             (admins.clone(), config.clone()),
         );
 
+        Ok(())
+    }
+
+    /// Validate the raw parameters of a multisig configuration, returning the
+    /// most specific error for the violation.
+    ///
+    /// Enforces `1 <= required_signatures <= signer_count`, a non-empty signer
+    /// set, and rejects duplicate signers so a single address cannot satisfy
+    /// more than one slot of a quorum. Shared by initialization and every
+    /// reconfiguration path that builds a [`MultiSigConfig`].
+    pub fn validate_multisig_input(config: &MultiSigConfig) -> AccessControlResult<()> {
+        if config.admins.is_empty() {
+            return Err(AccessControlError::InvalidAddress);
+        }
+        if config.required_signatures == 0 {
+            return Err(AccessControlError::ThresholdTooLow);
+        }
+        if config.required_signatures > config.admins.len() {
+            return Err(AccessControlError::ThresholdTooHigh);
+        }
+        if config.has_duplicate_admins() {
+            return Err(AccessControlError::DuplicateAdmin);
+        }
+        if !config.validate() {
+            return Err(AccessControlError::InvalidMultisigConfig);
+        }
         Ok(())
     }
 
@@ -783,8 +796,6 @@ impl AccessControlModule {
         approver: Address,
         proposal_id: u64,
     ) -> AccessControlResult<()> {
-        Self::require_admin(env, &approver)?;
-
         let mut proposal: PendingProposal = env
             .storage()
             .persistent()
@@ -801,6 +812,10 @@ impl AccessControlModule {
             return Err(AccessControlError::ProposalExpired);
         }
 
+        // One signer, one vote: detect a repeated approval (or an approval
+        // after a rejection) before any authorization work. This keeps the
+        // approval count monotonically increasing by exactly one per signer
+        // and makes a duplicate call a cheap, explicit no-op rejection.
         if proposal.approvals.contains(&approver) {
             return Err(AccessControlError::AlreadyApproved);
         }
@@ -808,6 +823,8 @@ impl AccessControlModule {
         if proposal.rejections.contains(&approver) {
             return Err(AccessControlError::AlreadyRejected);
         }
+
+        Self::require_admin(env, &approver)?;
 
         proposal.approvals.push_back(approver.clone());
 
@@ -910,9 +927,9 @@ impl AccessControlModule {
                 );
             }
             ProposalAction::UpdateMultisigConfig(new_config) => {
-                if !new_config.validate() {
-                    return Err(AccessControlError::InvalidMultisigConfig);
-                }
+                // Reconfiguration must satisfy the same threshold and
+                // duplicate-signer rules as first-time initialization.
+                Self::validate_multisig_input(&new_config)?;
                 env.storage()
                     .persistent()
                     .set(&DataKey::MultiSigConfig, &new_config);
@@ -927,10 +944,8 @@ impl AccessControlModule {
                     .persistent()
                     .set(&DataKey::EmergencyMode, &false);
 
-                env.events().publish(
-                    (symbol_short!("clr_emrg"),),
-                    proposal.proposer.clone(),
-                );
+                env.events()
+                    .publish((symbol_short!("clr_emrg"),), proposal.proposer.clone());
             }
             ProposalAction::BatchBlacklist(users) => {
                 // Size pre-validated; process every address exactly once
@@ -1032,12 +1047,10 @@ impl AccessControlModule {
                     env.storage()
                         .persistent()
                         .set(&DataKey::UserRole(new_admin.clone()), &UserRole::Admin);
-                    env.storage()
-                        .persistent()
-                        .set(
-                            &DataKey::UserRole(proposal.proposer.clone()),
-                            &UserRole::Guest,
-                        );
+                    env.storage().persistent().set(
+                        &DataKey::UserRole(proposal.proposer.clone()),
+                        &UserRole::Guest,
+                    );
                 } else {
                     // Single-admin mode: transfer ownership via DataKey::Admin
                     let current_admin =
@@ -1056,10 +1069,7 @@ impl AccessControlModule {
                         .set(&DataKey::UserRole(new_admin.clone()), &UserRole::Admin);
                     env.storage()
                         .persistent()
-                        .set(
-                            &DataKey::UserRole(current_admin.clone()),
-                            &UserRole::Guest,
-                        );
+                        .set(&DataKey::UserRole(current_admin.clone()), &UserRole::Guest);
                 }
 
                 env.events().publish(
@@ -1137,8 +1147,7 @@ impl AccessControlModule {
         // A proposal can be rejected once enough admins can block its approval threshold.
         let multisig_config =
             Self::get_multisig_config(env).ok_or(AccessControlError::MultisigNotEnabled)?;
-        let rejection_threshold =
-            multisig_config.admins.len() - proposal.required_signatures + 1;
+        let rejection_threshold = multisig_config.admins.len() - proposal.required_signatures + 1;
 
         if proposal.rejections.len() >= rejection_threshold {
             // Proposal rejected - clean it up using the dedicated helper
@@ -1316,7 +1325,7 @@ impl AccessControlModule {
             .set(&DataKey::ProposalStats, &stats);
 
         env.events()
-            .publish((symbol_short!("rejected_cleanup"), proposal_id), ());
+            .publish((symbol_short!("rej_clean"), proposal_id), ());
 
         Ok(())
     }
