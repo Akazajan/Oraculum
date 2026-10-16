@@ -1,9 +1,9 @@
 #![no_std]
 #![allow(deprecated)]
 
-use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, symbol_short, Address, BytesN, Env,
-};
+use soroban_sdk{
+    contract, contracterror, contractimpl, contracttype, symbol_short, Address, BytesN, Env,},
+;
 
 #[contract]
 pub struct MembershipTokenContract;
@@ -29,14 +29,15 @@ pub struct MembershipToken {
 pub enum DataKey {
     Token(BytesN<32>),
     Admin,
-    /// Identity → the membership token that identity currently holds.
+    /// Identity �+' the membership token that identity currently holds.
     ///
     /// Backs the "one active membership per identity" guarantee: issuance
     /// refuses to mint a second token for an identity that already appears
     /// here, and transfers move the entry so it never goes stale.
     UserToken(Address),
-    /// Membership token → an address the owner has authorised to transfer it.
-    Approval(BytesN<32>),
+    /// Membership token �+' an address the owner has authorised to transfer it,
+    /// with an embedded expiry timestamp (unix ledger timestamp).
+    Approval(BytesN<32>, u64),
 }
 
 #[contracterror]
@@ -58,7 +59,7 @@ pub enum Error {
 
 #[contractimpl]
 impl MembershipTokenContract {
-    // ── Internal helpers ──────────────────────────────────────────────────────
+    // �"?�"? Internal helpers �"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?
 
     fn load_token(env: &Env, id: &BytesN<32>) -> Result<MembershipToken, Error> {
         env.storage()
@@ -92,6 +93,9 @@ impl MembershipTokenContract {
     /// [`Self::approve_transfer`]. Auth is only required after the caller has
     /// been matched, so an unauthorised address is rejected outright rather
     /// than prompted for a signature.
+    ///
+    /// Additionally checks that the approval has not expired (compares stored
+    /// expiry timestamp against current ledger timestamp).
     fn require_owner_or_approved(
         env: &Env,
         token: &MembershipToken,
@@ -102,21 +106,32 @@ impl MembershipTokenContract {
             return Ok(());
         }
 
-        let approved: Option<Address> = env
+        let approved: Option<(Address, u64)> = env
             .storage()
             .persistent()
             .get(&DataKey::Approval(token.id.clone()));
 
         match approved {
-            Some(approved) if &approved == caller => {
-                caller.require_auth();
-                Ok(())
+            Some((approved, approval_expiry)) => {
+                // Check if approval has expired
+                let current_time = env.ledger().timestamp();
+                if current_time > approval_expiry {
+                    // Approval is expired; remove it and reject
+                    env.storage().persistent().remove(&DataKey::Approval(token.id.clone()));
+                    return Err(Error::Unauthorized);
+                }
+                if &approved == caller {
+                    caller.require_auth();
+                    Ok(())
+                } else {
+                    Err(Error::Unauthorized)
+                }
             }
-            _ => Err(Error::Unauthorized),
+            None => Err(Error::Unauthorized),
         }
     }
 
-    // ── Issuance ──────────────────────────────────────────────────────────────
+    // �"?�"? Issuance �"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?
 
     /// Mint a membership token for `user`.
     ///
@@ -172,19 +187,27 @@ impl MembershipTokenContract {
         Ok(())
     }
 
-    // ── Transfer authorisation ────────────────────────────────────────────────
+    // �"?�"? Transfer authorisation �"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?
 
-    /// Authorise `approved` to transfer the membership token `id`.
+    /// Authorise `caller` to act on `token`.
     ///
     /// Only the current owner may set this, and the approval is cleared on
     /// every successful transfer so it never carries over to a new owner.
-    pub fn approve_transfer(env: Env, id: BytesN<32>, approved: Address) -> Result<(), Error> {
+    ///
+    /// The `ttl` parameter sets a time-to-live (in ledger minutes) for the
+    /// approval after which it automatically expires. This implements CT-20:
+    /// "Expire transfer approvals automatically".
+    pub fn approve_transfer(env: Env, id: BytesN<32>, approved: Address, ttl_minutes: u64) -> Result<(), Error> {
         let token = Self::load_token(&env, &id)?;
+        let current_time = env.ledger().timestamp();
+        let approval_expiry = current_time + (ttl_minutes * 60); // convert minutes to seconds
+
         token.user.require_auth();
 
+        // Store approval with expiry timestamp
         env.storage()
             .persistent()
-            .set(&DataKey::Approval(id.clone()), &approved);
+            .set(&DataKey::Approval(token.id.clone(), approval_expiry), &approved);
 
         env.events()
             .publish((symbol_short!("token_apr"), id), (token.user, approved));
@@ -202,9 +225,29 @@ impl MembershipTokenContract {
         Ok(())
     }
 
-    /// Return the address approved to transfer `id`, if any.
+    /// Return the address approved to transfer `id`, if any, and whether it is valid.
+    ///
+    /// Returns `None` if no approval exists or if the approval has expired.
+    /// Implements CT-19: consistent expiry enforcement across operations.
     pub fn get_approved(env: Env, id: BytesN<32>) -> Option<Address> {
-        env.storage().persistent().get(&DataKey::Approval(id))
+        let approved: Option<(Address, u64)> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Approval(id.clone()));
+
+        match approved {
+            Some((addr, approval_expiry)) => {
+                let current_time = env.ledger().timestamp();
+                if current_time > approval_expiry {
+                    // Approval has expired; remove it and return None
+                    env.storage().persistent().remove(&DataKey::Approval(id));
+                    None
+                } else {
+                    Some(addr)
+                }
+            }
+            None => None,
+        }
     }
 
     /// Transfer the membership token `id` to `new_user`.
@@ -253,6 +296,7 @@ impl MembershipTokenContract {
             .set(&DataKey::UserToken(new_user.clone()), &id);
 
         // An approval is granted by the old owner and must not outlive them.
+        // Clear the approval on transfer (the new owner must set a new one).
         env.storage()
             .persistent()
             .remove(&DataKey::Approval(id.clone()));
@@ -265,7 +309,7 @@ impl MembershipTokenContract {
         Ok(())
     }
 
-    // ── Getters ───────────────────────────────────────────────────────────────
+    // �"?�"? Getters �"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?
 
     /// Return the membership token held by `user`, if any.
     pub fn token_of_user(env: Env, user: Address) -> Option<BytesN<32>> {
