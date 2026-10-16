@@ -39,6 +39,7 @@ import { Booking } from './entities/booking.entity';
 import { CsvExportService } from '../common/csv-export/csv-export.service';
 import { ExportBookingsProvider } from './providers/export-bookings.provider';
 import { CreateRecurringBookingDto } from '../modules/bookings/recurring-booking';
+import { IdempotencyGuard } from '../common/guards/idempotency.guard';
 
 @ApiTags('bookings')
 @ApiBearerAuth('bearer')
@@ -56,6 +57,7 @@ export class BookingsController {
   ) {}
 
   @Post()
+  @UseInterceptors(IdempotencyGuard)
   @ApiOperation({ summary: 'Create a booking' })
   @ApiOkResponse({ description: 'Booking created', type: Booking })
   async create(
