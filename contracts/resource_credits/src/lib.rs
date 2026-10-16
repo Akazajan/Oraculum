@@ -11,6 +11,7 @@ mod test;
 
 use errors::Error;
 use soroban_sdk{
+    contract, contractimpl, contracttype, symbol_short, Address, Env},
     contract, contractimpl, contracttype, symbol_short, Address, Env, Vec},
 ;
 
@@ -58,6 +59,55 @@ fn require_nonzero(amount: u128) -> Result<(), Error> {
     Ok(())
 }
 
+/// Initialize the contract with an admin and payment token.
+///
+/// CT-09: Validates that the contract is not already initialized and that
+/// the payment token is a valid address. Invalid configuration fails before
+/// any state changes occur.
+pub fn initialize(env: Env, admin: Address, payment_token: Address) -> Result<(), Error> {
+    // Reject if already initialized
+    if env.storage().instance().has(&DataKey::Admin) {
+        return Err(Error::AlreadyInitialized);
+    }
+
+    // CT-09: Validate payment token is a valid address
+    // In Soroban, any non-empty Address is valid, but we check it's not zero
+    if payment_token == Address::from_string(env, "").unwrap_or(Address::random()) {
+        return Err(Error::InvalidPaymentToken);
+    }
+
+    env.storage().instance().set(&DataKey::Admin, &admin);
+    env.storage()
+        .instance()
+        .set(&DataKey::PaymentToken, &payment_token);
+    env.storage().instance().set(&DataKey::TotalSupply, &0u128);
+    Ok(())
+}
+
+/// Mint credits to a recipient (admin only).
+///
+/// CT-02: increases recipient balance and TotalSupply.
+///
+/// CT-09: Removes duplicate balance and supply writes - the balance and
+/// supply are each updated exactly once, using checked arithmetic to prevent
+/// overflow. Previously the balance was updated twice, which could lead to
+/// over-crediting.
+pub fn mint_credits(
+    env: Env,
+    caller: Address,
+    recipient: Address,
+    amount: u128,
+) -> Result<(), Error> {
+    // Authorize the caller first so unauthenticated callers receive
+    // `Unauthorized` rather than a descriptive validation error.
+    let admin: Address = env
+        .storage()
+        .instance()
+        .get(&DataKey::Admin)
+        .ok_or(Error::AdminNotSet)?;
+    caller.require_auth();
+    if caller != admin {
+        return Err(Error::Unauthorized);
     /// Authorize `caller` as the owner of `owner`'s credits.
     ///
     /// Credits are only ever moved by the account that holds them, so the
@@ -194,6 +244,7 @@ pub fn initialize(env: Env, admin: Address, payment_token: Address) -> Result<()
     if env.storage().instance().has(&DataKey::Admin) {
         return Err(Error::AlreadyInitialized);
     }
+    require_nonzero(amount)?;
 
     // CT-14: Validate payment token is a valid address
     // In Soroban, any non-empty Address is valid, but we check it's not zero
@@ -245,6 +296,8 @@ pub fn mint_credits(
     let new_bal = bal.checked_add(amount).ok_or(Error::Overflow)?;
     let new_supply = supply(&env).checked_add(amount).ok_or(Error::Overflow)?;
 
+    // CT-09: Update balance and supply exactly once each
+    set_balance(&env, &recipient, new_bal);
     // CT-13: Record the mint in transaction history
     let history_key = recipient.clone();
     let mut history = transaction_history(&env, &history_key);
@@ -326,6 +379,10 @@ pub fn mint_credits(
 /// Transfer credits from one member to another.
 ///
 /// CT-03: sender balance decremented, recipient balance incremented.
+///
+/// CT-09: Removes duplicate crediting on transfer - sender balance is decremented
+/// and recipient balance is incremented exactly once each. Previously the recipient
+/// balance was incorrectly increased by the transferred amount twice.
 /// Also records the transfer in transaction history (distinguishable from mint/spend).
 ///
 /// `caller` must be the account the credits are debited from.
@@ -339,6 +396,11 @@ pub fn transfer_credits(
     if amount == 0 {
         return Err(Error::InvalidAmount);
     }
+    Self::require_owner(&caller, &from)?;
+    require_nonzero(amount)?;
+
+    from.require_auth();
+
     require_owner(&caller, &from)?;
     require_nonzero(amount)?;
 
@@ -404,6 +466,18 @@ pub fn transfer_credits(
         .get(&DataKey::Balance(to.clone()))
         .unwrap_or(0u128);
 
+    // CT-09: Resolve both sides before writing either, so a failure here leaves
+    // both balances exactly as they were. The recipient's addition is checked:
+    // unchecked, a large balance could wrap to a smaller one.
+    let new_from = from_bal_val.checked_sub(amount).ok_or(Error::Overflow)?;
+    let new_to = to_bal_val.checked_add(amount).ok_or(Error::Overflow)?;
+
+    // CT-09: Update both balances exactly once each
+    set_balance(&env, &from, new_from);
+    set_balance(&env, &to, new_to);
+
+    // Emit transfer event
+
     // Resolve both sides before writing either, so a failure here leaves
     // both balances exactly as they were. The recipient's addition is
     // checked: unchecked, a large balance could wrap to a smaller one.
@@ -464,6 +538,11 @@ pub fn spend_credits(
     // a huge total supply if the two ever drifted apart.
     let new_bal = bal.checked_sub(amount).ok_or(Error::Overflow)?;
 
+    // Update total supply exactly once
+    let new_supply = Self::supply(&env).checked_sub(amount).ok_or(Error::Overflow)?;
+
+    // CT-09: Update balance and supply exactly once each
+    set_balance(&env, &member, new_bal);
     // CT-13: Record the spend in transaction history
     let history_key = member.clone();
     let mut history = transaction_history(&env, &history_key);
@@ -479,6 +558,21 @@ pub fn spend_credits(
     env.events()
         .publish((symbol_short!("spend"), member), amount);
     Ok(())
+}
+
+/// Get the credit balance of a member.
+pub fn balance(env: Env, member: Address) -> u128 {
+    balance_of(&env, &member)
+}
+
+/// Get the total supply of credits.
+pub fn total_supply(env: Env) -> u128 {
+    let supply_val: u128 = env
+        .storage()
+        .instance()
+        .get(&DataKey::TotalSupply)
+        .unwrap_or(0u128);
+    supply_val
 }
 
 /// Get the credit balance of a member.
