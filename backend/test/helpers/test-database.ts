@@ -38,4 +38,33 @@ export class TestDatabaseHelper {
       },
     });
   }
+
+  /**
+   * Returns a bounded page of workspace booking history with stable ordering
+   * and a continuation indicator.
+   */
+  async getWorkspaceBookingHistory(
+    workspaceId: string,
+    options: { cursor?: string; limit?: number } = {},
+  ) {
+    const limit = Math.max(1, Math.min(options.limit ?? 20, 100));
+    const cursor = options.cursor;
+
+    const bookings = await this.prisma.booking.findMany({
+      where: { workspaceId },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: limit + 1,
+      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+    });
+
+    const hasMore = bookings.length > limit;
+    const page = hasMore ? bookings.slice(0, limit) : bookings;
+    const nextCursor = hasMore ? page[page.length - 1].id : null;
+
+    return {
+      items: page,
+      nextCursor,
+      hasMore,
+    };
+  }
 }

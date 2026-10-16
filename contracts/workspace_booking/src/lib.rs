@@ -15,6 +15,7 @@ pub use types::{
     Booking, BookingStatus, MAX_ID_LEN, UnavailabilityReason, Workspace, WorkspaceAvailability,
     WorkspaceType,
 };
+pub use types::WorkspaceBookingsPage;
 
 use soroban_sdk::{
     contract, contractimpl, contracttype, symbol_short, token, Address, Env, String, Vec,
@@ -732,6 +733,54 @@ impl WorkspaceBookingContract {
             .persistent()
             .get(&DataKey::WorkspaceBookings(workspace_id))
             .unwrap_or(Vec::new(&env))
+    }
+
+    /// Return a bounded page of booking IDs associated with a specific workspace.
+    ///
+    /// Ordering is stable: bookings are returned in insertion (registration)
+    /// order, which is the same order as `get_workspace_bookings`.
+    ///
+    /// * `offset` – zero-based index of the first booking to return.
+    /// * `limit`  – maximum number of booking IDs to return.
+    ///
+    /// The returned `WorkspaceBookingsPage.next_offset` is `Some(n)` when more
+    /// entries remain (pass `n` as the next `offset`), or `None` when the page
+    /// reaches the end of the history.
+    pub fn get_workspace_bookings_page(
+        env: Env,
+        workspace_id: String,
+        offset: u32,
+        limit: u32,
+    ) -> WorkspaceBookingsPage {
+        let all: Vec<String> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::WorkspaceBookings(workspace_id))
+            .unwrap_or(Vec::new(&env));
+
+        let total = all.len();
+        let mut page = Vec::new(&env);
+
+        if limit == 0 || offset >= total {
+            return WorkspaceBookingsPage {
+                booking_ids: page,
+                next_offset: None,
+            };
+        }
+
+        let end = core::cmp::min(offset.saturating_add(limit), total);
+        let mut i = offset;
+        while i < end {
+            page.push_back(all.get(i).unwrap());
+            i += 1;
+        }
+
+        let next_offset = if end < total { Some(end) } else { None };
+
+        WorkspaceBookingsPage {
+            booking_ids: page,
+            next_offset,
+        }
     }
 
     /// Check whether a workspace has no conflicting active booking in the
