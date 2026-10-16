@@ -60,6 +60,9 @@ impl ResourceCreditsContract {
             return Err(Error::Unauthorized);
         }
         owner.require_auth();
+        Ok(())
+    }
+
     /// Reject a zero-value credit operation.
     ///
     /// Minting, transferring or spending zero credits moves nothing but still
@@ -76,17 +79,57 @@ impl ResourceCreditsContract {
         Ok(())
     }
 
+    /// Validate that the payment token has been configured.
+    ///
+    /// Every credit operation that interacts with the payment rail must call
+    /// this guard so that a misconfigured contract fails with a clear,
+    /// actionable error rather than silently using a zero address.
+    fn require_payment_token(env: &Env) -> Result<Address, Error> {
+        env.storage()
+            .instance()
+            .get(&DataKey::PaymentToken)
+            .ok_or(Error::PaymentTokenNotSet)
+    }
+
+    // ── Public entry points ───────────────────────────────────────────────────
+
     /// Initialize the contract with an admin and payment token.
+    ///
+    /// CT-14: Both `admin` and `payment_token` are validated before any
+    /// storage write. Initialization is rejected when:
+    /// - the contract is already initialized, or
+    /// - `payment_token` is the same address as `admin` (would misroute fees).
+    ///
+    /// Address objects in Soroban are always well-formed (the SDK type system
+    /// enforces this), so an explicit "zero-address" check is not possible
+    /// without an extra sentinel value. We therefore guard against the most
+    /// likely misconfiguration — passing `admin` as the token — while relying
+    /// on the host's type guarantee for structural validity.
     pub fn initialize(env: Env, admin: Address, payment_token: Address) -> Result<(), Error> {
         if env.storage().instance().has(&DataKey::Admin) {
             return Err(Error::AlreadyInitialized);
         }
+
+        // Reject configurations where the payment token and admin are the same
+        // address, which would silently misroute all fee payments to the admin.
+        if payment_token == admin {
+            return Err(Error::InvalidAddress);
+        }
+
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage()
             .instance()
             .set(&DataKey::PaymentToken, &payment_token);
         env.storage().instance().set(&DataKey::TotalSupply, &0u128);
         Ok(())
+    }
+
+    /// Return the configured payment token address.
+    ///
+    /// Errors with [`Error::PaymentTokenNotSet`] when the contract has not
+    /// been initialized yet.
+    pub fn payment_token(env: Env) -> Result<Address, Error> {
+        Self::require_payment_token(&env)
     }
 
     /// Mint credits to a recipient (admin only).
@@ -109,33 +152,22 @@ impl ResourceCreditsContract {
         if caller != admin {
             return Err(Error::Unauthorized);
         }
+
+        // Confirm the payment token is configured before touching any state.
+        Self::require_payment_token(&env)?;
+
         Self::require_nonzero(amount)?;
 
         // Both sums are resolved before either is stored, so an overflow on
         // the supply cannot leave a credited balance behind.
-        let bal = Self::balance_of(&env, &recipient);
-        let new_bal = bal.checked_add(amount).ok_or(Error::Overflow)?;
+        let new_bal = Self::balance_of(&env, &recipient)
+            .checked_add(amount)
+            .ok_or(Error::Overflow)?;
         let new_supply = Self::supply(&env)
             .checked_add(amount)
             .ok_or(Error::Overflow)?;
 
         Self::set_balance(&env, &recipient, new_bal);
-        let bal: u128 = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Balance(recipient.clone()))
-            .unwrap_or(0u128);
-        let new_bal = bal.checked_add(amount).ok_or(Error::Overflow)?;
-        env.storage()
-            .persistent()
-            .set(&DataKey::Balance(recipient.clone()), &new_bal);
-
-        let supply: u128 = env
-            .storage()
-            .instance()
-            .get(&DataKey::TotalSupply)
-            .unwrap_or(0u128);
-        let new_supply = supply.checked_add(amount).ok_or(Error::Overflow)?;
         env.storage()
             .instance()
             .set(&DataKey::TotalSupply, &new_supply);
@@ -157,29 +189,24 @@ impl ResourceCreditsContract {
         to: Address,
         amount: u128,
     ) -> Result<(), Error> {
-        if amount == 0 {
-            return Err(Error::InvalidAmount);
+        // Reject self-transfers: they are no-ops and emit a misleading event.
+        if from == to {
+            return Err(Error::SelfTransfer);
         }
-        Self::require_owner(&caller, &from)?;
+
         // Checked before `require_auth` so a zero-value transfer fails
         // outright instead of first prompting the holder for a signature.
         Self::require_nonzero(amount)?;
-        from.require_auth();
+        Self::require_owner(&caller, &from)?;
 
-        // Reject self-transfers: they are no-ops and emit a misleading event.
-        if from == to {
-            return Err(Error::InvalidAmount);
-        }
+        // Confirm the payment token is configured before touching any state.
+        Self::require_payment_token(&env)?;
 
         let from_bal = Self::balance_of(&env, &from);
-        let from_bal: u128 = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Balance(from.clone()))
-            .unwrap_or(0u128);
         if from_bal < amount {
             return Err(Error::InsufficientBalance);
         }
+
         let to_bal = Self::balance_of(&env, &to);
 
         // Resolve both sides before writing either, so a failure here leaves
@@ -190,14 +217,6 @@ impl ResourceCreditsContract {
 
         Self::set_balance(&env, &from, new_from);
         Self::set_balance(&env, &to, new_to);
-        let to_bal: u128 = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Balance(to.clone()))
-            .unwrap_or(0u128);
-        env.storage()
-            .persistent()
-            .set(&DataKey::Balance(to.clone()), &(to_bal + amount));
 
         env.events()
             .publish((symbol_short!("transfer"), from, to), amount);
@@ -215,22 +234,14 @@ impl ResourceCreditsContract {
         member: Address,
         amount: u128,
     ) -> Result<(), Error> {
-        if amount == 0 {
-            return Err(Error::InvalidAmount);
-        }
-        Self::require_owner(&caller, &member)?;
-
-        let bal = Self::balance_of(&env, &member);
-    pub fn spend_credits(env: Env, member: Address, amount: u128) -> Result<(), Error> {
         // As in `transfer_credits`: a zero-value spend never reaches auth.
         Self::require_nonzero(amount)?;
-        member.require_auth();
+        Self::require_owner(&caller, &member)?;
 
-        let bal: u128 = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Balance(member.clone()))
-            .unwrap_or(0u128);
+        // Confirm the payment token is configured before touching any state.
+        Self::require_payment_token(&env)?;
+
+        let bal = Self::balance_of(&env, &member);
         if bal < amount {
             return Err(Error::InsufficientBalance);
         }
@@ -243,11 +254,6 @@ impl ResourceCreditsContract {
             .ok_or(Error::Overflow)?;
 
         Self::set_balance(&env, &member, new_bal);
-        let supply: u128 = env
-            .storage()
-            .instance()
-            .get(&DataKey::TotalSupply)
-            .unwrap_or(0u128);
         env.storage()
             .instance()
             .set(&DataKey::TotalSupply, &new_supply);
@@ -265,9 +271,5 @@ impl ResourceCreditsContract {
     /// Get the total supply of credits.
     pub fn total_supply(env: Env) -> u128 {
         Self::supply(&env)
-        env.storage()
-            .instance()
-            .get(&DataKey::TotalSupply)
-            .unwrap_or(0u128)
     }
 }
