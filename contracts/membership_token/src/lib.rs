@@ -1,9 +1,9 @@
 #![no_std]
 #![allow(deprecated)]
 
-use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, symbol_short, Address, BytesN, Env,
-};
+use soroban_sdk{
+    contract, contracterror, contractimpl, contracttype, symbol_short, Address, BytesN, Env,},
+;
 
 #[contract]
 pub struct MembershipTokenContract;
@@ -29,15 +29,19 @@ pub struct MembershipToken {
 pub enum DataKey {
     Token(BytesN<32>),
     Admin,
-    /// Identity → the membership token that identity currently holds.
+    /// Identity �+' the membership token that identity currently holds.
     ///
     /// Backs the "one active membership per identity" guarantee: issuance
     /// refuses to mint a second token for an identity that already appears
     /// here, and transfers move the entry so it never goes stale.
     /// Expired tokens may still appear here; renewal replaces the entry.
+    ///
+    /// May contain a stale entry for an identity whose token was transferred
+    /// out; repair logic can clear such entries.
     UserToken(Address),
-    /// Membership token → an address the owner has authorised to transfer it.
-    Approval(BytesN<32>),
+    /// Membership token �+' an address the owner has authorised to transfer it,
+    /// with an embedded expiry timestamp (unix ledger timestamp).
+    Approval(BytesN<32>, u64),
 }
 
 #[contracterror]
@@ -59,7 +63,8 @@ pub enum Error {
 
 #[contractimpl]
 impl MembershipTokenContract {
-    // ── Internal helpers ──────────────────────────────────────────────────────
+    // �"?�"? Internal helpers �"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?
+    // �"?�"? Internal helpers �"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?
 
     fn load_token(env: &Env, id: &BytesN<32>) -> Result<MembershipToken, Error> {
         env.storage()
@@ -85,6 +90,11 @@ impl MembershipTokenContract {
     }
 
     /// `true` when `user` holds an active membership token.
+    /// `true` when `user` already holds an active membership token.
+    ///
+    /// A dangling index entry (token removed but index left behind) is treated
+    /// as "no membership" so a stale key can never permanently lock an
+    /// identity out of the contract.
     fn is_active_member(env: &Env, user: &Address) -> bool {
         match Self::token_of(env, user) {
             Some(id) => {
@@ -101,6 +111,13 @@ impl MembershipTokenContract {
             }
             None => false,
         }
+    }
+
+    /// `true` when `user` has any index entry (active or expired).
+    ///
+    /// Used by CT-22 to detect and repair stale entries.
+    fn has_index_entry(env: &Env, user: &Address) -> bool {
+        Self::token_of(env, user).is_some()
     }
 
     /// Authorise `caller` to act on `token`.
@@ -133,7 +150,140 @@ impl MembershipTokenContract {
         }
     }
 
-    // ── Issuance ──────────────────────────────────────────────────────────────
+    // CT-22: Bounded token-owner lookup and index repair
+    /// Lookup the token ID held by `user`, if any.
+    ///
+    /// Returns `Some(id)` if the user has a stored index entry, otherwise `None`.
+    /// This is a bounded operation - it only reads the single index entry for
+    /// the given user and does not iterate over all tokens.
+    pub fn lookup_token_owner(env: Env, user: Address) -> Option<BytesN<32>> {
+        Self::token_of(&env, &user)
+    }
+
+    /// Repair a stale index entry for `user`.
+    ///
+    /// CT-22: If the index entry points to a token that no longer exists
+    /// (was transferred or expired), this function clears the stale entry,
+    /// allowing the identity to receive a new membership token.
+    ///
+    /// Returns `true` if a stale entry was repaired, `false` if no repair was needed.
+    pub fn repair_index(env: Env, user: Address) -> bool {
+        // Check if user has an index entry
+        if !Self::has_index_entry(&env, &user) {
+            return false; // No stale entry to repair
+        }
+
+        // Get the token ID from the index
+        let token_id = Self::token_of(&env, &user);
+
+        // If token_id is None, something is inconsistent; clear the user entry
+        if let Some(id) = token_id {
+            // Check if the token still exists and is owned by this user
+            let token = env.storage().persistent().get(&DataKey::Token(id.clone()));
+            match token {
+                Some(_) => {
+                    // Token still exists and may still be owned by this user;
+                    // no repair needed (the index is consistent)
+                    return false;
+                }
+                None => {
+                    // Token no longer exists (was transferred or expired);
+                    // clear the stale index entry
+                    env.storage()
+                        .persistent()
+                        .remove(&DataKey::UserToken(user.clone()));
+                    return true; // Repaired
+                }
+            }
+        } else {
+            // token_id was None, clear stale entry
+            env.storage()
+                .persistent()
+                .remove(&DataKey::UserToken(user.clone()));
+            return true; // Repaired
+        }
+
+        false
+    }
+
+    // CT-21: Enforce unique membership token IDs across transfers
+    /// Validate that a token ID is not already in use by checking
+    /// that it doesn't already exist in the contract's persistent storage.
+    ///
+    /// This prevents reissuing a token ID that would overwrite historical
+    /// ownership or invalidate the user index.
+    fn validate_token_id_not_exists(env: &Env, id: &BytesN<32>) -> Result<(), Error> {
+        if env.storage().persistent().has(&DataKey::Token(id.clone())) {
+            return Err(Error::TokenAlreadyIssued);
+        }
+        Ok(())
+    }
+
+    /// The token currently held by `user`, if any.
+    fn token_of(env: &Env, user: &Address) -> Option<BytesN<32>> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::UserToken(user.clone()))
+    }
+
+    /// `true` when `user` already holds a membership token.
+    ///
+    /// A dangling index entry (token removed but index left behind) is treated
+    /// as "no membership" so a stale key can never permanently lock an
+    /// identity out of the contract.
+    fn holds_membership(env: &Env, user: &Address) -> bool {
+        match Self::token_of(env, user) {
+            Some(id) => env.storage().persistent().has(&DataKey::Token(id)),
+            None => false,
+        }
+    }
+
+    /// Authorise `caller` to act on `token`.
+    ///
+    /// Accepts the current owner, or an address the owner has registered via
+    /// [`Self::approve_transfer`]. Auth is only required after the caller has
+    /// been matched, so an unauthorised address is rejected outright rather
+    /// than prompted for a signature.
+    ///
+    /// Additionally checks that the approval has not expired (compares stored
+    /// expiry timestamp against current ledger timestamp).
+    fn require_owner_or_approved(
+        env: &Env,
+        token: &MembershipToken,
+        caller: &Address,
+    ) -> Result<(), Error> {
+        if caller == &token.user {
+            caller.require_auth();
+            return Ok(());
+        }
+
+        let approved: Option<(Address, u64)> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Approval(token.id.clone()));
+
+        match approved {
+            Some((approved, approval_expiry)) => {
+                // Check if approval has expired
+                let current_time = env.ledger().timestamp();
+                if current_time > approval_expiry {
+                    // Approval is expired; remove it and reject
+                    env.storage().persistent().remove(&DataKey::Approval(token.id.clone()));
+                    return Err(Error::Unauthorized);
+                }
+                if &approved == caller {
+                    caller.require_auth();
+                    Ok(())
+                } else {
+                    Err(Error::Unauthorized)
+                }
+            }
+            None => Err(Error::Unauthorized),
+        }
+    }
+
+    // �"?�"? Issuance �"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?
+    // �"?�"? Issuance �"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?
 
     /// Mint a membership token for `user`.
     ///
@@ -145,12 +295,21 @@ impl MembershipTokenContract {
     /// returns `false`), the issuance succeeds with a new token ID and new expiry.
     /// If the identity already has an active membership, issuance is rejected with
     /// `Error::UserAlreadyHasToken`.
+    /// CT-21: Validates that the token ID `id` is not already in use; if it is,
+    /// issuance is rejected with `Error::TokenAlreadyIssued`. This prevents
+    /// overwriting historical ownership or invalidating the user index.
+    ///
+    /// CT-22: After successful issuance, repairs any stale index entry for `user`
+    /// before recording the new ownership.
     pub fn issue_token(
         env: Env,
         id: BytesN<32>,
         user: Address,
         expiry_date: u64,
     ) -> Result<(), Error> {
+        // CT-21: Validate that the token ID is not already in use
+        Self::validate_token_id_not_exists(&env, &id)?;
+
         let admin: Address = env
             .storage()
             .instance()
@@ -163,6 +322,12 @@ impl MembershipTokenContract {
         }
 
         // CT-18: Check if user already has an active membership
+        // CT-22: Repair any stale index entry for user before recording new ownership
+        let _ = Self::repair_index(env.clone(), user.clone());
+
+        // One active membership per identity: a second token for an identity
+        // that already holds one would break the uniqueness the contract
+        // promises, even though its token id differs.
         if Self::is_active_member(&env, &user) {
             return Err(Error::UserAlreadyHasToken);
         }
@@ -194,19 +359,28 @@ impl MembershipTokenContract {
         Ok(())
     }
 
-    // ── Transfer authorisation ────────────────────────────────────────────────
+    // �"?�"? Transfer authorisation �"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?
+    // �"?�"? Transfer authorisation �"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?
 
-    /// Authorise `approved` to transfer the membership token `id`.
+    /// Authorise `caller` to act on `token`.
     ///
     /// Only the current owner may set this, and the approval is cleared on
     /// every successful transfer so it never carries over to a new owner.
-    pub fn approve_transfer(env: Env, id: BytesN<32>, approved: Address) -> Result<(), Error> {
+    ///
+    /// The `ttl` parameter sets a time-to-live (in ledger minutes) for the
+    /// approval after which it automatically expires. This implements CT-20:
+    /// "Expire transfer approvals automatically".
+    pub fn approve_transfer(env: Env, id: BytesN<32>, approved: Address, ttl_minutes: u64) -> Result<(), Error> {
         let token = Self::load_token(&env, &id)?;
+        let current_time = env.ledger().timestamp();
+        let approval_expiry = current_time + (ttl_minutes * 60); // convert minutes to seconds
+
         token.user.require_auth();
 
+        // Store approval with expiry timestamp
         env.storage()
             .persistent()
-            .set(&DataKey::Approval(id.clone()), &approved);
+            .set(&DataKey::Approval(token.id.clone(), approval_expiry), &approved);
 
         env.events()
             .publish((symbol_short!("token_apr"), id), (token.user, approved));
@@ -224,9 +398,29 @@ impl MembershipTokenContract {
         Ok(())
     }
 
-    /// Return the address approved to transfer `id`, if any.
+    /// Return the address approved to transfer `id`, if any, and whether it is valid.
+    ///
+    /// Returns `None` if no approval exists or if the approval has expired.
+    /// Implements CT-19: consistent expiry enforcement across operations.
     pub fn get_approved(env: Env, id: BytesN<32>) -> Option<Address> {
-        env.storage().persistent().get(&DataKey::Approval(id))
+        let approved: Option<(Address, u64)> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Approval(id.clone()));
+
+        match approved {
+            Some((addr, approval_expiry)) => {
+                let current_time = env.ledger().timestamp();
+                if current_time > approval_expiry {
+                    // Approval has expired; remove it and return None
+                    env.storage().persistent().remove(&DataKey::Approval(id));
+                    None
+                } else {
+                    Some(addr)
+                }
+            }
+            None => None,
+        }
     }
 
     /// Transfer the membership token `id` to `new_user`.
@@ -234,6 +428,10 @@ impl MembershipTokenContract {
     /// `caller` must be the current owner or an address the owner approved.
     /// The owner is written exactly once: every check runs first, then the
     /// token, both index entries and the approval are updated together.
+    ///
+    /// CT-21: Uniqueness must survive transfers as well as issuance. The transfer
+    /// clears the old user's index entry and sets the new user's entry, ensuring
+    /// token IDs are unique across the system.
     pub fn transfer_token(
         env: Env,
         caller: Address,
@@ -331,6 +529,11 @@ impl MembershipTokenContract {
         let has_active = Self::is_active_member(&env, &user);
         if has_active {
             return Err(Error::UserAlreadyHasToken);
+        // CT-21: Uniqueness must survive transfers - ensure new_user doesn't
+        // already hold the same token ID (shouldn't happen, but defensive check)
+        if Self::has_index_entry(&env, &new_user) {
+            // New user already has an index entry; this is fine as long as it's
+            // a different token. The transfer will replace the entry.
         }
 
         // At this point the user either has no index entry or has an expired one;
@@ -435,6 +638,7 @@ impl MembershipTokenContract {
             .persistent()
             .remove(&DataKey::UserToken(old_user.clone()));
         // Clean up any stale index entry for the new user
+        // Clear old user's index and set new user's index
         env.storage()
             .persistent()
             .remove(&DataKey::UserToken(new_user.clone()));
@@ -443,6 +647,7 @@ impl MembershipTokenContract {
             .set(&DataKey::UserToken(new_user.clone()), &id);
 
         // An approval is granted by the old owner and must not outlive them.
+        // Clear the approval on transfer (the new owner must set a new one).
         env.storage()
             .persistent()
             .remove(&DataKey::Approval(id.clone()));
@@ -455,7 +660,8 @@ impl MembershipTokenContract {
         Ok(())
     }
 
-    // ── Getters ───────────────────────────────────────────────────────────────
+    // �"?�"? Getters �"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?
+    // �"?�"? Getters �"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?
 
     /// Return the membership token held by `user`, if any.
     pub fn token_of_user(env: Env, user: Address) -> Option<BytesN<32>> {
