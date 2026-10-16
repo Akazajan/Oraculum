@@ -1416,3 +1416,372 @@ fn test_is_slot_available_ignores_terminal_bookings_after_many_cycles() {
     });
     assert_eq!(active_after.len(), 1);
 }
+
+// ── Rejecting-token atomicity tests ──────────────────────────────────────────
+//
+// Goal: prove that a panicking token transfer leaves **no** booking state
+// behind.  Soroban contract invocations are atomic — if any sub-call panics,
+// the entire host invocation is rolled back, including every storage write
+// performed before the panic.  The contract calls `token::transfer` *before*
+// writing any booking records, so a rejecting token must leave:
+//
+//   • DataKey::Booking         — absent
+//   • DataKey::WorkspaceBookings  — absent (or unchanged pre-existing vec)
+//   • DataKey::ActiveWorkspaceBookings — absent (or unchanged pre-existing vec)
+//   • DataKey::MemberBookings  — absent (or unchanged pre-existing vec)
+//   • No "booked" event in the event log
+
+/// A SEP-41-compatible token whose `transfer` always panics.
+/// All other methods return harmless defaults so the contract can be
+/// registered without issue; only `transfer` is exercised by book_workspace.
+mod rejecting_token {
+    use soroban_sdk::{contract, contractimpl, token::TokenInterface, Address, Env, MuxedAddress, String};
+
+    #[contract]
+    pub struct RejectingTokenContract;
+
+    #[contractimpl]
+    impl TokenInterface for RejectingTokenContract {
+        fn allowance(_env: Env, _from: Address, _spender: Address) -> i128 {
+            0
+        }
+
+        fn approve(
+            _env: Env,
+            _from: Address,
+            _spender: Address,
+            _amount: i128,
+            _expiration_ledger: u32,
+        ) {
+        }
+
+        fn balance(_env: Env, _id: Address) -> i128 {
+            i128::MAX // appear solvent so the overlap check isn't the failure
+        }
+
+        fn transfer(_env: Env, _from: Address, _to: MuxedAddress, _amount: i128) {
+            panic!("transfer rejected by RejectingTokenContract");
+        }
+
+        fn transfer_from(
+            _env: Env,
+            _spender: Address,
+            _from: Address,
+            _to: Address,
+            _amount: i128,
+        ) {
+        }
+
+        fn burn(_env: Env, _from: Address, _amount: i128) {}
+
+        fn burn_from(_env: Env, _spender: Address, _from: Address, _amount: i128) {}
+
+        fn decimals(_env: Env) -> u32 {
+            7
+        }
+
+        fn name(env: Env) -> String {
+            String::from_str(&env, "RejectingToken")
+        }
+
+        fn symbol(env: Env) -> String {
+            String::from_str(&env, "REJ")
+        }
+    }
+}
+
+// ── Shared setup helpers for rejecting-token tests ────────────────────────────
+
+/// Register the booking contract + a rejecting token, initialise, and register
+/// one workspace.  Returns `(env, contract_id, admin, member, ws_id)`.
+///
+/// The caller constructs the client with:
+/// `WorkspaceBookingContractClient::new(&env, &contract_id)`
+///
+/// `ws_id` is `"ws-rej"`, hourly_rate is 1_000.
+fn setup_rejecting_env() -> (soroban_sdk::Env, Address, Address, Address, soroban_sdk::String) {
+    let env = soroban_sdk::Env::default();
+    env.mock_all_auths();
+
+    let contract_id = setup_contract(&env);
+    let client = WorkspaceBookingContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let member = Address::generate(&env);
+
+    // Register the rejecting token instead of a real SAC.
+    let token_id = env.register(rejecting_token::RejectingTokenContract, ());
+
+    client.initialize(&admin, &token_id);
+    client.register_workspace(
+        &admin,
+        &String::from_str(&env, "ws-rej"),
+        &String::from_str(&env, "Rejecting Room"),
+        &WorkspaceType::MeetingRoom,
+        &4u32,
+        &1_000u128,
+    );
+
+    let ws_id = String::from_str(&env, "ws-rej");
+    (env, contract_id, admin, member, ws_id)
+}
+
+// ── C-RT-1: No booking record ─────────────────────────────────────────────────
+
+/// When the token transfer panics, DataKey::Booking must not exist.
+#[test]
+fn test_failed_transfer_leaves_no_booking_record() {
+    let (env, contract_id, _admin, member, ws_id) = setup_rejecting_env();
+    let client = WorkspaceBookingContractClient::new(&env, &contract_id);
+
+    let booking_id = String::from_str(&env, "bk-rej-1");
+    let now = env.ledger().timestamp();
+    let start = now + 60;
+    let end = start + 3_600;
+
+    // The booking contract will reach token::transfer and the sub-call panics.
+    // try_book_workspace catches it as a host-level error (Err(Err(...))).
+    let result = client.try_book_workspace(&member, &booking_id, &ws_id, &start, &end);
+    assert!(
+        result.is_err(),
+        "book_workspace must fail when token panics"
+    );
+
+    // Storage must be completely clean — no Booking record written.
+    let has_booking = env.as_contract(&contract_id, || {
+        env.storage()
+            .persistent()
+            .has(&DataKey::Booking(booking_id.clone()))
+    });
+    assert!(
+        !has_booking,
+        "DataKey::Booking must not exist after a failed transfer"
+    );
+
+    // The public query must also report the booking as not found.
+    let query_result = client.try_get_booking(&booking_id);
+    assert_eq!(
+        query_result,
+        Err(Ok(Error::BookingNotFound)),
+        "get_booking must return BookingNotFound"
+    );
+}
+
+// ── C-RT-2: No workspace index entries ───────────────────────────────────────
+
+/// When the token transfer panics, both workspace index keys must stay absent
+/// (or unchanged if they existed before the failed attempt).
+#[test]
+fn test_failed_transfer_leaves_no_workspace_index_entries() {
+    let (env, contract_id, _admin, member, ws_id) = setup_rejecting_env();
+    let client = WorkspaceBookingContractClient::new(&env, &contract_id);
+
+    let booking_id = String::from_str(&env, "bk-rej-2");
+    let now = env.ledger().timestamp();
+    let start = now + 60;
+    let end = start + 3_600;
+
+    let _ = client.try_book_workspace(&member, &booking_id, &ws_id, &start, &end);
+
+    // WorkspaceBookings (full history) must be absent / empty.
+    let ws_history: soroban_sdk::Vec<String> = env.as_contract(&contract_id, || {
+        env.storage()
+            .persistent()
+            .get(&DataKey::WorkspaceBookings(ws_id.clone()))
+            .unwrap_or(soroban_sdk::Vec::new(&env))
+    });
+    assert_eq!(
+        ws_history.len(),
+        0,
+        "WorkspaceBookings must be empty after a failed transfer"
+    );
+
+    // ActiveWorkspaceBookings must be absent / empty.
+    let active: soroban_sdk::Vec<String> = env.as_contract(&contract_id, || {
+        env.storage()
+            .persistent()
+            .get(&DataKey::ActiveWorkspaceBookings(ws_id.clone()))
+            .unwrap_or(soroban_sdk::Vec::new(&env))
+    });
+    assert_eq!(
+        active.len(),
+        0,
+        "ActiveWorkspaceBookings must be empty after a failed transfer"
+    );
+
+    // Verify via the public API too.
+    assert_eq!(
+        client.get_workspace_bookings(&ws_id).len(),
+        0,
+        "get_workspace_bookings must return empty vec"
+    );
+}
+
+// ── C-RT-3: No member index entry ────────────────────────────────────────────
+
+/// When the token transfer panics, the member's booking list must stay absent.
+#[test]
+fn test_failed_transfer_leaves_no_member_index_entry() {
+    let (env, contract_id, _admin, member, ws_id) = setup_rejecting_env();
+    let client = WorkspaceBookingContractClient::new(&env, &contract_id);
+
+    let booking_id = String::from_str(&env, "bk-rej-3");
+    let now = env.ledger().timestamp();
+    let start = now + 60;
+    let end = start + 3_600;
+
+    let _ = client.try_book_workspace(&member, &booking_id, &ws_id, &start, &end);
+
+    // MemberBookings must be absent / empty.
+    let member_bks: soroban_sdk::Vec<String> = env.as_contract(&contract_id, || {
+        env.storage()
+            .persistent()
+            .get(&DataKey::MemberBookings(member.clone()))
+            .unwrap_or(soroban_sdk::Vec::new(&env))
+    });
+    assert_eq!(
+        member_bks.len(),
+        0,
+        "MemberBookings must be empty after a failed transfer"
+    );
+
+    // Verify via the public API too.
+    assert_eq!(
+        client.get_member_bookings(&member).len(),
+        0,
+        "get_member_bookings must return empty vec"
+    );
+}
+
+// ── C-RT-4: No booking event emitted ─────────────────────────────────────────
+
+/// When the token transfer panics, the "booked" event must not appear in the
+/// contract's event log.
+#[test]
+fn test_failed_transfer_leaves_no_events() {
+    let (env, contract_id, _admin, member, ws_id) = setup_rejecting_env();
+    let client = WorkspaceBookingContractClient::new(&env, &contract_id);
+
+    let booking_id = String::from_str(&env, "bk-rej-4");
+    let now = env.ledger().timestamp();
+    let start = now + 60;
+    let end = start + 3_600;
+
+    // Clear all events produced during setup so we only see the attempted booking.
+    env.events().all(); // consume / snapshot the existing setup events
+
+    let _ = client.try_book_workspace(&member, &booking_id, &ws_id, &start, &end);
+
+    // After the failed attempt, the event log must contain no "booked" event.
+    // In this contract, booking events are published as:
+    //   env.events().publish((symbol_short!("booked"), booking_id), (...))
+    // so the first topic element is the symbol "booked".
+    // We collect all event topic-0 symbols and assert none equals "booked".
+    let all_events = env.events().all();
+    let booked_sym = symbol_short!("booked");
+    let mut found_booked = false;
+    for i in 0..all_events.len() {
+        let (_contract, topics, _data) = all_events.get(i).unwrap();
+        if topics.len() > 0 {
+            // The event topics tuple is encoded as a Vec<Val>; the first
+            // element is a Symbol when published via (symbol_short!(...), ...).
+            // We convert it back via soroban_sdk::Symbol::try_from_val.
+            if let Ok(sym) = soroban_sdk::Symbol::try_from_val(&env, &topics.get(0).unwrap()) {
+                if sym == booked_sym {
+                    found_booked = true;
+                }
+            }
+        }
+    }
+    assert!(
+        !found_booked,
+        "\"booked\" event must not be emitted after a failed token transfer"
+    );
+}
+
+// ── C-RT-5: Slot remains bookable after a failed attempt ─────────────────────
+
+/// The workspace slot must still be available after a failed transfer attempt.
+/// A second attempt with a working token must succeed.
+#[test]
+fn test_failed_transfer_second_attempt_can_succeed() {
+    let env = soroban_sdk::Env::default();
+    env.mock_all_auths();
+
+    let contract_id = setup_contract(&env);
+    let client = WorkspaceBookingContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let member = Address::generate(&env);
+
+    // First initialise with a rejecting token.
+    let rejecting_token_id = env.register(rejecting_token::RejectingTokenContract, ());
+    client.initialize(&admin, &rejecting_token_id);
+
+    let ws_id = String::from_str(&env, "ws-retry");
+    client.register_workspace(
+        &admin,
+        &ws_id,
+        &String::from_str(&env, "Retry Room"),
+        &WorkspaceType::HotDesk,
+        &1u32,
+        &500u128,
+    );
+
+    let now = env.ledger().timestamp();
+    let start = now + 60;
+    let end = start + 3_600;
+    let booking_id = String::from_str(&env, "bk-retry-1");
+
+    // First attempt: fails because token rejects.
+    let first_result = client.try_book_workspace(&member, &booking_id, &ws_id, &start, &end);
+    assert!(first_result.is_err(), "first attempt must fail");
+
+    // The slot must still show as available — no phantom active booking.
+    assert!(
+        client.check_availability(&ws_id, &start, &end),
+        "slot must still be available after failed transfer"
+    );
+
+    // The booking_id must not exist, so the same ID can be reused.
+    assert_eq!(
+        client.try_get_booking(&booking_id),
+        Err(Ok(Error::BookingNotFound)),
+        "booking must not exist after failed attempt"
+    );
+
+    // Now set up a fresh env with a good token to demonstrate the same booking_id
+    // can be used successfully — no phantom record left by the prior failure.
+    let env2 = soroban_sdk::Env::default();
+    env2.mock_all_auths();
+    let contract_id2 = setup_contract(&env2);
+    let client2 = WorkspaceBookingContractClient::new(&env2, &contract_id2);
+    let admin2 = Address::generate(&env2);
+    let member2 = Address::generate(&env2);
+    let good_token = setup_token(&env2, &admin2, &member2, 50_000i128);
+
+    // Re-create the same string IDs in the new environment.
+    let ws_id2 = String::from_str(&env2, "ws-retry");
+    let booking_id2 = String::from_str(&env2, "bk-retry-1");
+
+    client2.initialize(&admin2, &good_token);
+    client2.register_workspace(
+        &admin2,
+        &ws_id2,
+        &String::from_str(&env2, "Retry Room"),
+        &WorkspaceType::HotDesk,
+        &1u32,
+        &500u128,
+    );
+
+    let now2 = env2.ledger().timestamp();
+    let start2 = now2 + 60;
+    let end2 = start2 + 3_600;
+
+    // Same booking_id succeeds when the token is real — no phantom record
+    // from the prior failed attempt blocks the re-use.
+    client2.book_workspace(&member2, &booking_id2, &ws_id2, &start2, &end2);
+    let booking = client2.get_booking(&booking_id2);
+    assert_eq!(booking.status, BookingStatus::Active);
+    assert_eq!(booking.amount_paid, 500u128);
+}
