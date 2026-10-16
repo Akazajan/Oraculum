@@ -1,12 +1,19 @@
 use soroban_sdk::{contracttype, Address, String};
 
 /// Maximum allowed length for workspace identifiers.
-#[allow(dead_code)]
+#[allot(dead_code)]
 pub const MAX_ID_LEN: u32 = 64;
 
 /// Maximum allowed length for workspace names.
 #[allow(dead_code)]
 pub const MAX_NAME_LEN: u32 = 128;
+
+/// Maximum number of history entries a single page may contain.
+pub const MAX_PAGE_SIZE: u32 = 100;
+
+/// Default number of history entries returned when the caller does not
+/// specify an explicit limit.
+pub const DEFAULT_PAGE_SIZE: u32 = 20;
 
 /// Category of workspace being registered.
 ///
@@ -219,4 +226,34 @@ pub struct Booking {
 
     /// Timestamp booking was completed
     pub completed_at: Option<u64>,
+}
+
+/// Request parameters for a page of booking history.
+///
+/// Pagination is cursor-based and stable: entries are ordered by ascending
+/// `index` (the position in the append-only history log), and a caller resumes
+/// from `cursor` without skipping or repeating entries.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct PageRequest {
+    /// Number of entries to return. Clamped to `MAX_PAGE_SIZE`.
+    pub limit: u32,
+
+    /// Opaque continuation token from a previous page.
+    ///
+    /// `None` starts from the beginning of the history; `Some(index)` resumes
+    /// at the first entry whose index is greater than or equal to `index`.
+    pub cursor: Option<u64>,
+}
+
+/// A bounded page of booking history entries.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct Page<T> {
+    /// Entries in this page, in stable ascending order.
+    pub entries: Vec<T>,
+
+    /// Continuation token for the next page, or `None` when the history is
+    /// exhausted.
+    pub next_cursor: Option<u64>,
 }
