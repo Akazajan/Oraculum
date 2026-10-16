@@ -1,7 +1,10 @@
 import { BadRequestException } from '@nestjs/common';
 import {
   assertAllowedImageMimeType,
+  assertFileSize,
+  assertAllowedImageFile,
   detectImageMimeType,
+  MAX_FILE_SIZE,
 } from './image-mime.util';
 
 const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00]);
@@ -78,6 +81,68 @@ describe('assertAllowedImageMimeType', () => {
   it('rejects a missing file', () => {
     expect(() =>
       assertAllowedImageMimeType(undefined as unknown as Express.Multer.File),
+    ).toThrow(BadRequestException);
+  });
+});
+
+describe('assertFileSize', () => {
+  it('accepts a file within the size limit', () => {
+    const smallBuffer = Buffer.alloc(1024); // 1KB
+    expect(() =>
+      assertFileSize(file(smallBuffer, 'image/png', 'avatar.png')),
+    ).not.toThrow();
+  });
+
+  it('accepts a file exactly at the size limit', () => {
+    const exactSizeBuffer = Buffer.alloc(MAX_FILE_SIZE);
+    expect(() =>
+      assertFileSize(file(exactSizeBuffer, 'image/png', 'avatar.png')),
+    ).not.toThrow();
+  });
+
+  it('rejects a file exceeding the size limit', () => {
+    const largeBuffer = Buffer.alloc(MAX_FILE_SIZE + 1);
+    expect(() =>
+      assertFileSize(file(largeBuffer, 'image/png', 'avatar.png')),
+    ).toThrow(BadRequestException);
+  });
+
+  it('rejects a missing file', () => {
+    expect(() =>
+      assertFileSize(undefined as unknown as Express.Multer.File),
+    ).toThrow(BadRequestException);
+  });
+});
+
+describe('assertAllowedImageFile', () => {
+  it('accepts a valid image file within size limit', () => {
+    const smallPng = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    expect(() =>
+      assertAllowedImageFile(file(smallPng, 'image/png', 'avatar.png')),
+    ).not.toThrow();
+  });
+
+  it('rejects a file with invalid MIME type', () => {
+    const smallPng = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    expect(() =>
+      assertAllowedImageFile(file(smallPng, 'image/svg+xml', 'avatar.svg')),
+    ).toThrow(BadRequestException);
+  });
+
+  it('rejects a file exceeding size limit', () => {
+    const largePng = Buffer.concat([
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+      Buffer.alloc(MAX_FILE_SIZE + 1),
+    ]);
+    expect(() =>
+      assertAllowedImageFile(file(largePng, 'image/png', 'avatar.png')),
+    ).toThrow(BadRequestException);
+  });
+
+  it('rejects a file with spoofed MIME type', () => {
+    const pdfBuffer = Buffer.from('%PDF-1.7\n');
+    expect(() =>
+      assertAllowedImageFile(file(pdfBuffer, 'image/png', 'avatar.png')),
     ).toThrow(BadRequestException);
   });
 });
