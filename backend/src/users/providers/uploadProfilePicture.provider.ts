@@ -4,6 +4,7 @@ import { Repository } from 'typeorm';
 import { User } from '../entities/user.entity';
 import { UserRole } from '../enums/userRoles.enum';
 import { CloudinaryService } from '../../cloudinary/cloudinary.service';
+import { assertAllowedImageFile } from '../../common/utils/image-mime.util';
 
 @Injectable()
 export class UploadProfilePictureProvider {
@@ -24,6 +25,8 @@ export class UploadProfilePictureProvider {
         'You can only update your own profile picture',
       );
     }
+
+    assertAllowedImageFile(file);
 
     try {
       const targetUser = await this.usersRepository.findOne({
