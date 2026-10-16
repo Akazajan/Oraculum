@@ -1,4 +1,5 @@
 import { PrismaClient } from '@prisma/client';
+import { randomUUID } from 'crypto';
 
 export class TestDatabaseHelper {
   constructor(private readonly prisma: PrismaClient) {}
@@ -14,6 +15,23 @@ export class TestDatabaseHelper {
         `TRUNCATE TABLE "${table}" RESTART IDENTITY CASCADE;`,
       );
     }
+  }
+
+  /**
+   * Creates a workspace admin transfer proposal with explicit expiry semantics.
+   * Acceptance at the exact expiry timestamp is rejected (strict inequality):
+   * a proposal is only acceptable while `now < expiresAt`.
+   */
+  async createAdminTransferProposal(workspaceId: string, proposedById: string, targetUserId: string, expiresAt: Date) {
+    return this.prisma.adminTransferProposal.create({
+      data: {
+        id: randomUUID(),
+        workspaceId,
+        proposedById,
+        targetUserId,
+        expiresAt,
+      },
+    });
   }
 
   async createTestUser(override = {}) {

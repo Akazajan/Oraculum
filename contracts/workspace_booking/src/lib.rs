@@ -205,7 +205,7 @@ impl WorkspaceBookingContract {
             return Err(Error::Unauthorized);
         }
 
-        if env.ledger().timestamp() > pending_transfer.expiry {
+        if env.ledger().timestamp() >= pending_transfer.expiry {
             return Err(Error::AdminTransferExpired);
         }
 
