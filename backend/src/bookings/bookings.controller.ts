@@ -27,6 +27,7 @@ import {
 } from '@nestjs/swagger';
 import { BookingsService } from './bookings.service';
 import { CreateBookingDto } from './dto/create-booking.dto';
+import { CreateRecurringBookingDto } from './dto/create-recurring-booking.dto';
 import { BookingQueryDto } from './dto/booking-query.dto';
 import { RolesGuard } from '../auth/guard/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorators';
@@ -66,8 +67,8 @@ export class BookingsController {
   }
 
   @Post('recurring')
-  @ApiOperation({ summary: 'Create recurring bookings' })
-  @ApiOkResponse({ description: 'Recurring bookings created', type: [Booking] })
+  @ApiOperation({ summary: 'Create a recurring booking series atomically' })
+  @ApiOkResponse({ description: 'Recurring series created', type: Booking, isArray: true })
   async createRecurring(
     @Body() dto: CreateRecurringBookingDto,
     @GetCurrentUser('id') userId: string,
