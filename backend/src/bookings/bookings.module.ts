@@ -17,9 +17,14 @@ import { CsvExportService } from '../common/csv-export/csv-export.service';
 import { BookingReminderScheduler } from './providers/booking-reminder.provider';
 import { ReservationExpiryHandler } from './providers/reservation-expiry.provider';
 import { RecurringBookingService } from '../modules/bookings/recurring-booking';
+import { IdempotencyModule } from '../common/idempotency.module';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Booking, User]), WorkspacesModule],
+  imports: [
+    TypeOrmModule.forFeature([Booking, User]),
+    WorkspacesModule,
+    IdempotencyModule,
+  ],
   controllers: [BookingsController],
   providers: [
     BookingsService,
