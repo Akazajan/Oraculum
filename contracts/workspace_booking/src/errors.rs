@@ -69,6 +69,12 @@ pub enum Error {
     /// Member balance insufficient for payment.
     InsufficientBalance = 107,
 
+    /// Requested seat count must be ≥ 1.
+    InvalidSeatCount = 108,
+
+    /// Requested seats exceed the workspace's remaining available capacity.
+    CapacityExceeded = 109,
+
     // -----------------------------
     // Workspace Errors (200–299)
     // -----------------------------
