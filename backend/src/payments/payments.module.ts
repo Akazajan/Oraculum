@@ -9,6 +9,7 @@ import { PaymentsController } from './payments.controller';
 import { PaymentFailureLogsController } from './payment-failure-logs.controller';
 import { PaystackProvider } from './providers/paystack.provider';
 import { SorobanEscrowProvider } from './providers/soroban-escrow.provider';
+import { NanoEscrowProvider } from './providers/nano-escrow.provider';
 import { InitializePaymentProvider } from './providers/initialize-payment.provider';
 import { HandleWebhookProvider } from './providers/handle-webhook.provider';
 import { RefundPaymentProvider } from './providers/refund-payment.provider';
@@ -33,6 +34,7 @@ import { AuditModule } from '../audit/audit.module';
     PaymentsService,
     PaystackProvider,
     SorobanEscrowProvider,
+    NanoEscrowProvider,
     InitializePaymentProvider,
     HandleWebhookProvider,
     RefundPaymentProvider,

@@ -39,18 +39,37 @@ async function bootstrap() {
   app.useGlobalFilters(new GlobalExceptionFilter());
 
   // ENABLE CORS
+  //
+  // B60 — Only explicitly allowed origins may call the backend. The
+  // allowlist is read from the CORS_ALLOWED_ORIGINS env var (comma
+  // separated) and always falls back to the known deployment origins
+  // so the wildcard is never used and credentials are only shared with
+  // registered clients.
+  const allowedOrigins = (
+    process.env.CORS_ALLOWED_ORIGINS
+      ? process.env.CORS_ALLOWED_ORIGINS.split(',')
+          .map((o) => o.trim())
+          .filter(Boolean)
+      : [
+          'https://Oraculum.vercel.app',
+          'https://www.Oraculum.vercel.app',
+          'http://localhost:3000',
+          'http://localhost:3001',
+          'http://localhost:3002',
+          'http://localhost:3003',
+        ]
+  );
+
   app.enableCors({
-    origin:
-      process.env.NODE_ENV === 'production'
-        ? [
-            'https://Oraculum.vercel.app',
-            'https://www.Oraculum.vercel.app',
-            'http://localhost:3000',
-            'http://localhost:3001',
-            'http://localhost:3002',
-            'http://localhost:3003',
-          ]
-        : true,
+    origin: (origin, callback) => {
+      // Allow non-browser / same-origin requests without an Origin header
+      // (curl, health checks, server-to-server calls).
+      if (!origin || allowedOrigins.includes(origin)) {
+        callback(null, true);
+        return;
+      }
+      callback(new Error(`Origin "${origin}" is not allowed by CORS policy`));
+    },
     credentials: true,
   });
 

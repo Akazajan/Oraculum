@@ -3,9 +3,11 @@
 import { useState } from "react";
 import Link from "next/link";
 import DashboardLayout from "@/components/dashboard/DashboardLayout";
+import { submitCancelAction } from "@/lib/booking-cancel";
 import { useGetMyBookings } from "@/lib/react-query/hooks/bookings/useGetMyBookings";
 import { useCancelBooking } from "@/lib/react-query/hooks/bookings/useCancelBooking";
 import { useInitializePayment } from "@/lib/react-query/hooks/payments/useInitializePayment";
+import { useAuthState } from "@/lib/store/authStore";
 import { Booking, BookingStatus } from "@/lib/types/booking";
 import {
   CalendarPlus,
@@ -15,6 +17,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { toast } from "sonner";
+import { formatDate } from "@/lib/utils";
 
 const STATUS_STYLES: Record<BookingStatus, string> = {
   PENDING: "bg-amber-50 text-amber-700",
@@ -39,6 +42,7 @@ declare global {
 }
 
 function BookingRow({ booking, onCancelled }: { booking: Booking; onCancelled: () => void }) {
+  const { user } = useAuthState();
   const { mutateAsync: cancel, isPending: cancelling } = useCancelBooking();
   const { mutateAsync: initPayment, isPending: paying } = useInitializePayment();
   const [confirmCancel, setConfirmCancel] = useState(false);
@@ -49,10 +53,15 @@ function BookingRow({ booking, onCancelled }: { booking: Booking; onCancelled: (
   });
 
   async function handleCancel() {
-    if (!confirmCancel) { setConfirmCancel(true); return; }
-    await cancel(booking.id);
-    setConfirmCancel(false);
-    onCancelled();
+    await submitCancelAction({
+      confirmCancel,
+      isPending: cancelling,
+      cancel: async () => {
+        await cancel(booking.id);
+      },
+      setConfirmCancel,
+      onCancelled,
+    });
   }
 
   async function handlePay() {
@@ -67,7 +76,7 @@ function BookingRow({ booking, onCancelled }: { booking: Booking; onCancelled: (
       void accessCode;
       const handler = window.PaystackPop.setup({
         key: process.env.NEXT_PUBLIC_PAYSTACK_PUBLIC_KEY!,
-        email: "",
+        email: user?.email || "",
         amount: booking.totalAmount,
         ref: reference,
         onClose: () => toast.info("Payment window closed"),
@@ -106,14 +115,14 @@ function BookingRow({ booking, onCancelled }: { booking: Booking; onCancelled: (
             {booking.seatCount !== 1 ? "s" : ""}
           </p>
           <p className="text-xs text-gray-400 mt-0.5">
-            {booking.startDate} → {booking.endDate}
+            {formatDate(booking.startDate)} → {formatDate(booking.endDate)}
           </p>
         </div>
 
         <div className="text-right shrink-0">
           <p className="text-base font-bold text-gray-900">{amountNaira}</p>
           <p className="text-xs text-gray-400 mt-0.5">
-            {new Date(booking.createdAt).toLocaleDateString()}
+            {formatDate(booking.createdAt)}
           </p>
         </div>
       </div>
@@ -154,7 +163,8 @@ function BookingRow({ booking, onCancelled }: { booking: Booking; onCancelled: (
           {confirmCancel && (
             <button
               onClick={() => setConfirmCancel(false)}
-              className="px-3 py-1.5 text-xs text-gray-500 hover:text-gray-700"
+              disabled={cancelling}
+              className="px-3 py-1.5 text-xs text-gray-500 hover:text-gray-700 disabled:opacity-40"
             >
               Keep
             </button>
@@ -167,10 +177,21 @@ function BookingRow({ booking, onCancelled }: { booking: Booking; onCancelled: (
 
 export default function MyBookingsPage() {
   const [page, setPage] = useState(1);
-  const { data, isLoading, isError, refetch } = useGetMyBookings(page, 10);
+  const {
+    data,
+    isLoading,
+    isError,
+    isRefetching,
+    refetch,
+  } = useGetMyBookings(page, 10);
 
   const bookings = data?.data ?? [];
   const meta = data?.meta;
+
+  function goToPage(next: number) {
+    setPage(next);
+    window.scrollTo({ top: 0 });
+  }
 
   return (
     <DashboardLayout>
@@ -203,6 +224,19 @@ export default function MyBookingsPage() {
         <div className="text-center py-16 text-gray-500">
           <BookOpen className="w-10 h-10 mx-auto mb-3 text-gray-300" />
           <p className="font-medium">Failed to load bookings</p>
+          <button
+            type="button"
+            onClick={() => void refetch()}
+            disabled={isRefetching}
+            className="inline-flex items-center gap-2 mt-4 px-4 py-2 bg-gray-900 text-white text-sm font-medium rounded-lg hover:bg-gray-700 transition-colors disabled:opacity-40"
+          >
+            {isRefetching ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
+              <BookOpen className="w-4 h-4" />
+            )}
+            {isRefetching ? "Retrying…" : "Retry"}
+          </button>
         </div>
       ) : bookings.length === 0 ? (
         <div className="text-center py-16 text-gray-500">
@@ -238,16 +272,14 @@ export default function MyBookingsPage() {
               </p>
               <div className="flex gap-2">
                 <button
-                  onClick={() => setPage((p) => Math.max(1, p - 1))}
+                  onClick={() => goToPage(Math.max(1, page - 1))}
                   disabled={page === 1}
                   className="px-3 py-1.5 text-sm border border-gray-200 rounded-lg hover:bg-gray-50 disabled:opacity-40"
                 >
                   Previous
                 </button>
                 <button
-                  onClick={() =>
-                    setPage((p) => Math.min(meta.totalPages, p + 1))
-                  }
+                  onClick={() => goToPage(Math.min(meta.totalPages, page + 1))}
                   disabled={page === meta.totalPages}
                   className="px-3 py-1.5 text-sm border border-gray-200 rounded-lg hover:bg-gray-50 disabled:opacity-40"
                 >

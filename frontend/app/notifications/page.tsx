@@ -44,7 +44,7 @@ function timeAgo(iso: string): string {
 
 export default function NotificationsPage() {
   const [page, setPage] = useState(1);
-  const { data, isLoading } = useGetNotifications(page, 20);
+  const { data, isLoading, isError, refetch } = useGetNotifications(page, 20);
   const markRead = useMarkNotificationRead();
   const markAll = useMarkAllRead();
 
@@ -84,13 +84,24 @@ export default function NotificationsPage() {
             />
           ))}
         </div>
+      ) : isError ? (
+        <div className="text-center py-16 text-gray-500">
+          <Bell className="w-10 h-10 mx-auto mb-3 text-gray-300" />
+          <p className="font-medium">Failed to load notifications</p>
+          <p className="text-sm mt-1">Please try again later.</p>
+          <button
+            type="button"
+            onClick={() => refetch()}
+            className="mt-4 text-sm text-gray-900 font-medium hover:underline"
+          >
+            Retry
+          </button>
+        </div>
       ) : notifications.length === 0 ? (
-        <div className="flex flex-col items-center justify-center py-20 text-center">
-          <Bell className="w-10 h-10 text-gray-200 mb-4" />
-          <p className="text-sm font-medium text-gray-500">
-            No notifications yet
-          </p>
-          <p className="text-xs text-gray-400 mt-1">
+        <div className="text-center py-16 text-gray-500">
+          <Bell className="w-10 h-10 mx-auto mb-3 text-gray-300" />
+          <p className="font-medium">No notifications yet</p>
+          <p className="text-sm mt-1">
             You&apos;ll be notified about bookings, payments, and more.
           </p>
         </div>

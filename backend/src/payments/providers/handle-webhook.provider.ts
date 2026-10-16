@@ -76,6 +76,17 @@ export class HandleWebhookProvider {
     const eventType = event.event as string;
     const data = event.data as Record<string, unknown>;
     const reference = data?.reference as string;
+    // B49 — Provider event ids are compared in normalized form (trimmed)
+    // so replayed payloads with whitespace or casing differences still
+    // map to the same event.
+    const providerEventId = String(event.id ?? '').trim();
+
+    if (!providerEventId) {
+      this.logger.warn(
+        `Webhook event "${eventType}" has no event id — skipped`,
+      );
+      return;
+    }
 
     if (!reference) {
       this.logger.warn(
@@ -85,17 +96,44 @@ export class HandleWebhookProvider {
     }
 
     if (eventType === 'charge.success') {
-      await this.handleChargeSuccess(reference, data);
+      await this.handleChargeSuccess(reference, data, providerEventId);
     } else if (eventType === 'charge.failed') {
-      await this.handleChargeFailed(reference);
+      await this.handleChargeFailed(reference, providerEventId);
     } else {
       this.logger.log(`Unhandled Paystack event: ${eventType}`);
     }
   }
 
+  /**
+   * B49 — Records the provider event id on the payment metadata (after
+   * the incoming event data is already applied). Returns false if the
+   * event id was already processed, so a replayed event produces no
+   * duplicate settlement. The event id is compared in normalized form.
+   */
+  private markEventProcessed(
+    payment: Payment,
+    providerEventId: string,
+  ): boolean {
+    const metadata = (payment.metadata ?? {}) as Record<string, unknown>;
+    const processed: string[] = Array.isArray(metadata.processedWebhookEventIds)
+      ? (metadata.processedWebhookEventIds as string[])
+      : [];
+
+    if (processed.includes(providerEventId)) {
+      return false;
+    }
+
+    payment.metadata = {
+      ...metadata,
+      processedWebhookEventIds: [...processed, providerEventId],
+    };
+    return true;
+  }
+
   private async handleChargeSuccess(
     reference: string,
     data: Record<string, unknown>,
+    providerEventId: string,
   ): Promise<void> {
     const result = await runInTransaction(this.dataSource, async (manager) => {
       const payment = await manager.findOne(Payment, {
@@ -118,7 +156,16 @@ export class HandleWebhookProvider {
 
       payment.status = PaymentStatus.SUCCESS;
       payment.paidAt = new Date();
-      payment.metadata = data;
+      payment.metadata = {
+        ...data,
+        ...(payment.metadata ?? {}),
+      };
+      if (!this.markEventProcessed(payment, providerEventId)) {
+        this.logger.log(
+          `charge.success: provider event ${providerEventId} already processed for payment ${payment.id} — replay skipped`,
+        );
+        return null;
+      }
       await manager.save(payment);
 
       // Confirm the booking inside our open transaction so the
@@ -201,7 +248,10 @@ export class HandleWebhookProvider {
     });
   }
 
-  private async handleChargeFailed(reference: string): Promise<void> {
+  private async handleChargeFailed(
+    reference: string,
+    providerEventId: string,
+  ): Promise<void> {
     const payment = await runInTransaction(this.dataSource, async (manager) => {
       const found = await manager.findOne(Payment, {
         where: { providerReference: reference },
@@ -215,6 +265,13 @@ export class HandleWebhookProvider {
       }
 
       if (found.status !== PaymentStatus.PENDING) {
+        return null;
+      }
+
+      if (!this.markEventProcessed(found, providerEventId)) {
+        this.logger.log(
+          `charge.failed: provider event ${providerEventId} already processed for payment ${found.id} — replay skipped`,
+        );
         return null;
       }
 

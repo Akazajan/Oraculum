@@ -2,24 +2,77 @@
 
 import { UserPlus, UserCheck } from "lucide-react";
 
-interface ActivityItem {
+export interface ActivityItem {
   id: string;
   type: string;
   description: string;
   timestamp: string;
 }
 
+interface ActivityFeedProps {
+  activities: ActivityItem[];
+  /** This panel owns its states, so a failed sibling query cannot hide it. */
+  isLoading?: boolean;
+  error?: unknown;
+  onRetry?: () => void;
+  isRetrying?: boolean;
+}
+
 export default function ActivityFeed({
   activities,
-}: {
-  activities: ActivityItem[];
-}) {
+  isLoading = false,
+  error,
+  onRetry,
+  isRetrying = false,
+}: ActivityFeedProps) {
+  const header = (
+    <h3 className="text-sm font-semibold text-gray-900 mb-4">Recent activity</h3>
+  );
+
+  if (isLoading) {
+    return (
+      <div className="bg-white rounded-xl border border-gray-100 p-6">
+        {header}
+        <div
+          className="space-y-3"
+          aria-busy="true"
+          aria-label="Loading recent activity"
+        >
+          {[1, 2, 3].map((item) => (
+            <div key={item} className="h-10 rounded-lg bg-gray-50 animate-pulse" />
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="bg-white rounded-xl border border-gray-100 p-6">
+        {header}
+        <div role="alert" className="rounded-lg border border-red-100 bg-red-50 p-4">
+          <p className="text-sm text-red-700">
+            We couldn&apos;t load recent activity.
+          </p>
+          {onRetry && (
+            <button
+              type="button"
+              onClick={onRetry}
+              disabled={isRetrying}
+              className="mt-2 text-sm font-medium text-red-700 underline disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2"
+            >
+              {isRetrying ? "Retrying…" : "Try again"}
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  }
+
   if (!activities.length) {
     return (
       <div className="bg-white rounded-xl border border-gray-100 p-6">
-        <h3 className="text-sm font-semibold text-gray-900 mb-4">
-          Recent activity
-        </h3>
+        {header}
         <p className="text-sm text-gray-400">No recent activity.</p>
       </div>
     );
@@ -27,13 +80,10 @@ export default function ActivityFeed({
 
   return (
     <div className="bg-white rounded-xl border border-gray-100 p-6">
-      <h3 className="text-sm font-semibold text-gray-900 mb-4">
-        Recent activity
-      </h3>
+      {header}
       <div className="space-y-4">
         {activities.slice(0, 6).map((item) => {
-          const Icon =
-            item.type === "member_verified" ? UserCheck : UserPlus;
+          const Icon = item.type === "member_verified" ? UserCheck : UserPlus;
           return (
             <div key={item.id} className="flex items-start gap-3">
               <span className="w-8 h-8 rounded-full bg-gray-50 flex items-center justify-center shrink-0 mt-0.5">

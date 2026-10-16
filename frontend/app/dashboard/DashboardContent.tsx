@@ -1,8 +1,5 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
-import { apiClient } from "@/lib/apiClient";
-import { useAuthState } from "@/lib/store/authStore";
 import DashboardLayout from "@/components/dashboard/DashboardLayout";
 import StatsCards from "@/components/dashboard/StatsCards";
 import ActivityFeed from "@/components/dashboard/ActivityFeed";
@@ -11,104 +8,77 @@ import AnalyticsChart from "@/components/dashboard/AnalyticsChart";
 import AdminOverview from "@/components/dashboard/AdminOverview";
 import AdminUserTable from "@/components/dashboard/AdminUserTable";
 import MemberStatsCards from "@/components/dashboard/MemberStatsCards";
+import { useAuthState } from "@/lib/store/authStore";
+import { useGetDashboardStats } from "@/lib/react-query/hooks/dashboard/useGetDashboardStats";
+import { useGetDashboardActivity } from "@/lib/react-query/hooks/dashboard/useGetDashboardActivity";
+import { useGetAdminDashboardStats } from "@/lib/react-query/hooks/dashboard/useGetAdminDashboardStats";
+import { useGetAdminDashboardUsers } from "@/lib/react-query/hooks/dashboard/useGetAdminDashboardUsers";
+import { queryPanelState } from "@/lib/queryPanel";
 
-interface Stats {
-  totalMembers: number;
-  verifiedMembers: number;
-  activeWorkspaces: number;
-  deskOccupancy: number;
+function PanelSkeleton({ className }: { className: string }) {
+  return (
+    <div
+      className={`bg-white rounded-xl border border-gray-100 animate-pulse ${className}`}
+      aria-busy="true"
+    />
+  );
 }
 
-interface ActivityItem {
-  id: string;
-  type: string;
-  description: string;
-  timestamp: string;
-}
-
-interface AdminStats {
-  users: {
-    total: number;
-    active: number;
-    suspended: number;
-    newThisMonth: number;
-  };
-  newsletter: {
-    total: number;
-    verified: number;
-    active: number;
-    newThisMonth: number;
-    confirmationRate: number;
-  };
-  registrationTrend: { month: string; count: number }[];
-}
-
-interface UserRow {
-  id: string;
-  firstname: string;
-  lastname: string;
-  email: string;
-  role: string;
-  isActive: boolean;
-  isSuspended: boolean;
-  isVerified: boolean;
-  createdAt: string;
-  profilePicture?: string;
+/**
+ * Failure panel for a single dashboard panel. Retrying one panel refetches only
+ * that panel, so the others keep whatever they already rendered.
+ */
+function PanelError({
+  label,
+  onRetry,
+  isRetrying,
+}: {
+  label: string;
+  onRetry: () => void;
+  isRetrying: boolean;
+}) {
+  return (
+    <div role="alert" className="rounded-xl border border-red-100 bg-red-50 p-6">
+      <p className="text-sm text-red-700">We couldn&apos;t load {label}.</p>
+      <button
+        type="button"
+        onClick={onRetry}
+        disabled={isRetrying}
+        aria-busy={isRetrying}
+        className="mt-3 rounded-lg bg-red-700 px-4 py-2 text-sm font-medium text-white hover:bg-red-800 disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2"
+      >
+        {isRetrying ? "Retrying…" : "Try again"}
+      </button>
+    </div>
+  );
 }
 
 export default function DashboardContent() {
   const { user } = useAuthState();
   const isAdmin = user?.role === "admin";
 
-  const [stats, setStats] = useState<Stats | null>(null);
-  const [activity, setActivity] = useState<ActivityItem[]>([]);
-  const [adminStats, setAdminStats] = useState<AdminStats | null>(null);
-  const [adminUsers, setAdminUsers] = useState<UserRow[]>([]);
-  const [usersMeta, setUsersMeta] = useState({
-    total: 0,
-    page: 1,
-    limit: 10,
-    totalPages: 0,
+  const statsQuery = useGetDashboardStats();
+  const activityQuery = useGetDashboardActivity();
+  const adminStatsQuery = useGetAdminDashboardStats(isAdmin);
+  const adminUsersQuery = useGetAdminDashboardUsers(1, 10, isAdmin);
+
+  // Each panel derives its own state: a failing query no longer replaces the
+  // whole dashboard, and it cannot take the successful panels down with it.
+  const statsPanel = queryPanelState({
+    isLoading: statsQuery.isLoading,
+    isError: Boolean(statsQuery.error),
+    isEmpty: false,
   });
-  const [loading, setLoading] = useState(true);
-
-  const fetchData = useCallback(async () => {
-    setLoading(true);
-    try {
-      const [statsRes, activityRes] = await Promise.all([
-        apiClient.get<{ success: boolean; data: Stats }>("/dashboard/stats"),
-        apiClient.get<{ success: boolean; data: ActivityItem[] }>(
-          "/dashboard/activity"
-        ),
-      ]);
-      setStats(statsRes.data);
-      setActivity(activityRes.data);
-
-      if (isAdmin) {
-        const [adminStatsRes, adminUsersRes] = await Promise.all([
-          apiClient.get<{ success: boolean; data: AdminStats }>(
-            "/dashboard/admin/stats"
-          ),
-          apiClient.get<{
-            success: boolean;
-            data: UserRow[];
-            meta: typeof usersMeta;
-          }>("/dashboard/admin/users?page=1&limit=10"),
-        ]);
-        setAdminStats(adminStatsRes.data);
-        setAdminUsers(adminUsersRes.data);
-        setUsersMeta(adminUsersRes.meta);
-      }
-    } catch {
-      // API unavailable — show empty state
-    } finally {
-      setLoading(false);
-    }
-  }, [isAdmin]);
-
-  useEffect(() => {
-    fetchData();
-  }, [fetchData]);
+  const adminStatsPanel = queryPanelState({
+    isLoading: adminStatsQuery.isLoading,
+    isError: Boolean(adminStatsQuery.error),
+    isEmpty: false,
+  });
+  const adminUsersPanel = queryPanelState({
+    isLoading: adminUsersQuery.isLoading,
+    isError: Boolean(adminUsersQuery.error),
+    isEmpty: false,
+  });
 
   return (
     <DashboardLayout>
@@ -121,56 +91,91 @@ export default function DashboardContent() {
         </p>
       </div>
 
-      {loading ? (
-        <div className="space-y-4">
-          {[1, 2, 3].map((i) => (
-            <div
-              key={i}
-              className="bg-white rounded-xl border border-gray-100 h-32 animate-pulse"
+      <div className="space-y-6">
+        <section aria-label="Workspace statistics">
+          {statsPanel === "loading" ? (
+            <PanelSkeleton className="h-32" />
+          ) : statsPanel === "error" ? (
+            <PanelError
+              label="your statistics"
+              onRetry={() => void statsQuery.refetch()}
+              isRetrying={statsQuery.isFetching}
             />
-          ))}
-        </div>
-      ) : (
-        <div className="space-y-6">
-          {/* Stats cards */}
-          {isAdmin ? (
-            <StatsCards stats={stats} />
+          ) : isAdmin ? (
+            <StatsCards stats={statsQuery.data?.data ?? null} />
           ) : (
             <MemberStatsCards />
           )}
+        </section>
 
-          {/* Middle row — activity + quick actions */}
-          <div className="grid lg:grid-cols-2 gap-6">
-            <ActivityFeed activities={activity} />
-            <QuickActions />
-          </div>
-
-          {/* Admin section */}
-          {isAdmin && (
-            <>
-              <div className="pt-6 border-t border-gray-200">
-                <h2 className="text-lg font-semibold text-gray-900 mb-4">
-                  Admin panel
-                </h2>
-              </div>
-
-              <AdminOverview stats={adminStats} />
-
-              {/* Chart */}
-              {adminStats?.registrationTrend && (
-                <AnalyticsChart data={adminStats.registrationTrend} />
-              )}
-
-              {/* User management table */}
-              <AdminUserTable
-                initialData={adminUsers}
-                meta={usersMeta}
-                onRefresh={fetchData}
-              />
-            </>
-          )}
+        <div className="grid lg:grid-cols-2 gap-6">
+          <ActivityFeed
+            activities={activityQuery.data?.data ?? []}
+            isLoading={activityQuery.isLoading}
+            error={activityQuery.error}
+            onRetry={() => void activityQuery.refetch()}
+            isRetrying={activityQuery.isFetching}
+          />
+          <QuickActions />
         </div>
-      )}
+
+        {isAdmin && (
+          <>
+            <div className="pt-6 border-t border-gray-200">
+              <h2 className="text-lg font-semibold text-gray-900 mb-4">
+                Admin panel
+              </h2>
+            </div>
+
+            <section aria-label="Admin overview">
+              {adminStatsPanel === "loading" ? (
+                <PanelSkeleton className="h-32" />
+              ) : adminStatsPanel === "error" ? (
+                <PanelError
+                  label="the admin overview"
+                  onRetry={() => void adminStatsQuery.refetch()}
+                  isRetrying={adminStatsQuery.isFetching}
+                />
+              ) : (
+                <>
+                  <AdminOverview stats={adminStatsQuery.data?.data ?? null} />
+
+                  {adminStatsQuery.data?.data?.registrationTrend && (
+                    <AnalyticsChart
+                      data={adminStatsQuery.data.data.registrationTrend}
+                    />
+                  )}
+                </>
+              )}
+            </section>
+
+            <section aria-label="Member administration">
+              {adminUsersPanel === "loading" ? (
+                <PanelSkeleton className="h-40" />
+              ) : adminUsersPanel === "error" ? (
+                <PanelError
+                  label="the member table"
+                  onRetry={() => void adminUsersQuery.refetch()}
+                  isRetrying={adminUsersQuery.isFetching}
+                />
+              ) : (
+                <AdminUserTable
+                  initialData={adminUsersQuery.data?.data ?? []}
+                  meta={
+                    adminUsersQuery.data?.meta ?? {
+                      total: 0,
+                      page: 1,
+                      limit: 10,
+                      totalPages: 0,
+                    }
+                  }
+                  onRefresh={() => void adminUsersQuery.refetch()}
+                />
+              )}
+            </section>
+          </>
+        )}
+      </div>
     </DashboardLayout>
   );
 }

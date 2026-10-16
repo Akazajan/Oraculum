@@ -63,11 +63,20 @@ export default function NotificationBell() {
         type="button"
         onClick={() => setOpen((o) => !o)}
         className="relative p-2 rounded-lg hover:bg-gray-100 transition-colors"
-        aria-label="Notifications"
+        aria-haspopup="true"
+        aria-expanded={open}
+        aria-label={
+          unreadCount > 0
+            ? `Notifications, ${unreadCount} unread`
+            : "Notifications, no unread"
+        }
       >
-        <Bell className="w-5 h-5 text-gray-600" />
+        <Bell className="w-5 h-5 text-gray-600" aria-hidden="true" />
         {unreadCount > 0 && (
-          <span className="absolute top-1 right-1 min-w-[16px] h-4 px-0.5 bg-red-500 text-white text-[10px] font-bold rounded-full flex items-center justify-center">
+          <span
+            className="absolute top-1 right-1 min-w-[16px] h-4 px-0.5 bg-red-500 text-white text-[10px] font-bold rounded-full flex items-center justify-center"
+            aria-hidden="true"
+          >
             {unreadCount > 99 ? "99+" : unreadCount}
           </span>
         )}
@@ -87,17 +96,24 @@ export default function NotificationBell() {
                 disabled={markAll.isPending}
                 className="flex items-center gap-1.5 text-xs text-gray-500 hover:text-gray-900 transition-colors"
               >
-                <CheckCheck className="w-3.5 h-3.5" />
+                <CheckCheck className="w-3.5 h-3.5" aria-hidden="true" />
                 Mark all read
               </button>
             )}
           </div>
 
+          {/* Unread count summary for assistive tech */}
+          <p className="sr-only">
+            {unreadCount > 0
+              ? `${unreadCount} unread notification${unreadCount === 1 ? "" : "s"}`
+              : "No unread notifications"}
+          </p>
+
           {/* List */}
           <div className="max-h-80 overflow-y-auto">
             {notifications.length === 0 ? (
               <div className="flex flex-col items-center py-8 text-center">
-                <Bell className="w-8 h-8 text-gray-200 mb-2" />
+                <Bell className="w-8 h-8 text-gray-200 mb-2" aria-hidden="true" />
                 <p className="text-xs text-gray-400">No notifications</p>
               </div>
             ) : (
@@ -127,9 +143,12 @@ export default function NotificationBell() {
                       type="button"
                       onClick={() => markRead.mutate(n.id)}
                       className="shrink-0 pt-1"
-                      title="Mark as read"
+                      aria-label="Mark notification as read"
                     >
-                      <span className="w-2 h-2 rounded-full bg-gray-900 block" />
+                      <span
+                        className="w-2 h-2 rounded-full bg-gray-900 block"
+                        aria-hidden="true"
+                      />
                     </button>
                   )}
                 </div>

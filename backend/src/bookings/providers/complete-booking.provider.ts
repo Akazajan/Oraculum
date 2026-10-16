@@ -37,6 +37,14 @@ export class CompleteBookingProvider {
     if (booking.status !== BookingStatus.CONFIRMED) {
       throw new BadRequestException('Only CONFIRMED bookings can be completed');
     }
+    // B31 (#429) — completion is only allowed once the end date has passed,
+    // so PENDING/CANCELLED and early completion attempts all fail here.
+    const endOfBooking = new Date(`${booking.endDate}T23:59:59`);
+    if (endOfBooking.getTime() > Date.now()) {
+      throw new BadRequestException(
+        'Booking cannot be completed before its end date',
+      );
+    }
 
     booking.status = BookingStatus.COMPLETED;
     const saved = await this.bookingsRepository.save(booking);

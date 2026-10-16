@@ -38,6 +38,7 @@ import { ApiErrorDto } from '../common/dto/api-error.dto';
 import { Booking } from './entities/booking.entity';
 import { CsvExportService } from '../common/csv-export/csv-export.service';
 import { ExportBookingsProvider } from './providers/export-bookings.provider';
+import { CreateRecurringBookingDto } from '../modules/bookings/recurring-booking';
 
 @ApiTags('bookings')
 @ApiBearerAuth('bearer')

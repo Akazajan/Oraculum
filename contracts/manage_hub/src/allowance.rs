@@ -23,8 +23,11 @@ impl AllowanceModule {
         if amount <= 0 {
             return Err(Error::InvalidPaymentAmount);
         }
+        // Reject the spender when it is identical to the owner: an owner
+        // spending their own allowance is a no-op that would silently
+        // consume a slot and emit a misleading Approval event.
         if owner == spender {
-            return Err(Error::Unauthorized);
+            return Err(Error::InvalidSpender);
         }
         if let Some(expiry) = expires_at {
             if expiry <= env.ledger().timestamp() {
@@ -46,6 +49,7 @@ impl AllowanceModule {
             &allowance,
         );
 
+        // Exactly one Approval event per successful call (acceptance criterion 3).
         env.events().publish(
             (
                 String::from_str(env, "Approval"),

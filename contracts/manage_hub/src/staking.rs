@@ -101,6 +101,13 @@ impl StakingModule {
         if tier.base_rate_bps == 0 || tier.base_rate_bps > 10_000 {
             return Err(Error::InvalidPaymentAmount);
         }
+        // Cap lock_duration to the same maximum applied to the global config
+        // (2 years in ledgers ≈ 12,614,400) so that `now + lock_duration`
+        // can never overflow a u64 ledger timestamp.
+        const MAX_LOCK_DURATION_LEDGERS: u64 = 12_614_400;
+        if tier.lock_duration > MAX_LOCK_DURATION_LEDGERS {
+            return Err(Error::InvalidPaymentAmount);
+        }
 
         if env
             .storage()
@@ -275,10 +282,9 @@ impl StakingModule {
                 return Err(Error::TierMismatch);
             }
 
-            // Pull tokens from user.
-            let token_client = token::Client::new(&env, &config.staking_token);
-            token_client.transfer(&staker, env.current_contract_address(), &amount);
-
+            // CT-36: compute every piece of arithmetic before the external
+            // token transfer, so an overflow returns a stable error with no
+            // partial writes (tokens moved but stake unchanged).
             let new_amount = existing
                 .amount
                 .checked_add(amount)
@@ -288,6 +294,10 @@ impl StakingModule {
             let unlock_at = now
                 .checked_add(tier.lock_duration)
                 .ok_or(StakingError::Overflow)?;
+
+            // Pull tokens from user.
+            let token_client = token::Client::new(&env, &config.staking_token);
+            token_client.transfer(&staker, env.current_contract_address(), &amount);
 
             let updated = StakeInfo {
                 staker: staker.clone(),
@@ -310,13 +320,15 @@ impl StakingModule {
         }
 
         // New stake.
-        let token_client = token::Client::new(&env, &config.staking_token);
-        token_client.transfer(&staker, env.current_contract_address(), &amount);
-
+        // CT-36: compute the unlock timestamp (checked) before the external
+        // transfer so an overflow cannot leave a partial write.
         let now = env.ledger().timestamp();
         let unlock_at = now
             .checked_add(tier.lock_duration)
             .ok_or(StakingError::Overflow)?;
+
+        let token_client = token::Client::new(&env, &config.staking_token);
+        token_client.transfer(&staker, env.current_contract_address(), &amount);
 
         let stake = StakeInfo {
             staker: staker.clone(),
@@ -362,6 +374,14 @@ impl StakingModule {
 
         let rewards = crate::rewards::RewardsModule::calculate_pending_rewards(&env, &stake)?;
 
+        // CT-37: make withdrawal a one-time terminal transition. Remove the
+        // stake record *before* the external token transfers
+        // (checks-effects-interactions) so a repeated or re-entrant call finds
+        // no stake and cannot move tokens a second time.
+        env.storage()
+            .persistent()
+            .remove(&StakingDataKey::Stake(staker.clone()));
+
         // Return principal.
         let token_client = token::Client::new(&env, &config.staking_token);
         token_client.transfer(&env.current_contract_address(), &staker, &stake.amount);
@@ -371,11 +391,6 @@ impl StakingModule {
             let reward_client = token::Client::new(&env, &config.reward_pool);
             reward_client.transfer(&env.current_contract_address(), &staker, &rewards);
         }
-
-        // Clean up stake record.
-        env.storage()
-            .persistent()
-            .remove(&StakingDataKey::Stake(staker.clone()));
 
         env.events().publish(
             (String::from_str(&env, "Unstaked"), staker.clone()),
@@ -414,6 +429,12 @@ impl StakingModule {
             .checked_sub(penalty)
             .ok_or(StakingError::Overflow)?;
 
+        // CT-37: remove the stake before the transfer so emergency unstake is
+        // also a one-time terminal transition (a repeated call moves nothing).
+        env.storage()
+            .persistent()
+            .remove(&StakingDataKey::Stake(staker.clone()));
+
         let token_client = token::Client::new(&env, &config.staking_token);
 
         // Return principal minus penalty to staker.
@@ -422,11 +443,6 @@ impl StakingModule {
         }
 
         // Penalty stays in the contract (acts as a disincentive).
-
-        // Clean up stake record.
-        env.storage()
-            .persistent()
-            .remove(&StakingDataKey::Stake(staker.clone()));
 
         env.events().publish(
             (String::from_str(&env, "EmergencyUnstaked"), staker.clone()),

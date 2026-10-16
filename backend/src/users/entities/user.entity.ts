@@ -126,6 +126,12 @@ export class User {
   })
   membershipStatus: MembershipStatus;
 
+  @Column({ type: 'int', default: 0 })
+  failedLoginAttempts: number;
+
+  @Column({ type: 'timestamptz', nullable: true })
+  lockoutUntil?: Date;
+
   @Column({ type: 'timestamptz', nullable: true })
   memberSince: Date;
 

@@ -20,6 +20,8 @@ use soroban_sdk::{
     contract, contractimpl, contracttype, symbol_short, token, Address, Env, String, Vec,
 };
 
+const ADMIN_TRANSFER_TTL: u64 = 86_400;
+
 // ── Storage keys ──────────────────────────────────────────────────────────────
 
 #[contracttype]
@@ -36,8 +38,22 @@ pub enum DataKey {
     Booking(String),
     /// List of booking IDs associated with a member.
     MemberBookings(Address),
-    /// List of booking IDs associated with a workspace.
+       /// List of booking IDs associated with a workspace (full history, never pruned).
     WorkspaceBookings(String),
+    /// List of currently-active booking IDs for a workspace, kept in sync on
+    /// every status transition so `is_slot_available` never has to scan
+    /// completed/cancelled/expired/no-show history.
+    ActiveWorkspaceBookings(String),
+    /// Pending two-step admin transfer.
+    PendingAdminTransfer,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PendingAdminTransfer {
+    pub proposed_admin: Address,
+    pub proposer: Address,
+    pub expiry: u64,
 }
 
 // ── Contract ──────────────────────────────────────────────────────────────────
@@ -72,12 +88,19 @@ impl WorkspaceBookingContract {
     }
 
     /// Returns `true` if no active booking for `workspace_id` overlaps
-    /// [`start_time`, `end_time`).
-    fn is_slot_available(env: &Env, workspace_id: &String, start_time: u64, end_time: u64) -> bool {
+    /// the half-open interval [`start_time`, `end_time`).
+    ///
+    /// C13 — Prevent workspace double booking:
+    /// - Overlapping intervals (`existing.start < new.end && existing.end > new.start`)
+    ///   are conflicts and make the slot unavailable.
+    /// - Adjacent intervals that only touch at a boundary
+    ///   (`existing.end == new.start` or `new.end == existing.start`) do **not**
+    ///   overlap and are allowed.
+      fn is_slot_available(env: &Env, workspace_id: &String, start_time: u64, end_time: u64) -> bool {
         let booking_ids: Vec<String> = env
             .storage()
             .persistent()
-            .get(&DataKey::WorkspaceBookings(workspace_id.clone()))
+            .get(&DataKey::ActiveWorkspaceBookings(workspace_id.clone()))
             .unwrap_or(Vec::new(env));
 
         for i in 0..booking_ids.len() {
@@ -87,16 +110,38 @@ impl WorkspaceBookingContract {
                 None => continue,
             };
 
-            if booking.status != BookingStatus::Active {
+            // Defensive: the active index should only ever contain active
+            // bookings, but a stale/inconsistent entry must never cause a
+            // false conflict.
+            if !booking.status.is_active() {
                 continue;
             }
 
-            // Overlap: existing booking starts before new slot ends AND ends after new slot starts.
+            // Half-open overlap: [a,b) ∩ [c,d) ≠ ∅ ⇔ a < d && b > c.
+            // Equality at a boundary (b == c or d == a) is adjacent, not overlapping.
             if booking.start_time < end_time && booking.end_time > start_time {
                 return false;
             }
         }
         true
+    }
+
+    /// Removes `booking_id` from the active-bookings index for `workspace_id`.
+    /// Called by every status transition that leaves the Active state
+    /// (Cancelled, Completed, NoShow, Expired). The full-history
+    /// `WorkspaceBookings` index is never touched — `get_workspace_bookings`
+    /// must keep returning every booking ever made.
+    fn remove_active_booking(env: &Env, workspace_id: &String, booking_id: &String) {
+        let key = DataKey::ActiveWorkspaceBookings(workspace_id.clone());
+        let active: Vec<String> = env.storage().persistent().get(&key).unwrap_or(Vec::new(env));
+        let mut updated = Vec::new(env);
+        for i in 0..active.len() {
+            let id = active.get(i).unwrap();
+            if &id != booking_id {
+                updated.push_back(id);
+            }
+        }
+        env.storage().persistent().set(&key, &updated);
     }
 
     // ── Initialisation ────────────────────────────────────────────────────────
@@ -114,6 +159,94 @@ impl WorkspaceBookingContract {
 
         env.events()
             .publish((symbol_short!("init"),), (admin, payment_token));
+        Ok(())
+    }
+
+    /// Propose transferring admin control to `new_admin`.
+    ///
+    /// The proposed admin must accept before the transfer takes effect.
+    pub fn propose_admin_transfer(
+        env: Env,
+        current_admin: Address,
+        new_admin: Address,
+    ) -> Result<(), Error> {
+        Self::require_admin(&env, &current_admin)?;
+
+        if current_admin == new_admin {
+            return Err(Error::InvalidAdminTransfer);
+        }
+
+        let pending_transfer = PendingAdminTransfer {
+            proposed_admin: new_admin.clone(),
+            proposer: current_admin.clone(),
+            expiry: env.ledger().timestamp() + ADMIN_TRANSFER_TTL,
+        };
+
+        env.storage()
+            .instance()
+            .set(&DataKey::PendingAdminTransfer, &pending_transfer);
+
+        env.events().publish(
+            (symbol_short!("adm_prop"), new_admin.clone()),
+            current_admin,
+        );
+        Ok(())
+    }
+
+    /// Accept a pending admin transfer as the proposed admin.
+    pub fn accept_admin_transfer(env: Env, new_admin: Address) -> Result<(), Error> {
+        let pending_transfer: PendingAdminTransfer = env
+            .storage()
+            .instance()
+            .get(&DataKey::PendingAdminTransfer)
+            .ok_or(Error::InvalidAdminTransfer)?;
+
+        if pending_transfer.proposed_admin != new_admin {
+            return Err(Error::Unauthorized);
+        }
+
+        if env.ledger().timestamp() > pending_transfer.expiry {
+            return Err(Error::AdminTransferExpired);
+        }
+
+        new_admin.require_auth();
+
+        let old_admin = Self::get_admin(&env)?;
+        env.storage().instance().set(&DataKey::Admin, &new_admin);
+        env.storage()
+            .instance()
+            .remove(&DataKey::PendingAdminTransfer);
+
+        env.events()
+            .publish((symbol_short!("adm_xfer"), new_admin), old_admin);
+        Ok(())
+    }
+
+    /// Cancel a pending admin transfer before it is accepted.
+    pub fn cancel_admin_transfer(env: Env, current_admin: Address) -> Result<(), Error> {
+        Self::require_admin(&env, &current_admin)?;
+
+        let pending_transfer: PendingAdminTransfer = env
+            .storage()
+            .instance()
+            .get(&DataKey::PendingAdminTransfer)
+            .ok_or(Error::InvalidAdminTransfer)?;
+
+        if pending_transfer.proposer != current_admin {
+            return Err(Error::Unauthorized);
+        }
+
+        env.storage()
+            .instance()
+            .remove(&DataKey::PendingAdminTransfer);
+
+        env.events().publish(
+            (
+                symbol_short!("adm_canc"),
+                pending_transfer.proposed_admin.clone(),
+            ),
+            current_admin,
+        );
         Ok(())
     }
 
@@ -170,11 +303,11 @@ impl WorkspaceBookingContract {
 
         let mut list: Vec<String> = env
             .storage()
-            .instance()
+            .persistent()
             .get(&DataKey::WorkspaceList)
             .unwrap_or(Vec::new(&env));
         list.push_back(id.clone());
-        env.storage().instance().set(&DataKey::WorkspaceList, &list);
+        env.storage().persistent().set(&DataKey::WorkspaceList, &list);
 
         env.events().publish(
             (symbol_short!("ws_reg"), id),
@@ -250,6 +383,9 @@ impl WorkspaceBookingContract {
     /// payment token (or the caller's auth tree must cover the sub-invocation).
     /// Cost is rounded **up** to the nearest full hour.
     ///
+    /// Overlap is checked **before** payment transfer (C13). A conflicting
+    /// request returns `BookingConflict` and never moves funds.
+    ///
     /// * `booking_id`   – unique ID chosen by the caller (e.g. a UUID).
     /// * `workspace_id` – workspace to book.
     /// * `start_time`   – Unix timestamp (seconds) for start of reservation.
@@ -318,7 +454,7 @@ impl WorkspaceBookingContract {
             member: member.clone(),
             start_time,
             end_time,
-            status: BookingStatus::Active,
+            status: BookingStatus::initial(),
             amount_paid: amount,
             created_at: now,
             cancelled_at: None,
@@ -329,7 +465,7 @@ impl WorkspaceBookingContract {
             .persistent()
             .set(&DataKey::Booking(booking_id.clone()), &booking);
 
-        // Index: workspace → bookings
+              // Index: workspace → bookings (full history — never pruned)
         let mut ws_bookings: Vec<String> = env
             .storage()
             .persistent()
@@ -339,6 +475,18 @@ impl WorkspaceBookingContract {
         env.storage().persistent().set(
             &DataKey::WorkspaceBookings(workspace_id.clone()),
             &ws_bookings,
+        );
+
+        // Index: workspace → active bookings only (used by is_slot_available)
+        let mut active_bookings: Vec<String> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::ActiveWorkspaceBookings(workspace_id.clone()))
+            .unwrap_or(Vec::new(&env));
+        active_bookings.push_back(booking_id.clone());
+        env.storage().persistent().set(
+            &DataKey::ActiveWorkspaceBookings(workspace_id.clone()),
+            &active_bookings,
         );
 
         // Index: member → bookings
@@ -376,15 +524,19 @@ impl WorkspaceBookingContract {
             .get(&DataKey::Booking(booking_id.clone()))
             .ok_or(Error::BookingNotFound)?;
 
-        let admin = Self::get_admin(&env)?;
+                let admin = Self::get_admin(&env)?;
         if caller != booking.member && caller != admin {
             return Err(Error::Unauthorized);
         }
-        if booking.status != BookingStatus::Active {
+        if booking.status == BookingStatus::Cancelled {
+            return Err(Error::BookingAlreadyCancelled);
+        }
+        if !booking.status.is_active() {
             return Err(Error::BookingNotActive);
         }
 
         let now = env.ledger().timestamp();
+
         let duration = booking.end_time - booking.start_time;
 
         let refund: u128 = if now >= booking.end_time {
@@ -408,11 +560,15 @@ impl WorkspaceBookingContract {
             );
         }
 
-        booking.status = BookingStatus::Cancelled;
+           booking.status = booking
+            .status
+            .transition(BookingStatus::Cancelled)
+            .map_err(|_| Error::BookingNotActive)?;
         booking.cancelled_at = Some(now);
         env.storage()
             .persistent()
             .set(&DataKey::Booking(booking_id.clone()), &booking);
+        Self::remove_active_booking(&env, &booking.workspace_id, &booking_id);
 
         env.events().publish(
             (symbol_short!("cancel"), booking_id),
@@ -433,15 +589,19 @@ impl WorkspaceBookingContract {
             .get(&DataKey::Booking(booking_id.clone()))
             .ok_or(Error::BookingNotFound)?;
 
-        if booking.status != BookingStatus::Active {
+        if !booking.status.is_active() {
             return Err(Error::BookingNotActive);
         }
 
-        booking.status = BookingStatus::Completed;
+           booking.status = booking
+            .status
+            .transition(BookingStatus::Completed)
+            .map_err(|_| Error::BookingNotActive)?;
         booking.completed_at = Some(env.ledger().timestamp());
         env.storage()
             .persistent()
             .set(&DataKey::Booking(booking_id.clone()), &booking);
+        Self::remove_active_booking(&env, &booking.workspace_id, &booking_id);
 
         env.events().publish(
             (symbol_short!("complete"), booking_id),
@@ -465,7 +625,7 @@ impl WorkspaceBookingContract {
             .get(&DataKey::Booking(booking_id.clone()))
             .ok_or(Error::BookingNotFound)?;
 
-        if booking.status != BookingStatus::Active {
+        if !booking.status.is_active() {
             return Err(Error::BookingNotActive);
         }
 
@@ -474,11 +634,15 @@ impl WorkspaceBookingContract {
             return Err(Error::BookingConflict); // Too early to mark no-show
         }
 
-        booking.status = BookingStatus::NoShow;
+          booking.status = booking
+            .status
+            .transition(BookingStatus::NoShow)
+            .map_err(|_| Error::BookingNotActive)?;
         booking.cancelled_at = Some(now);
         env.storage()
             .persistent()
             .set(&DataKey::Booking(booking_id.clone()), &booking);
+        Self::remove_active_booking(&env, &booking.workspace_id, &booking_id);
 
         env.events().publish(
             (symbol_short!("noshow"), booking_id),
@@ -500,7 +664,7 @@ impl WorkspaceBookingContract {
             .get(&DataKey::Booking(booking_id.clone()))
             .ok_or(Error::BookingNotFound)?;
 
-        if booking.status != BookingStatus::Active {
+        if !booking.status.is_active() {
             return Err(Error::BookingNotActive);
         }
 
@@ -509,17 +673,23 @@ impl WorkspaceBookingContract {
             return Err(Error::BookingConflict); // Booking hasn't ended yet
         }
 
-        booking.status = BookingStatus::Expired;
+        booking.status = booking
+            .status
+            .transition(BookingStatus::Expired)
+            .map_err(|_| Error::BookingNotActive)?;
         booking.cancelled_at = Some(now);
         env.storage()
             .persistent()
             .set(&DataKey::Booking(booking_id.clone()), &booking);
+        Self::remove_active_booking(&env, &booking.workspace_id, &booking_id);
 
         env.events().publish(
             (symbol_short!("expired"), booking_id),
             (booking.workspace_id, booking.member),
         );
         Ok(())
+    }
+    
     }
 
     // ── Queries ───────────────────────────────────────────────────────────────
@@ -543,7 +713,7 @@ impl WorkspaceBookingContract {
     /// Return all registered workspace IDs (in registration order).
     pub fn get_all_workspaces(env: Env) -> Vec<String> {
         env.storage()
-            .instance()
+            .persistent()
             .get(&DataKey::WorkspaceList)
             .unwrap_or(Vec::new(&env))
     }
@@ -592,6 +762,11 @@ impl WorkspaceBookingContract {
     /// Return the current admin address.
     pub fn admin(env: Env) -> Result<Address, Error> {
         Self::get_admin(&env)
+    }
+
+    /// Return the pending admin transfer, if one exists.
+    pub fn get_pending_admin_transfer(env: Env) -> Option<PendingAdminTransfer> {
+        env.storage().instance().get(&DataKey::PendingAdminTransfer)
     }
 
     /// Return the payment token address.

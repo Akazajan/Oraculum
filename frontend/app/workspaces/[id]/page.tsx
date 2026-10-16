@@ -1,7 +1,8 @@
 "use client";
 
-import { use } from "react";
+import { use, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import DashboardLayout from "@/components/dashboard/DashboardLayout";
 import { useGetWorkspaceById } from "@/lib/react-query/hooks/workspaces/useGetWorkspaceById";
 import {
@@ -10,6 +11,9 @@ import {
   MapPin,
   CheckCircle2,
   CalendarPlus,
+  AlertCircle,
+  RefreshCcw,
+  Loader2,
 } from "lucide-react";
 
 const TYPE_LABELS: Record<string, string> = {
@@ -26,8 +30,19 @@ export default function WorkspaceDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = use(params);
-  const { data, isLoading, isError } = useGetWorkspaceById(id);
+  const { data, isLoading, isError, refetch } = useGetWorkspaceById(id);
   const workspace = data?.data;
+
+  // #351: track in-flight booking navigation so the CTA is disabled, shows a
+  // spinner, and duplicate requests are prevented while the booking form loads.
+  const router = useRouter();
+  const [bookingPending, setBookingPending] = useState(false);
+
+  function handleBookWorkspace() {
+    if (bookingPending || !workspace) return;
+    setBookingPending(true);
+    router.push(`/bookings/new?workspaceId=${workspace.id}`);
+  }
 
   const hourlyNaira = workspace
     ? (workspace.hourlyRate / 100).toLocaleString("en-NG", {
@@ -54,13 +69,34 @@ export default function WorkspaceDetailPage({
           <div className="bg-white rounded-xl border border-gray-100 h-72 animate-pulse" />
           <div className="bg-white rounded-xl border border-gray-100 h-48 animate-pulse" />
         </div>
-      ) : isError || !workspace ? (
+      ) : isError ? (
+        <div className="text-center py-20">
+          <AlertCircle className="w-10 h-10 mx-auto mb-3 text-red-400" />
+          <p className="font-medium text-gray-900 mb-1">Failed to load workspace</p>
+          <p className="text-sm text-gray-500 mb-6">There was an error loading the workspace details.</p>
+          <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
+            <button
+              onClick={() => refetch()}
+              className="inline-flex items-center gap-2 px-4 py-2 bg-gray-900 text-white text-sm font-medium rounded-lg hover:bg-gray-700 transition-colors"
+            >
+              <RefreshCcw className="w-4 h-4" />
+              Retry
+            </button>
+            <Link
+              href="/workspaces"
+              className="text-sm text-gray-500 hover:text-gray-900 underline transition-colors"
+            >
+              Back to workspaces
+            </Link>
+          </div>
+        </div>
+      ) : !workspace ? (
         <div className="text-center py-20 text-gray-500">
           <MapPin className="w-10 h-10 mx-auto mb-3 text-gray-300" />
-          <p className="font-medium">Workspace not found</p>
+          <p className="font-medium text-gray-900">Workspace not found</p>
           <Link
             href="/workspaces"
-            className="text-sm text-gray-500 underline mt-2 inline-block"
+            className="text-sm text-gray-500 underline mt-2 inline-block hover:text-gray-900"
           >
             Browse all workspaces
           </Link>
@@ -190,13 +226,25 @@ export default function WorkspaceDetailPage({
               </div>
 
               {workspace.isActive ? (
-                <Link
-                  href={`/bookings/new?workspaceId=${workspace.id}`}
-                  className="flex items-center justify-center gap-2 w-full py-2.5 bg-gray-900 text-white text-sm font-medium rounded-lg hover:bg-gray-700 transition-colors"
+                <button
+                  type="button"
+                  onClick={handleBookWorkspace}
+                  disabled={bookingPending}
+                  aria-busy={bookingPending}
+                  className="flex items-center justify-center gap-2 w-full py-2.5 bg-gray-900 text-white text-sm font-medium rounded-lg hover:bg-gray-700 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
                 >
-                  <CalendarPlus className="w-4 h-4" />
-                  Book this space
-                </Link>
+                  {bookingPending ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" />
+                      Preparing booking…
+                    </>
+                  ) : (
+                    <>
+                      <CalendarPlus className="w-4 h-4" aria-hidden="true" />
+                      Book this space
+                    </>
+                  )}
+                </button>
               ) : (
                 <button
                   disabled

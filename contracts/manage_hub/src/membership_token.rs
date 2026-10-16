@@ -38,6 +38,12 @@ pub enum DataKey {
     /// Version snapshot for rollback, keyed by token ID and version number.
     VersionSnapshot(BytesN<32>, u32),
     Royalty(BytesN<32>),
+    /// Sentinel flag set by `set_admin` the first time to mark the hub as
+    /// initialised. Public operations call `require_hub_initialized` before
+    /// reading any other configuration to ensure they fail with a stable
+    /// `AdminNotSet` error rather than panicking or returning a misleading
+    /// result when the hub has never been set up.
+    HubInitialized,
 }
 
 #[contracttype]
@@ -134,14 +140,14 @@ impl MembershipTokenContract {
 
         // Emit agent registered event for observability
         let default_metadata = TokenMetadata {
-            description: String::from_env(env),
+            description: String::from_str(env, ""),
             attributes: Map::new(env),
             version: 0,
             last_updated: current_time,
             updated_by: admin.clone(),
         };
         env.events().publish(
-            (symbol_short!("agent_registered"), id.clone()),
+            (symbol_short!("agent_reg"), id.clone()),
             AgentRegisteredEvent {
                 agent_id: id.clone(),
                 owner: user.clone(),
@@ -407,25 +413,67 @@ impl MembershipTokenContract {
     }
 
     pub fn get_token(env: Env, id: BytesN<32>) -> Result<MembershipToken, Error> {
-        // Retrieve token
+        // Retrieve from the canonical storage key.
         let token: MembershipToken = env
             .storage()
             .persistent()
-            .get(&DataKey::Token(id))
+            .get(&DataKey::Token(id.clone()))
             .ok_or(Error::TokenNotFound)?;
 
-        // Check token status based on expiry date
+        // Check token status based on expiry date.
         let current_time = env.ledger().timestamp();
         if token.status == MembershipStatus::Active && current_time > token.expiry_date {
             return Err(Error::TokenExpired);
         }
 
+        // Lazy migration: ensure the token is also present in the V2 slot so
+        // that any tooling or future read path that prefers TokenV2 finds an
+        // up-to-date copy.  This is a no-op for tokens that have already been
+        // written to TokenV2 during a previous read or write.
+        if !env
+            .storage()
+            .persistent()
+            .has(&DataKey::TokenV2(id.clone()))
+        {
+            env.storage()
+                .persistent()
+                .set(&DataKey::TokenV2(id.clone()), &token);
+        }
+
         Ok(token)
+    }
+
+    /// Returns `true` if the hub has been initialised (i.e. `set_admin` has
+    /// been called at least once).
+    pub fn is_hub_initialized(env: &Env) -> bool {
+        env.storage().instance().has(&DataKey::HubInitialized)
+    }
+
+    /// Guard called at the top of public hub operations that read
+    /// configuration.  Returns `Error::AdminNotSet` when the hub has not
+    /// yet had an admin set, which is the canonical "not initialised" state.
+    pub fn require_hub_initialized(env: &Env) -> Result<(), Error> {
+        if !Self::is_hub_initialized(env) {
+            return Err(Error::AdminNotSet);
+        }
+        Ok(())
     }
 
     pub fn set_admin(env: Env, admin: Address) -> Result<(), Error> {
         admin.require_auth();
         env.storage().instance().set(&DataKey::Admin, &admin);
+        // Stamp the initialisation sentinel the first time an admin is set.
+        // Re-setting the admin does not reset this flag so all subsequent
+        // calls to `require_hub_initialized` continue to pass.
+        if !env
+            .storage()
+            .instance()
+            .has(&DataKey::HubInitialized)
+        {
+            env.storage()
+                .instance()
+                .set(&DataKey::HubInitialized, &true);
+        }
 
         // Emit admin set event
         env.events().publish(
@@ -639,7 +687,7 @@ impl MembershipTokenContract {
 
         // Emit agent metadata updated event for observability
         env.events().publish(
-            (symbol_short!("agent_metadata_updated"), token_id.clone()),
+            (symbol_short!("agnt_meta"), token_id.clone()),
             AgentMetadataUpdatedEvent {
                 agent_id: token_id.clone(),
                 updater: caller.clone(),

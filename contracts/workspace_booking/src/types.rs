@@ -79,6 +79,87 @@ pub enum BookingStatus {
     Expired,
 }
 
+
+impl BookingStatus {
+    /// Stable u32 discriminant used for on-wire / storage serialization.
+    ///
+    /// Discriminants are fixed and must never be reordered:
+    /// Active=0, Completed=1, Cancelled=2, NoShow=3, Expired=4.
+    pub fn as_u32(&self) -> u32 {
+        match self {
+            BookingStatus::Active => 0,
+            BookingStatus::Completed => 1,
+            BookingStatus::Cancelled => 2,
+            BookingStatus::NoShow => 3,
+            BookingStatus::Expired => 4,
+        }
+    }
+
+    /// Construct a status from its stable discriminant.
+    ///
+    /// Invalid values cannot be constructed — returns `None` for any
+    /// discriminant outside the explicit lifecycle set.
+    pub fn try_from_u32(value: u32) -> Option<Self> {
+        match value {
+            0 => Some(BookingStatus::Active),
+            1 => Some(BookingStatus::Completed),
+            2 => Some(BookingStatus::Cancelled),
+            3 => Some(BookingStatus::NoShow),
+            4 => Some(BookingStatus::Expired),
+            _ => None,
+        }
+    }
+
+    /// Initial lifecycle state for a newly created booking.
+    pub fn initial() -> Self {
+        BookingStatus::Active
+    }
+
+    /// Returns `true` when the booking is currently active.
+    pub fn is_active(&self) -> bool {
+        matches!(self, BookingStatus::Active)
+    }
+
+    /// Returns `true` for terminal states that admit no further transitions.
+    pub fn is_terminal(&self) -> bool {
+        matches!(
+            self,
+            BookingStatus::Completed
+                | BookingStatus::Cancelled
+                | BookingStatus::NoShow
+                | BookingStatus::Expired
+        )
+    }
+
+    /// Explicit allowed lifecycle transitions.
+    ///
+    /// Only `Active` may transition, and only into a terminal state:
+    /// - Active → Completed
+    /// - Active → Cancelled
+    /// - Active → NoShow
+    /// - Active → Expired
+    ///
+    /// Self-transitions and any transition out of a terminal state are denied.
+    pub fn can_transition(&self, to: &BookingStatus) -> bool {
+        matches!(
+            (self, to),
+            (BookingStatus::Active, BookingStatus::Completed)
+                | (BookingStatus::Active, BookingStatus::Cancelled)
+                | (BookingStatus::Active, BookingStatus::NoShow)
+                | (BookingStatus::Active, BookingStatus::Expired)
+        )
+    }
+
+    /// Apply an allowed transition, or return `Err(())` if the edge is invalid.
+    pub fn transition(&self, to: BookingStatus) -> Result<BookingStatus, ()> {
+        if self.can_transition(&to) {
+            Ok(to)
+        } else {
+            Err(())
+        }
+    }
+}
+
 /// A physical or logical workspace that can be booked.
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]

@@ -8,6 +8,9 @@ export interface CloudinaryUploadOptions {
   thumbnailHeight?: number;
 }
 
+/** B19 – Cloudinary accepts exactly these resource types at runtime. */
+const SUPPORTED_RESOURCE_TYPES = new Set(['image', 'video', 'raw', 'auto']);
+
 export function buildCloudinaryUploadOptions({
   folder,
   resourceType = 'image',
@@ -17,6 +20,11 @@ export function buildCloudinaryUploadOptions({
   thumbnailWidth,
   thumbnailHeight,
 }: CloudinaryUploadOptions = {}) {
+  if (!SUPPORTED_RESOURCE_TYPES.has(resourceType)) {
+    throw new Error(
+      `Unsupported Cloudinary resource_type: "${resourceType}"`,
+    );
+  }
   return {
     folder: folder || 'uploads',
     resource_type: resourceType,

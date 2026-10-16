@@ -11,7 +11,13 @@ export class PaystackProvider {
   private readonly secretKey: string;
 
   constructor(private readonly configService: ConfigService) {
-    this.secretKey = this.configService.get<string>('PAYSTACK_SECRET_KEY');
+    const secretKey = this.configService.get<string>('PAYSTACK_SECRET_KEY');
+    if (!secretKey || secretKey.trim() === '') {
+      throw new Error(
+        'PAYSTACK_SECRET_KEY environment variable is not defined',
+      );
+    }
+    this.secretKey = secretKey;
   }
 
   private get headers() {

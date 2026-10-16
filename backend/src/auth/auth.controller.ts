@@ -13,6 +13,7 @@ import {
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
+import { Throttle, seconds } from '@nestjs/throttler';
 import { AuthService } from './auth.service';
 import { CreateUserDto } from './dto/create-user.dto';
 import { LoginUserDto } from './dto/login-user.dto';
@@ -65,6 +66,7 @@ export class AuthController {
   @Public()
   @Post('resend-verification-otp')
   @HttpCode(HttpStatus.OK)
+  @Throttle({ otp: { ttl: seconds(60), limit: 3 } })
   @ApiOperation({ summary: 'Resend the registration verification OTP' })
   @ApiResponse({ status: 200, description: 'OTP re-delivered' })
   @ApiResponse({ status: 429, type: ApiErrorDto })
@@ -151,6 +153,7 @@ export class AuthController {
   @Public()
   @Post('resend-reset-password-otp')
   @HttpCode(HttpStatus.OK)
+  @Throttle({ otp: { ttl: seconds(60), limit: 3 } })
   @ApiOperation({ summary: 'Resend a password-reset OTP' })
   resendResetPasswordVerificationOtp(@Body() resendOtpDto: ResendOtpDto) {
     return this.authService.resendResetPasswordVerificationOtp(resendOtpDto);

@@ -2,7 +2,6 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
-  InternalServerErrorException,
   Logger,
   NotFoundException,
   UnauthorizedException,
@@ -10,7 +9,7 @@ import {
 import { CreateUserDto } from './dto/create-user.dto';
 import { LoginUserDto } from './dto/login-user.dto';
 import { User } from '../users/entities/user.entity';
-import { IsNull, MoreThan, Repository } from 'typeorm';
+import { MoreThan, Repository } from 'typeorm';
 import { UserHelper } from './helper/user-helper';
 import { InjectRepository } from '@nestjs/typeorm';
 import { UserMessages } from './helper/user-messages';
@@ -32,8 +31,12 @@ import { VerifyTotpDto } from './dto/verify-totp.dto';
 import { UseBackupCodeDto } from './dto/use-backup-code.dto';
 import { Disable2faDto } from './dto/disable-2fa.dto';
 import { AuditAction, AuditService } from '../audit/audit.service';
+import { ErrorCatch } from '../utils/error';
+import { getCurrentActorFromAls } from '../common/utils/current-actor.util';
 
 const DEFAULT_PASSWORD_RESET_OTP_MINUTES = 10;
+const MAX_LOGIN_ATTEMPTS = 5;
+const LOCKOUT_MINUTES = 15;
 
 @Injectable()
 export class AuthService {
@@ -265,9 +268,10 @@ export class AuthService {
 
       return { message: UserMessages.OTP_SENT };
     } catch (error) {
-      throw new InternalServerErrorException(
-        error || 'Error resending verification code',
-      );
+      // #203 — Re-throw typed HTTP exceptions (e.g. BadRequestException,
+      // NotFoundException) unchanged so clients see the real 4xx status;
+      // only unexpected failures are normalised to 500.
+      ErrorCatch(error, 'Error resending verification code');
     }
   }
 
@@ -275,6 +279,17 @@ export class AuthService {
     const user = await this.userRepository.findOne({
       where: { email: loginUserDto.email },
     });
+
+    // B22 – locked accounts are rejected up-front with the exact same
+    // response shape as bad credentials (no account probing).
+    if (user && user.lockoutUntil && user.lockoutUntil > new Date()) {
+      await this.auditService.authFailure(AuditAction.LOGIN_FAILED, loginUserDto.email, {
+        reason: 'locked',
+        userId: user.id,
+      });
+      throw new UnauthorizedException(UserMessages.INVALID_CREDENTIALS);
+    }
+
     if (
       !user ||
       !(await this.userHelper.verifyPassword(
@@ -282,12 +297,25 @@ export class AuthService {
         user.password,
       ))
     ) {
+      if (user) {
+        await this.bumpLoginFailure(user);
+      }
       await this.auditService.authFailure(
         AuditAction.LOGIN_FAILED,
         loginUserDto.email,
         { reason: !user ? 'unknown_email' : 'bad_password' },
       );
       throw new UnauthorizedException(UserMessages.INVALID_CREDENTIALS);
+    }
+
+    // B22 – a successful authentication resets the failure state.
+    if (user.failedLoginAttempts > 0 || user.lockoutUntil) {
+      await this.userRepository.update(user.id, {
+        failedLoginAttempts: 0,
+        lockoutUntil: null,
+      });
+      user.failedLoginAttempts = 0;
+      user.lockoutUntil = null;
     }
 
     if (!user.isVerified) {
@@ -327,6 +355,23 @@ export class AuthService {
       accessToken,
       refreshToken,
     };
+  }
+
+  /** B22 – increment the failed-login counter; on the exact threshold,
+   * reset it and lock the account for LOCKOUT_MINUTES. */
+  private async bumpLoginFailure(user: User): Promise<void> {
+    const next = (user.failedLoginAttempts ?? 0) + 1;
+    if (next >= MAX_LOGIN_ATTEMPTS) {
+      await this.userRepository.update(user.id, {
+        failedLoginAttempts: 0,
+        lockoutUntil: moment().add(LOCKOUT_MINUTES, 'minutes').toDate(),
+      });
+    } else {
+      await this.userRepository.update(user.id, {
+        failedLoginAttempts: next,
+      });
+      user.failedLoginAttempts = next;
+    }
   }
 
   /**
@@ -554,9 +599,10 @@ export class AuthService {
 
       return { message: UserMessages.OTP_SENT };
     } catch (error) {
-      throw new InternalServerErrorException(
-        error || 'Error resending verification code',
-      );
+      // #204 — Re-throw typed HTTP exceptions (e.g. BadRequestException,
+      // NotFoundException) unchanged so clients see the real 4xx status;
+      // only unexpected failures are normalised to 500.
+      ErrorCatch(error, 'Error resending verification code');
     }
   }
 
@@ -834,30 +880,3 @@ export class AuthService {
     };
   }
 }
-
-/**
- * Snapshot the actor from the AsyncLocalStorage context opened by the
- * correlation-id middleware so audit rows recorded during background
- * flows (e.g. admin-issued register-admin) automatically pick up the
- * caller's identity, role, and contact details.
- */
-import {
-  getCorrelationId,
-  getCurrentRequestUser,
-  getRequestIp,
-  getUserAgent,
-} from '../common/context/correlation-context';
-function getCurrentActorFromAls() {
-  const current = getCurrentRequestUser();
-  return {
-    id: current?.id ?? null,
-    email: current?.email ?? null,
-    role: current?.role ?? null,
-  };
-}
-// Suppress unused import lint warnings — these references are kept for
-// future expansion (e.g. attaching IP/UA into audit metadata).
-void getCorrelationId;
-void getRequestIp;
-void getUserAgent;
-void IsNull;

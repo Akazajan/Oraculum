@@ -77,6 +77,8 @@ import { CleanupModule } from './cleanup/cleanup.module';
       { name: 'newsletter', ttl: 60_000, limit: 10 },
       { name: 'contact', ttl: 60_000, limit: 5 },
       { name: 'feedback', ttl: 60_000, limit: 10 },
+      // OTP resend: 3 attempts per 60 s per IP/user (#205)
+      { name: 'otp', ttl: 60_000, limit: 3 },
 
       // Per-IP stricter limits for unauthenticated traffic (default tier).
       {

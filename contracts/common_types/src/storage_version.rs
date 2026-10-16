@@ -5,6 +5,14 @@
 //! safe, incremental upgrades: each new contract version bumps the storage
 //! version and can run migration logic to transform existing data.
 //!
+//! ## Upgrade guards
+//!
+//! Storage-version upgrades are intentionally strict:
+//! - **Downgrades fail** — the target must be greater than the current version.
+//! - **Unsupported jumps fail** — only a single-step bump (`current + 1`) is allowed.
+//! - **Version commits after migration** — prefer [`StorageVersionManager::migrate_with`]:
+//!   the stored version is updated only when the migration callback returns `Ok`.
+//!
 //! ## Usage
 //!
 //! ```rust,ignore
@@ -13,11 +21,11 @@
 //! // At contract initialization:
 //! StorageVersionManager::initialize(&env, 1);
 //!
-//! // Before running upgrade logic:
-//! let current = StorageVersionManager::get_version(&env);
-//! if current < 2 {
-//!     StorageVersionManager::migrate_to(&env, 2)?;
-//! }
+//! // Safe upgrade: migrate data first, then commit the new version.
+//! StorageVersionManager::migrate_with(&env, 2, |env| {
+//!     // transform storage schema for v2…
+//!     Ok(())
+//! })?;
 //! ```
 
 use soroban_sdk::{contracttype, symbol_short, Env, String};
@@ -204,27 +212,35 @@ impl StorageVersionManager {
         Self::get_version(env) < target_version
     }
 
-    /// Perform a migration to the target version.
+    /// Validate that `target_version` is a supported upgrade from the current version.
     ///
-    /// This function updates the stored version number and records the
-    /// migration timestamp. It does NOT execute any data migration logic —
-    /// callers should handle data transformation between `get_version()`
-    /// and the target version before calling this method.
-    ///
-    /// # Arguments
-    /// * `env` - The contract environment
-    /// * `target_version` - The version to migrate to
-    ///
-    /// # Returns
-    /// * `Ok(MigrationResult)` with migration details
-    /// * `Err(())` if the target version is not greater than the current version
-    pub fn migrate_to(env: &Env, target_version: u32) -> Result<MigrationResult, ()> {
-        let current_version = Self::get_version(env);
+    /// # Errors
+    /// * `Err(())` on **downgrade** (`target < current`) or no-op (`target == current`)
+    /// * `Err(())` on **unsupported jump** (`target != current + 1`)
+    pub fn validate_upgrade(env: &Env, target_version: u32) -> Result<(), ()> {
+        let current = Self::get_version(env);
 
-        if target_version <= current_version {
+        // Downgrades (and staying put) are never allowed.
+        if target_version <= current {
             return Err(());
         }
 
+        // Only a single-step bump is a supported storage-version jump.
+        if target_version != current.saturating_add(1) {
+            return Err(());
+        }
+
+        Ok(())
+    }
+
+    /// Persist a successful migration: bump the stored version and timestamp.
+    ///
+    /// Callers must have already validated the upgrade and completed data migration.
+    fn commit_migration(
+        env: &Env,
+        current_version: u32,
+        target_version: u32,
+    ) -> MigrationResult {
         let timestamp = env.ledger().timestamp();
 
         env.storage().instance().set(
@@ -240,17 +256,66 @@ impl StorageVersionManager {
             timestamp,
         );
 
-        Ok(MigrationResult {
+        MigrationResult {
             from_version: current_version,
             to_version: target_version,
             migrated: true,
             completed_at: timestamp,
-        })
+        }
+    }
+
+    /// Commit an already-completed migration to the target version.
+    ///
+    /// Prefer [`Self::migrate_with`] when migration logic can run inside the
+    /// helper — that API updates the stored version **only after** the
+    /// migration callback succeeds. Use `migrate_to` when data has already
+    /// been transformed successfully and only the version stamp remains.
+    ///
+    /// # Arguments
+    /// * `env` - The contract environment
+    /// * `target_version` - The version to migrate to (must be `current + 1`)
+    ///
+    /// # Returns
+    /// * `Ok(MigrationResult)` with migration details
+    /// * `Err(())` on downgrade or unsupported jump
+    pub fn migrate_to(env: &Env, target_version: u32) -> Result<MigrationResult, ()> {
+        Self::validate_upgrade(env, target_version)?;
+        let current_version = Self::get_version(env);
+        Ok(Self::commit_migration(env, current_version, target_version))
+    }
+
+    /// Run migration logic, then update the stored version only on success.
+    ///
+    /// 1. Rejects downgrades and unsupported jumps via [`Self::validate_upgrade`].
+    /// 2. Invokes `migrate_fn`. If it returns `Err`, storage version is **unchanged**.
+    /// 3. On `Ok`, commits `target_version` to instance storage.
+    ///
+    /// # Arguments
+    /// * `env` - The contract environment
+    /// * `target_version` - Must be exactly `current + 1`
+    /// * `migrate_fn` - Data / schema migration; must be idempotent-safe on retry
+    pub fn migrate_with<F>(
+        env: &Env,
+        target_version: u32,
+        migrate_fn: F,
+    ) -> Result<MigrationResult, ()>
+    where
+        F: FnOnce(&Env) -> Result<(), ()>,
+    {
+        Self::validate_upgrade(env, target_version)?;
+        let current_version = Self::get_version(env);
+
+        // Version stays at `current_version` if migration fails.
+        migrate_fn(env)?;
+
+        Ok(Self::commit_migration(env, current_version, target_version))
     }
 
     /// Perform a migration with a new version label.
     ///
-    /// Combines `migrate_to` with updating the human-readable label.
+    /// Runs through [`Self::migrate_with`] so the label and version are written
+    /// only after a successful (no-op) migration step — callers that need
+    /// custom data transforms should call `migrate_with` directly.
     ///
     /// # Arguments
     /// * `env` - The contract environment
@@ -261,26 +326,29 @@ impl StorageVersionManager {
         target_version: u32,
         label: String,
     ) -> Result<MigrationResult, ()> {
-        let result = Self::migrate_to(env, target_version)?;
-        env.storage()
-            .instance()
-            .set(&VersionStorageKey::VersionLabel, &label);
-        Ok(result)
+        Self::migrate_with(env, target_version, |env| {
+            env.storage()
+                .instance()
+                .set(&VersionStorageKey::VersionLabel, &label);
+            Ok(())
+        })
     }
 
     /// Attempt a migration only if the contract needs it.
     ///
     /// If the contract is already at or beyond the target version, returns
     /// a `MigrationResult` with `migrated: false` instead of failing.
+    /// Unsupported jumps (target ≠ current + 1) also return `migrated: false`
+    /// without mutating the stored version.
     ///
     /// # Arguments
     /// * `env` - The contract environment
     /// * `target_version` - The version to migrate to
     pub fn try_migrate(env: &Env, target_version: u32) -> MigrationResult {
         let current_version = Self::get_version(env);
+        let timestamp = env.ledger().timestamp();
 
         if current_version >= target_version {
-            let timestamp = env.ledger().timestamp();
             return MigrationResult {
                 from_version: current_version,
                 to_version: current_version,
@@ -289,29 +357,24 @@ impl StorageVersionManager {
             };
         }
 
-        Self::migrate_to(env, target_version).unwrap_or_else(|_| {
-            let timestamp = env.ledger().timestamp();
-            MigrationResult {
+        match Self::migrate_to(env, target_version) {
+            Ok(result) => result,
+            Err(()) => MigrationResult {
                 from_version: current_version,
                 to_version: current_version,
                 migrated: false,
                 completed_at: timestamp,
-            }
-        })
+            },
+        }
     }
 
     /// Validate that a target version is reachable from the current version.
     ///
     /// Returns `Ok(())` if the target version is exactly one greater than the
     /// current version (incremental migration), or `Err(())` if the gap is
-    /// larger (multi-step migration required).
+    /// larger (multi-step migration required) or the target is not an upgrade.
     pub fn validate_incremental_migration(env: &Env, target_version: u32) -> Result<(), ()> {
-        let current = Self::get_version(env);
-        if target_version == current + 1 {
-            Ok(())
-        } else {
-            Err(())
-        }
+        Self::validate_upgrade(env, target_version)
     }
 
     /// Get the number of versions the contract is behind.
@@ -327,11 +390,27 @@ impl StorageVersionManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use soroban_sdk::testutils::Address as _;
+
+    /// A minimal host contract so the library under test runs inside a real
+    /// contract context. `StorageVersionManager` reads and writes
+    /// `env.storage().instance()`, which Soroban only allows while executing a
+    /// contract call; registering this dummy lets every test open such a
+    /// context with `env.as_contract`.
+    #[soroban_sdk::contract]
+    pub struct StorageVersionTestContract;
+
+    #[soroban_sdk::contractimpl]
+    impl StorageVersionTestContract {
+        pub fn noop(_env: Env) -> u32 {
+            0
+        }
+    }
 
     #[test]
     fn test_initialize_and_get_version() {
         let env = Env::default();
-        env.as(|| {
+        env.as_contract(&env.register(StorageVersionTestContract, ()), || {
             assert!(!StorageVersionManager::is_initialized(&env));
             assert_eq!(StorageVersionManager::get_version(&env), 0);
 
@@ -345,7 +424,7 @@ mod tests {
     #[test]
     fn test_initialize_fails_if_already_initialized() {
         let env = Env::default();
-        env.as(|| {
+        env.as_contract(&env.register(StorageVersionTestContract, ()), || {
             StorageVersionManager::initialize(&env, 1).unwrap();
             assert!(StorageVersionManager::initialize(&env, 2).is_err());
         });
@@ -354,7 +433,7 @@ mod tests {
     #[test]
     fn test_migrate_to() {
         let env = Env::default();
-        env.as(|| {
+        env.as_contract(&env.register(StorageVersionTestContract, ()), || {
             StorageVersionManager::initialize(&env, 1).unwrap();
 
             let result = StorageVersionManager::migrate_to(&env, 2).unwrap();
@@ -366,19 +445,83 @@ mod tests {
     }
 
     #[test]
-    fn test_migrate_to_fails_if_target_not_greater() {
+    fn test_migrate_to_fails_on_downgrade() {
         let env = Env::default();
-        env.as(|| {
+        env.as_contract(&env.register(StorageVersionTestContract, ()), || {
             StorageVersionManager::initialize(&env, 2).unwrap();
             assert!(StorageVersionManager::migrate_to(&env, 2).is_err());
             assert!(StorageVersionManager::migrate_to(&env, 1).is_err());
+            assert_eq!(StorageVersionManager::get_version(&env), 2);
+        });
+    }
+
+    #[test]
+    fn test_migrate_to_fails_on_unsupported_jump() {
+        let env = Env::default();
+        env.as_contract(&env.register(StorageVersionTestContract, ()), || {
+            StorageVersionManager::initialize(&env, 1).unwrap();
+            // Skipping v2 is an unsupported jump.
+            assert!(StorageVersionManager::migrate_to(&env, 3).is_err());
+            assert!(StorageVersionManager::migrate_to(&env, 5).is_err());
+            assert_eq!(StorageVersionManager::get_version(&env), 1);
+        });
+    }
+
+    #[test]
+    fn test_migrate_with_updates_version_only_after_success() {
+        let env = Env::default();
+        env.as_contract(&env.register(StorageVersionTestContract, ()), || {
+            StorageVersionManager::initialize(&env, 1).unwrap();
+
+            let result = StorageVersionManager::migrate_with(&env, 2, |_env| Ok(())).unwrap();
+            assert!(result.migrated);
+            assert_eq!(result.from_version, 1);
+            assert_eq!(result.to_version, 2);
+            assert_eq!(StorageVersionManager::get_version(&env), 2);
+        });
+    }
+
+    #[test]
+    fn test_migrate_with_leaves_version_unchanged_on_failure() {
+        let env = Env::default();
+        env.as_contract(&env.register(StorageVersionTestContract, ()), || {
+            StorageVersionManager::initialize(&env, 1).unwrap();
+
+            let err = StorageVersionManager::migrate_with(&env, 2, |_env| Err(()));
+            assert!(err.is_err());
+            // Current version must not advance when migration fails.
+            assert_eq!(StorageVersionManager::get_version(&env), 1);
+        });
+    }
+
+    #[test]
+    fn test_migrate_with_rejects_downgrade_and_jump_before_callback() {
+        let env = Env::default();
+        env.as_contract(&env.register(StorageVersionTestContract, ()), || {
+            StorageVersionManager::initialize(&env, 2).unwrap();
+            let mut called = false;
+            assert!(StorageVersionManager::migrate_with(&env, 1, |_env| {
+                called = true;
+                Ok(())
+            })
+            .is_err());
+            assert!(!called);
+            assert_eq!(StorageVersionManager::get_version(&env), 2);
+
+            assert!(StorageVersionManager::migrate_with(&env, 4, |_env| {
+                called = true;
+                Ok(())
+            })
+            .is_err());
+            assert!(!called);
+            assert_eq!(StorageVersionManager::get_version(&env), 2);
         });
     }
 
     #[test]
     fn test_try_migrate_already_at_target() {
         let env = Env::default();
-        env.as(|| {
+        env.as_contract(&env.register(StorageVersionTestContract, ()), || {
             StorageVersionManager::initialize(&env, 3).unwrap();
             let result = StorageVersionManager::try_migrate(&env, 3);
             assert!(!result.migrated);
@@ -390,19 +533,33 @@ mod tests {
     #[test]
     fn test_try_migrate_needs_migration() {
         let env = Env::default();
-        env.as(|| {
+        env.as_contract(&env.register(StorageVersionTestContract, ()), || {
             StorageVersionManager::initialize(&env, 1).unwrap();
-            let result = StorageVersionManager::try_migrate(&env, 5);
+            let result = StorageVersionManager::try_migrate(&env, 2);
             assert!(result.migrated);
             assert_eq!(result.from_version, 1);
-            assert_eq!(result.to_version, 5);
+            assert_eq!(result.to_version, 2);
+            assert_eq!(StorageVersionManager::get_version(&env), 2);
+        });
+    }
+
+    #[test]
+    fn test_try_migrate_unsupported_jump_does_not_mutate() {
+        let env = Env::default();
+        env.as_contract(&env.register(StorageVersionTestContract, ()), || {
+            StorageVersionManager::initialize(&env, 1).unwrap();
+            let result = StorageVersionManager::try_migrate(&env, 5);
+            assert!(!result.migrated);
+            assert_eq!(result.from_version, 1);
+            assert_eq!(result.to_version, 1);
+            assert_eq!(StorageVersionManager::get_version(&env), 1);
         });
     }
 
     #[test]
     fn test_needs_migration() {
         let env = Env::default();
-        env.as(|| {
+        env.as_contract(&env.register(StorageVersionTestContract, ()), || {
             StorageVersionManager::initialize(&env, 1).unwrap();
             assert!(StorageVersionManager::needs_migration(&env, 2));
             assert!(!StorageVersionManager::needs_migration(&env, 1));
@@ -413,7 +570,7 @@ mod tests {
     #[test]
     fn test_versions_behind() {
         let env = Env::default();
-        env.as(|| {
+        env.as_contract(&env.register(StorageVersionTestContract, ()), || {
             StorageVersionManager::initialize(&env, 1).unwrap();
             assert_eq!(StorageVersionManager::versions_behind(&env, 5), 4);
             assert_eq!(StorageVersionManager::versions_behind(&env, 1), 0);
@@ -422,9 +579,21 @@ mod tests {
     }
 
     #[test]
+    fn test_validate_upgrade() {
+        let env = Env::default();
+        env.as_contract(&env.register(StorageVersionTestContract, ()), || {
+            StorageVersionManager::initialize(&env, 1).unwrap();
+            assert!(StorageVersionManager::validate_upgrade(&env, 2).is_ok());
+            assert!(StorageVersionManager::validate_upgrade(&env, 3).is_err());
+            assert!(StorageVersionManager::validate_upgrade(&env, 1).is_err());
+            assert!(StorageVersionManager::validate_upgrade(&env, 0).is_err());
+        });
+    }
+
+    #[test]
     fn test_validate_incremental_migration() {
         let env = Env::default();
-        env.as(|| {
+        env.as_contract(&env.register(StorageVersionTestContract, ()), || {
             StorageVersionManager::initialize(&env, 1).unwrap();
             assert!(StorageVersionManager::validate_incremental_migration(&env, 2).is_ok());
             assert!(StorageVersionManager::validate_incremental_migration(&env, 3).is_err());
@@ -435,7 +604,7 @@ mod tests {
     #[test]
     fn test_get_version_info() {
         let env = Env::default();
-        env.as(|| {
+        env.as_contract(&env.register(StorageVersionTestContract, ()), || {
             StorageVersionManager::initialize(&env, 1).unwrap();
             let info = StorageVersionManager::get_version_info(&env);
             assert_eq!(info.version, 1);
@@ -446,7 +615,7 @@ mod tests {
     #[test]
     fn test_initialize_with_admin() {
         let env = Env::default();
-        env.as(|| {
+        env.as_contract(&env.register(StorageVersionTestContract, ()), || {
             let admin = soroban_sdk::Address::generate(&env);
             let label = String::from_str(&env, "v1.0.0");
             StorageVersionManager::initialize_with_admin(&env, 1, &admin, label.clone()).unwrap();
@@ -464,7 +633,7 @@ mod tests {
     #[test]
     fn test_migrate_to_with_label() {
         let env = Env::default();
-        env.as(|| {
+        env.as_contract(&env.register(StorageVersionTestContract, ()), || {
             StorageVersionManager::initialize(&env, 1).unwrap();
             let label = String::from_str(&env, "v2.0.0");
             let result =
@@ -479,8 +648,84 @@ mod tests {
     #[test]
     fn test_get_migration_admin_none() {
         let env = Env::default();
-        env.as(|| {
+        env.as_contract(&env.register(StorageVersionTestContract, ()), || {
             assert_eq!(StorageVersionManager::get_migration_admin(&env), None);
+        });
+    }
+
+    // -----------------------------------------------------------------------
+    // #758 (CT-39) — migration rollback / partially initialized storage
+    // -----------------------------------------------------------------------
+
+    /// Old (uninitialized) storage is behind any positive target, while storage
+    /// already at the target version reports no pending migration.
+    #[test]
+    fn test_old_and_current_storage_report_expected_migration_need() {
+        let env = Env::default();
+        env.as_contract(&env.register(StorageVersionTestContract, ()), || {
+            // Old / never-migrated storage sits at version 0.
+            assert!(StorageVersionManager::needs_migration(&env, 1));
+            assert_eq!(StorageVersionManager::versions_behind(&env, 1), 1);
+
+            StorageVersionManager::initialize(&env, 2).unwrap();
+            // Current storage needs no migration and is not behind.
+            assert!(!StorageVersionManager::needs_migration(&env, 2));
+            assert_eq!(StorageVersionManager::versions_behind(&env, 2), 0);
+            // A future target is behind by exactly one.
+            assert!(StorageVersionManager::needs_migration(&env, 3));
+            assert_eq!(StorageVersionManager::versions_behind(&env, 3), 1);
+        });
+    }
+
+    /// An interrupted first-time initialization that wrote a label but never the
+    /// version marker must be treated as uninitialized (so it can be retried)
+    /// rather than as partially migrated state.
+    #[test]
+    fn test_partially_initialized_storage_is_treated_as_uninitialized() {
+        let env = Env::default();
+        env.as_contract(&env.register(StorageVersionTestContract, ()), || {
+            env.storage()
+                .instance()
+                .set(&VersionStorageKey::VersionLabel, &String::from_str(&env, "v0.9.0"));
+
+            assert!(!StorageVersionManager::is_initialized(&env));
+            assert_eq!(StorageVersionManager::get_version(&env), 0);
+
+            // Re-initialization is therefore allowed and lands the marker.
+            assert!(StorageVersionManager::initialize(&env, 1).is_ok());
+            assert_eq!(StorageVersionManager::get_version(&env), 1);
+        });
+    }
+
+    /// A migration whose callback fails must leave the version marker behind the
+    /// (unmigrated) data so the upgrade can be safely retried.
+    #[test]
+    fn test_interrupted_migration_does_not_advance_version_marker() {
+        let env = Env::default();
+        env.as_contract(&env.register(StorageVersionTestContract, ()), || {
+            StorageVersionManager::initialize(&env, 1).unwrap();
+
+            let result = StorageVersionManager::migrate_with(&env, 2, |env| {
+                // Partial work, then the migration aborts.
+                env.storage().instance().set(
+                    &VersionStorageKey::VersionLabel,
+                    &String::from_str(env, "v2-partial"),
+                );
+                Err(())
+            });
+            assert!(result.is_err());
+            assert_eq!(
+                StorageVersionManager::get_version(&env),
+                1,
+                "version marker must not advance when migration fails"
+            );
+
+            // Retrying the same step succeeds and only then advances.
+            let retry = StorageVersionManager::migrate_with(&env, 2, |_env| Ok(())).unwrap();
+            assert!(retry.migrated);
+            assert_eq!(retry.from_version, 1);
+            assert_eq!(retry.to_version, 2);
+            assert_eq!(StorageVersionManager::get_version(&env), 2);
         });
     }
 }

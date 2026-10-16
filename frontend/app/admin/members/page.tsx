@@ -1,12 +1,50 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import DashboardLayout from "@/components/dashboard/DashboardLayout";
 import { useGetAllMembers } from "@/lib/react-query/hooks/admin/members/useGetAllMembers";
 import { useUpdateMemberStatus } from "@/lib/react-query/hooks/admin/members/useUpdateMemberStatus";
-import { Users, Search, ChevronLeft, ChevronRight } from "lucide-react";
+import { useCanAccessPath } from "@/lib/store/authStore";
+import {
+  Users,
+  Search,
+  ChevronLeft,
+  ChevronRight,
+  ShieldAlert,
+} from "lucide-react";
 
+/**
+ * Gate the screen before the data hooks mount: `AdminMembersContent` holds the
+ * members query, so an unauthorised role never issues the request at all.
+ */
 export default function AdminMembersPage() {
+  const canAccess = useCanAccessPath("/admin/members");
+
+  if (!canAccess) {
+    return (
+      <DashboardLayout>
+        <div className="flex flex-col items-center justify-center py-20 text-center">
+          <ShieldAlert className="w-10 h-10 text-gray-200 mb-4" />
+          <h1 className="text-lg font-semibold text-gray-900">Access denied</h1>
+          <p className="text-sm text-gray-500 mt-1 max-w-sm">
+            Your account does not have permission to view member administration.
+          </p>
+          <Link
+            href="/dashboard"
+            className="mt-4 text-sm font-medium text-blue-600 hover:text-blue-700"
+          >
+            Back to dashboard
+          </Link>
+        </div>
+      </DashboardLayout>
+    );
+  }
+
+  return <AdminMembersContent />;
+}
+
+function AdminMembersContent() {
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState("");
   const [searchInput, setSearchInput] = useState("");
