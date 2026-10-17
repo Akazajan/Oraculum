@@ -708,13 +708,28 @@ export class AuthService {
   }
 
   async useBackupCode(userId: string, dto: UseBackupCodeDto) {
+    await this.getActiveUserOrThrow(userId);
+    // BE-12 — one-time atomic consumption (rejects unknown / replayed codes).
+    const result = await this.manageTotpProvider.consumeBackupCode(
+      userId,
+      dto.backupCode,
+    );
     const user = await this.getActiveUserOrThrow(userId);
-    return this.verifyTotpProvider.useBackupCode(user, dto);
+    const tokens = this.jwtHelper.generateTokens(user);
+    return {
+      user: { id: user.id, email: user.email, role: user.role },
+      ...tokens,
+      backupCodesRemaining: result.backupCodesRemaining,
+    };
   }
 
   async disable2fa(userId: string, dto: Disable2faDto) {
     const user = await this.getActiveUserOrThrow(userId);
     return this.manageTotpProvider.disable(user, dto);
+  }
+
+  async regenerateBackupCodes(userId: string, password: string) {
+    return this.manageTotpProvider.regenerateBackupCodes(userId, password);
   }
 
   private async getActiveUserOrThrow(userId: string): Promise<User> {
