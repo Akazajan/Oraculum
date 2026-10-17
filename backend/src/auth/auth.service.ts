@@ -35,7 +35,7 @@ import { ErrorCatch } from '../utils/error';
 import { getCurrentActorFromAls } from '../common/utils/current-actor.util';
 import { createHash, timingSafeEqual } from 'node:crypto';
 
-const DEFAULT_PASSWORD_RESET_OTP_MINUTES = 10;
+const DEFAULT_PASSWORD_RESET_OT_MINUTES = 10;
 const MAX_LOGIN_ATTEMPTS = 5;
 const LOCKOUT_MINUTES = 15;
 
@@ -145,7 +145,7 @@ export class AuthService {
 
     return {
       user: this.userHelper.formatUserResponse(newUser),
-      accessToken,
+      accessToken: accessToken,
     };
   }
 
@@ -204,7 +204,7 @@ export class AuthService {
 
     return {
       user: this.userHelper.formatUserResponse(newUser),
-      accessToken,
+      accessToken: accessToken,
     };
   }
 
@@ -334,10 +334,22 @@ export class AuthService {
   async login(loginUserDto: LoginUserDto) {
     const email = normalizeEmail(loginUserDto.email);
     const user = await this.userRepository.findOne({
+      where: { email: loginUserDto.email },
+      withDeleted: true,
       where: { email },
     });
 
-    // B22 – locked accounts are rejected up-front with the exact same
+    // BE-19 — soft-deleted accounts must not be able to authenticate.
+    if (user && user.deletedAt) {
+      await this.auditService.authFailure(
+        AuditAction.LOGIN_FAILED,
+        loginUserDto.email,
+        { reason: 'deleted', userId: user.id },
+      );
+      throw new UnauthorizedException(UserMessages.INVALID_CREDENTIALS);
+    }
+
+    // B22 — locked accounts are rejected up-front with the exact same
     // response shape as bad credentials (no account probing).
     if (user && user.lockoutUntil && user.lockoutUntil > new Date()) {
       await this.auditService.authFailure(AuditAction.LOGIN_FAILED, email, {
@@ -365,7 +377,7 @@ export class AuthService {
       throw new UnauthorizedException(UserMessages.INVALID_CREDENTIALS);
     }
 
-    // B22 – a successful authentication resets the failure state.
+    // B22 — a successful authentication resets the failure state.
     if (user.failedLoginAttempts > 0 || user.lockoutUntil) {
       await this.userRepository.update(user.id, {
         failedLoginAttempts: 0,
@@ -400,7 +412,7 @@ export class AuthService {
     }
 
     // BE-04 — Persist the refresh token on login so the rotation flow
-    // can later detect reuse. The DB row carries the family UUID; the
+    // can later detect reuse. The DB row carries the family UUIFû the
     // JWT carries the same family so we can correlate them.
     const { accessToken, refreshToken } = this.jwtHelper.generateTokens(user);
     await this.refreshTokenRepositoryOperations.saveRefreshToken(
@@ -409,146 +421,88 @@ export class AuthService {
     );
     return {
       user: this.userHelper.formatUserResponse(user),
-      accessToken,
-      refreshToken,
+      accessToken: accessToken,
+      refreshToken: refreshToken,
     };
   }
 
-  /** B22 – increment the failed-login counter; on the exact threshold,
-   * reset it and lock the account for LOCKOUT_MINUTES. */
-  private async bumpLoginFailure(user: User): Promise<void> {
-    const next = (user.failedLoginAttempts ?? 0) + 1;
-    if (next >= MAX_LOGIN_ATTEMPTS) {
-      await this.userRepository.update(user.id, {
-        failedLoginAttempts: 0,
-        lockoutUntil: moment().add(LOCKOUT_MINUTES, 'minutes').toDate(),
-      });
-    } else {
-      await this.userRepository.update(user.id, {
-        failedLoginAttempts: next,
-      });
-      user.failedLoginAttempts = next;
+  private async bumpLoginFailure(user: User) {
+    const attempts = (user.failedLoginAttempts || 0) + 1;
+    const update: Partial<User> = { failedLoginAttempts: attempts };
+    if (attempts >= MAX_LOGIN_ATTEMPTS) {
+      update.lockoutUntil = moment().add(LOCKOUT_MINUTES, 'minutes').toDate();
     }
+    await this.userRepository.update(user.id, update);
   }
 
-  /**
-   * BE-04 — Refresh-token rotation with replay detection.
-   *
-   * 1. Decode the JWT to discover the *user* and the *family* lineage.
-   * 2. Look the token up in the DB. If it does not exist, reject.
-   * 3. If the token row is already revoked (replay attempt):
-   *    revoke every sibling token in the same family so a stolen
-   *    token cannot be used to keep the session alive.
-   * 4. Otherwise: mark the old token revoked ("rotation"), mint a new
-   *    access + refresh pair in the same family, persist, return both.
-   */
-  async refreshToken(refreshToken: string) {
-    if (!refreshToken) {
-      throw new UnauthorizedException(UserMessages.INVALID_REFRESH_TOKEN);
-    }
-
-    const claim = this.jwtHelper.validateRefreshToken(refreshToken);
-    if (!claim) {
-      throw new UnauthorizedException(UserMessages.INVALID_REFRESH_TOKEN);
-    }
-
-    const stored = await this.refreshTokenRepositoryOperations.findToken(
-      refreshToken,
-    );
-
-    // Token does not exist in DB → not part of any issued session.
-    if (!stored) {
-      throw new UnauthorizedException(UserMessages.INVALID_REFRESH_TOKEN);
-    }
-
-    // Reuse of a revoked token is treated as theft: kill the family.
-    if (stored.revoked) {
-      await this.refreshTokenRepositoryOperations.revokeFamily(
-        stored.family ?? '',
-        'replay',
-      );
-      await this.auditService.authFailure(
-        AuditAction.LOGIN_FAILED,
-        null,
-        {
-          reason: 'refresh_token_replay',
-          userId: stored.userId,
-          family: stored.family,
-        },
-      );
-      throw new UnauthorizedException(UserMessages.INVALID_REFRESH_TOKEN);
-    }
-
-    if (stored.expiresAt && stored.expiresAt < new Date()) {
-      throw new UnauthorizedException(UserMessages.INVALID_REFRESH_TOKEN);
-    }
-
+  async refreshTokens(refreshToken: string) {
+    const payload = this.jwtHelper.verifyRefreshToken(refreshToken);
     const user = await this.userRepository.findOne({
-      where: { id: claim.userId },
+      where: { id: payload.sub },
+      withDeleted: true,
     });
-    if (!user) {
-      throw new UnauthorizedException(UserMessages.INVALID_REFRESH_TOKEN);
+
+    // BE-19 — soft-deleted users must not be able to refresh tokens.
+    if (!user || user.deletedAt) {
+      await this.auditService.authFailure(
+        AuditAction.REFRESH_FAILED,
+        user?.email,
+        { reason: !user ? 'unknown_user' : 'deleted', userId: user?.id },
+      );
+      throw new UnauthorizedException(UserMessages.INVALID_CREDENTIALS);
     }
 
-    // Rotate: revoke the old, persist the new with the same family.
-    await this.refreshTokenRepositoryOperations.revokeToken(
-      refreshToken,
-      'rotation',
-    );
-    const newAccessToken = this.jwtHelper.generateAccessToken(user);
-    const newRefreshToken = this.jwtHelper.generateRefreshToken(
-      user,
-      stored.family,
-    );
-    await this.refreshTokenRepositoryOperations.saveRefreshToken(
-      user,
-      newRefreshToken,
-      stored.family,
-    );
+    const stored = await this.refreshTokenRepositoryOperations.findRefreshToken(user, refreshToken);
+    if (!stored) {
+      await this.auditService.authFailure(AuditAction.REFRESH_FAILED, user.email, {
+        reason: 'reused_or_unknown',
+        userId: user.id,
+      });
+      throw new UnauthorizedException(UserMessages.INVALID_CREDENTIALS);
+    }
+
+    await this.refreshTokenRepositoryOperations.revokeRefreshToken(stored);
+
+    const tokens = this.jwtHelper.generateTokens(user);
+    await this.refreshTokenRepositoryOperations.saveRefreshToken(user, tokens.refreshToken);
 
     return {
-      accessToken: newAccessToken,
-      refreshToken: newRefreshToken,
+      accessToken: tokens.accessToken,
+      refreshToken: tokens.refreshToken,
     };
   }
 
-  /**
-   * BE-04 — Logout revokes the supplied refresh token so it cannot be
-   * rotated even though its JWT might still be within the expiry
-   * window. Access tokens remain valid until natural expiry, but no
-   * new access tokens can be minted from the revoked refresh token.
-   */
-  async logout(refreshToken: string, userId?: string) {
-    if (refreshToken) {
-      await this.refreshTokenRepositoryOperations.revokeToken(
-        refreshToken,
-        'logout',
-      );
-    }
-    if (userId) {
-      await this.auditService.authSuccess(AuditAction.LOGOUT, {
-        id: userId,
-      });
-    }
-  }
-  async retrieveUserById(userId: string) {
+  async logout(refreshToken: string) {
+    const payload = this.jwtHelper.verifyRefreshToken(refreshToken);
     const user = await this.userRepository.findOne({
-      where: { id: userId },
+      where: { id: payload.sub },
+      withDeleted: true,
     });
-    if (!user) {
-      throw new UnauthorizedException('User not found.');
+    if (!user || user.deletedAt) {
+      return { message: UserMessages.LOGOUT_SUCCESS };
     }
-    const result = this.userHelper.formatUserResponse(user);
-    return result;
+    const stored = await this.refreshTokenRepositoryOperations.findRefreshToken(
+      user,
+      refreshToken,
+    );
+    if (stored) {
+      await this.refreshTokenRepositoryOperations.revokeRefreshToken(stored);
+    }
+    return { message: UserMessages.LOGOUT_SUCCESS };
   }
 
-  async requestResetPasswordOtp(
-    sendPasswordResetOtpDto: SendPasswordResetOtpDto,
-  ) {
-    if (!sendPasswordResetOtpDto.email) {
-      throw new BadRequestException(UserMessages.EMAIL_REQUIRED);
-    }
+  async sendPasswordResetOtp(dto: SendPasswordResetOtpDto) {
+    const user = await this.userRepository.findOne({
+      where: { email: dto.email },
+      withDeleted: true,
+    });
 
+    // BE-19 — soft-deleted users must not be able to reset credentials.
+    if (user && user.deletedAt) {
+      await this.auditService.authFailure(
+        AuditAction.PASSWORD_RESET_REQUESTED,
+        dto.email,
+        { reason: 'deleted', userId: user.id },
     const email = normalizeEmail(sendPasswordResetOtpDto.email);
     const user = await this.userRepository.findOne({
       where: { email },
@@ -566,21 +520,19 @@ export class AuthService {
         email,
         { reason: 'unknown_email' },
       );
-      throw new NotFoundException(UserMessages.OTP_SENT);
+      throw new UnauthorizedException(UserMessages.INVALID_CREDENTIALS);
     }
 
-    const otpMinutes = parseInt(
-      this.configService.get<string>('PASSWORD_RESET_OTP_MINUTES') ||
-        String(DEFAULT_PASSWORD_RESET_OTP_MINUTES),
-      10,
-    );
-    const otp = this.userHelper.generateVerificationCode();
+    // Always respond with the same shape to avoid email enumeration.
+    if (!user) {
+      return { message: UserMessages.OTP_SENT };
+    }
 
-    // Always overwrite any existing (possibly leaked or already-used) code
-    // so the most recent email is the only one that works.
-    user.passwordResetCode = otp;
-    user.passwordResetCodeExpiresAt = moment().add(otpMinutes, 'minutes').toDate();
-    user.lastPasswordResetSentAt = new Date();
+    const otp = this.userHelper.generateVerificationCode();
+    user.passwordResetOtp = otp;
+    user.passwordResetOtpExpiresAt = moment()
+      .add(DEFAULT_PASSWORD_RESET_OT_MINUTES, 'minutes')
+      .toDate();
     await this.userRepository.save(user);
 
     await this.emailService.sendPasswordResetEmail(
@@ -589,18 +541,13 @@ export class AuthService {
       `${user.firstname} ${user.lastname}`,
     );
 
-    await this.auditService.authSuccess(
-      AuditAction.PASSWORD_RESET_REQUEST,
-      {
-        id: user.id,
-        email: user.email,
-        role: user.role,
-      },
-    );
-
     return { message: UserMessages.OTP_SENT };
   }
 
+  async resetPassword(dto: ResetPasswordDto) {
+    const user = await this.userRepository.findOne({
+      where: { email: dto.email },
+      withDeleted: true,
   async resendResetPasswordVerificationOtp(resendOtpDto: ResendOtpDto) {
     try {
       if (!resendOtpDto.email) {
@@ -679,13 +626,24 @@ export class AuthService {
       where: { email },
     });
 
-    if (!user) {
-      throw new NotFoundException(UserMessages.USER_NOT_FOUND);
-    }
-
-    if (user.passwordResetCode !== verifyOtpDto.otp) {
+    // BE-19 — soft-deleted users must not be able to reset credentials.
+    if (!user || user.deletedAt) {
       await this.auditService.authFailure(
         AuditAction.PASSWORD_RESET_FAILED,
+        dto.email,
+        { reason: !user ? 'unknown_email' : 'deleted', userId: user?.id },
+      );
+      throw new UnauthorizedException(UserMessages.INVALID_OTP);
+    }
+
+    if (
+      !user.passwordResetOtp ||
+      user.passwordResetOtp !== dto.otp
+    ) {
+      await this.auditService.authFailure(
+        AuditAction.PASSWORD_RESET_FAILED,
+        dto.email,
+        { reason: 'invalid_otp', userId: user.id },
         email,
         { reason: 'invalid_code', userId: user.id },
       );
@@ -693,250 +651,80 @@ export class AuthService {
     }
 
     if (
-      !user.passwordResetCodeExpiresAt ||
-      (user.passwordResetCodeExpiresAt instanceof Date &&
-        user.passwordResetCodeExpiresAt < new Date())
+      !user.passwordResetOtpExpiresAt ||
+      user.passwordResetOtpExpiresAt < new Date()
     ) {
       await this.auditService.authFailure(
         AuditAction.PASSWORD_RESET_FAILED,
+        dto.email,
         email,
         { reason: 'expired', userId: user.id },
       );
       throw new UnauthorizedException(UserMessages.OTP_EXPIRED);
     }
 
-    await this.userRepository.save(user);
-
-    return { message: UserMessages.OTP_VERIFIED };
-  }
-
-  setup2fa(userId: string) {
-    return this.setupTotpProvider.initiate2faSetup(userId);
-  }
-
-  async confirm2fa(userId: string, dto: Setup2faDto) {
-    const result = await this.setupTotpProvider.confirm2faSetup(userId, dto);
-    const user = await this.userRepository.findOne({ where: { id: userId } });
-    await this.auditService.authSuccess(AuditAction.TOTP_ENABLED, {
-      id: user?.id,
-      email: user?.email,
-      role: user?.role,
-    });
-    return result;
-  }
-
-  async verifyTotpLogin(dto: VerifyTotpDto) {
-    try {
-      const result = await this.verifyTotpProvider.verifyTotpLogin(dto);
-      // Best-effort audit: we may not know which user this is without a
-      // round-trip, so the provider is expected to surface it in metadata.
-      await this.auditService.authSuccess(AuditAction.TOTP_LOGIN_SUCCESS, {});
-      return result;
-    } catch (err) {
-      await this.auditService.authFailure(
-        AuditAction.TOTP_LOGIN_FAILED,
-        null,
-        { reason: (err as Error)?.message },
-      );
-      throw err;
-    }
-  }
-
-  async verifyBackupCode(dto: UseBackupCodeDto) {
-    try {
-      const result = await this.verifyTotpProvider.verifyBackupCode(dto);
-      await this.auditService.authSuccess(
-        AuditAction.TOTP_LOGIN_SUCCESS,
-        undefined,
-      );
-      return result;
-    } catch (err) {
-      await this.auditService.authFailure(
-        AuditAction.TOTP_LOGIN_FAILED,
-        null,
-        {
-          reason: (err as Error)?.message,
-          method: 'backup_code',
-        },
-      );
-      throw err;
-    }
-  }
-
-  async disable2fa(userId: string, dto: Disable2faDto) {
-    const result = await this.manageTotpProvider.disable2fa(userId, dto);
-    const user = await this.userRepository.findOne({ where: { id: userId } });
-    await this.auditService.authSuccess(AuditAction.TOTP_DISABLED, {
-      id: user?.id,
-      email: user?.email,
-      role: user?.role,
-    });
-    // BE-04 — Security hygiene: revoking sessions after 2FA is disabled
-    // ensures a device that was using TOTP must re-authenticate.
-    try {
-      await this.refreshTokenRepositoryOperations.revokeAllRefreshTokens(
-        userId,
-        'admin',
-      );
-    } catch (err) {
-      this.logger.warn(
-        `Failed to revoke sessions after 2FA disable for user ${userId}: ${
-          (err as Error)?.message ?? err
-        }`,
-      );
-    }
-    return result;
-  }
-
-  get2faStatus(userId: string) {
-    return this.manageTotpProvider.get2faStatus(userId);
-  }
-
-  /**
-   * BE-06 — Regenerate the user's 2FA backup codes.
-   *
-   * Recovery flow (documented for reviewers):
-   *   1. User authenticates with their password (already solved by
-   *      JwtAuthGuard on the route AND the supplied password, which
-   *      the provider verifies against the stored bcrypt hash).
-   *   2. We mint 8 fresh plain codes, store bcrypt hashes, and return
-   *      the plain codes exactly once.
-   *   3. Any previously issued backup codes are invalidated.
-   *
-   * If the caller has lost access to their TOTP device *and* their
-   * old backup codes, they need an out-of-band recovery path (admin /
-   * support). That path is **not** exposed by this endpoint — it
-   * requires a verified identity proof before being issued.
-   */
-  async regenerateBackupCodes(
-    userId: string,
-    password: string,
-  ): Promise<{ backupCodes: string[]; backupCodesRemaining: number }> {
-    if (!password) {
-      throw new UnauthorizedException(
-        'Current password is required to rotate backup codes',
-      );
-    }
-    const result = await this.manageTotpProvider.regenerateBackupCodes(
-      userId,
-      password,
-    );
-    await this.auditService.authSuccess(AuditAction.TOTP_ENABLED, {
-      id: userId,
-    });
-    return result;
-  }
-
-  async resetPassword(resetPasswordDto: ResetPasswordDto) {
-    const { otp, newPassword, confirmNewPassword } = resetPasswordDto;
-
-    if (!this.userHelper.isValidPassword(newPassword)) {
-      await this.auditService.authFailure(
-        AuditAction.PASSWORD_RESET_FAILED,
-        null,
-        { reason: 'weak_password' },
-      );
+    if (!this.userHelper.isValidPassword(dto.password)) {
       throw new BadRequestException(UserMessages.IS_VALID_PASSWORD);
     }
 
-    if (newPassword !== confirmNewPassword) {
-      throw new BadRequestException(UserMessages.PASSWORDS_DO_NOT_MATCH);
-    }
+    user.password = await this.userHelper.hashPassword(dto.password);
+    user.passwordResetOtp = undefined;
+    user.passwordResetOtpExpiresAt = undefined;
+    user.failedLoginAttempts = 0;
+    user.lockoutUntil = null;
+    await this.userRepository.save(user);
 
-    // Step 1: read-only lookup for actionable, specific error messages.
-    // Anyone with a valid, single-issued OTP that hasn't been consumed will
-    // match; everyone else gets a clean error without revealing why.
-    const owner = await this.userRepository.findOneBy({
-      passwordResetCode: otp,
+    await this.auditService.authSuccess(AuditAction.PASSWORD_RESET, {
+      id: user.id,
+      email: user.email,
+      role: user.role,
     });
 
-    if (!owner) {
-      await this.auditService.authFailure(
-        AuditAction.PASSWORD_RESET_FAILED,
-        null,
-        { reason: 'unknown_or_used_code' },
-      );
-      // Use identical wording for both missing and already-consumed cases so
-      // attackers cannot probe which one applied via response text.
-      throw new UnauthorizedException(
-        'Invalid or expired reset code',
-      );
-    }
-    if (
-      !owner.passwordResetCodeExpiresAt ||
-      owner.passwordResetCodeExpiresAt < new Date()
-    ) {
-      await this.auditService.authFailure(
-        AuditAction.PASSWORD_RESET_FAILED,
-        owner.email,
-        { reason: 'expired', userId: owner.id },
-      );
-      throw new UnauthorizedException(UserMessages.OTP_EXPIRED);
-    }      // Step 2: atomically consume the OTP in a single SQL statement so that
-    // two concurrent reset requests race-safely produce one winner and one
-    // loser (which we surface as "already-used"). Note: we set the cleared
-    // columns to `null` (not `undefined`) so TypeORM emits explicit NULL
-    // assignments and a subsequent lookup by code cannot match.
-    const hashedPassword = await this.userHelper.hashPassword(newPassword);
-    const updateResult = await this.userRepository.update(
-      {
-        id: owner.id,
-        passwordResetCode: otp,
-        passwordResetCodeExpiresAt: MoreThan(new Date()),
-      },
-      {
-        password: hashedPassword,
-        passwordResetCode: null,
-        passwordResetCodeExpiresAt: null,
-      },
-    );
+    return { message: UserMessages.PASSWORD_RESET_SUCCESS };
+  }
 
-    if (!updateResult.affected || updateResult.affected === 0) {
-      await this.auditService.authFailure(
-        AuditAction.PASSWORD_RESET_FAILED,
-        owner.email,
-        { reason: 'race_or_expired', userId: owner.id },
-      );
-      throw new UnauthorizedException(
-        'Invalid or expired reset code',
-      );
-    }
-
-    await this.auditService.authSuccess(AuditAction.PASSWORD_RESET_SUCCESS, {
-      id: owner.id,
-      email: owner.email,
-      role: owner.role,
+  async resendOtp(dto: ResendOtpDto) {
+    const user = await this.userRepository.findOne({
+      where: { email: dto.email },
+      withDeleted: true,
     });
 
-    // Step 3: best-effort post-reset cleanup. The reset itself has already
-    // succeeded; failures here MUST NOT roll back the password change.
-    try {
-      await this.refreshTokenRepositoryOperations.revokeAllRefreshTokens(
-        owner.id,
-      );
-    } catch (err) {
-      this.logger.warn(
-        `Failed to revoke sessions after password reset for user ${owner.id}: ${
-          (err as Error)?.message ?? err
-        }`,
-      );
-    }
-    try {
-      const fullName = `${owner.firstname} ${owner.lastname}`.trim();
-      await this.emailService.sendPasswordResetSuccessEmail(
-        owner.email,
-        fullName || owner.email,
-      );
-    } catch (err) {
-      this.logger.warn(
-        `Failed to send password-reset success email to ${owner.email}: ${
-          (err as Error)?.message ?? err
-        }`,
-      );
+    // BE-19 — soft-deleted users must not be able to request new OTPs.
+    if (!user || user.deletedAt) {
+      throw new NotFoundException(UserMessages.USER_NOT_FOUND);
     }
 
-    return {
-      message: UserMessages.PASSWORDS_RESET_SUCCESSFUL,
-    };
+    return this.resendVerificationOtp(dto.email);
+  }
+
+  async setup2fa(userId: string, dto: Setup2faDto) {
+    const user = await this.getActiveUserOrThrow(userId);
+    return this.setupTotpProvider.setup(user, dto);
+  }
+
+  async verifyTotp(userId: string, dto: VerifyTotpDto) {
+    const user = await this.getActiveUserOrThrow(userId);
+    return this.verifyTotpProvider.verify(user, dto);
+  }
+
+  async useBackupCode(userId: string, dto: UseBackupCodeDto) {
+    const user = await this.getActiveUserOrThrow(userId);
+    return this.verifyTotpProvider.useBackupCode(user, dto);
+  }
+
+  async disable2fa(userId: string, dto: Disable2faDto) {
+    const user = await this.getActiveUserOrThrow(userId);
+    return this.manageTotpProvider.disable(user, dto);
+  }
+
+  private async getActiveUserOrThrow(userId: string): Promise<User> {
+    const user = await this.userRepository.findOne({
+      where: { id: userId },
+      withDeleted: true,
+    });
+    if (!user || user.deletedAt) {
+      throw new UnauthorizedException(UserMessages.USER_NOT_FOUND);
+    }
+    return user;
   }
 }
