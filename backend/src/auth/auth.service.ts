@@ -436,13 +436,47 @@ export class AuthService {
   }
 
   async refreshTokens(refreshToken: string) {
-    const payload = this.jwtHelper.verifyRefreshToken(refreshToken);
+    return this.refreshToken(refreshToken);
+  }
+
+  /**
+   * BE-09 — Rotate refresh tokens; detect reuse of already-rotated tokens
+   * and revoke the entire token family.
+   */
+  async refreshToken(refreshToken: string) {
+    const payload = this.jwtHelper.validateRefreshToken
+      ? this.jwtHelper.validateRefreshToken(refreshToken)
+      : this.jwtHelper.verifyRefreshToken(refreshToken);
+    if (!payload) {
+      throw new UnauthorizedException(UserMessages.INVALID_CREDENTIALS);
+    }
+
+    // Look up regardless of revoked state so we can detect replay.
+    const stored = await this.refreshTokenRepositoryOperations.findToken(
+      refreshToken,
+    );
+
+    if (stored?.revoked) {
+      // BE-09 — already-rotated/revoked token presented again → kill family
+      if (stored.family) {
+        await this.refreshTokenRepositoryOperations.revokeFamily(
+          stored.family,
+          'replay',
+        );
+      }
+      await this.auditService.authFailure(
+        AuditAction.LOGIN_FAILED ?? AuditAction.REFRESH_FAILED,
+        null,
+        { reason: 'refresh_token_replay', family: stored.family },
+      );
+      throw new UnauthorizedException(UserMessages.INVALID_CREDENTIALS);
+    }
+
     const user = await this.userRepository.findOne({
       where: { id: payload.sub },
       withDeleted: true,
     });
 
-    // BE-19 — soft-deleted users must not be able to refresh tokens.
     if (!user || user.deletedAt) {
       await this.auditService.authFailure(
         AuditAction.REFRESH_FAILED,
@@ -452,19 +486,27 @@ export class AuthService {
       throw new UnauthorizedException(UserMessages.INVALID_CREDENTIALS);
     }
 
-    const stored = await this.refreshTokenRepositoryOperations.findRefreshToken(user, refreshToken);
-    if (!stored) {
+    if (!stored || !stored.isUsable()) {
       await this.auditService.authFailure(AuditAction.REFRESH_FAILED, user.email, {
-        reason: 'reused_or_unknown',
+        reason: stored ? 'expired' : 'unknown',
         userId: user.id,
       });
       throw new UnauthorizedException(UserMessages.INVALID_CREDENTIALS);
     }
 
-    await this.refreshTokenRepositoryOperations.revokeRefreshToken(stored);
+    // Mark current token as rotated before minting the replacement.
+    await this.refreshTokenRepositoryOperations.revokeRefreshToken(
+      stored,
+      'rotation',
+    );
 
     const tokens = this.jwtHelper.generateTokens(user);
-    await this.refreshTokenRepositoryOperations.saveRefreshToken(user, tokens.refreshToken);
+    // Preserve family so lineage stays intact across ordinary rotations.
+    await this.refreshTokenRepositoryOperations.saveRefreshToken(
+      user,
+      tokens.refreshToken,
+      stored.family,
+    );
 
     return {
       accessToken: tokens.accessToken,
@@ -472,21 +514,24 @@ export class AuthService {
     };
   }
 
-  async logout(refreshToken: string) {
-    const payload = this.jwtHelper.verifyRefreshToken(refreshToken);
-    const user = await this.userRepository.findOne({
-      where: { id: payload.sub },
-      withDeleted: true,
-    });
-    if (!user || user.deletedAt) {
+  /**
+   * BE-08 — Invalidate the refresh credential on logout (idempotent).
+   */
+  async logout(refreshToken?: string, _userId?: string) {
+    if (!refreshToken) {
       return { message: UserMessages.LOGOUT_SUCCESS };
     }
-    const stored = await this.refreshTokenRepositoryOperations.findRefreshToken(
-      user,
-      refreshToken,
-    );
-    if (stored) {
-      await this.refreshTokenRepositoryOperations.revokeRefreshToken(stored);
+    try {
+      const stored =
+        await this.refreshTokenRepositoryOperations.findToken(refreshToken);
+      if (stored && !stored.revoked) {
+        await this.refreshTokenRepositoryOperations.revokeRefreshToken(
+          stored,
+          'logout',
+        );
+      }
+    } catch {
+      // Repeated logout / invalid token is safe — still report success.
     }
     return { message: UserMessages.LOGOUT_SUCCESS };
   }
@@ -697,9 +742,14 @@ export class AuthService {
     return this.resendVerificationOtp(dto.email);
   }
 
-  async setup2fa(userId: string, dto: Setup2faDto) {
+  async setup2fa(userId: string, dto?: Setup2faDto) {
     const user = await this.getActiveUserOrThrow(userId);
     return this.setupTotpProvider.setup(user, dto);
+  }
+
+  async confirm2fa(userId: string, dto: Setup2faDto) {
+    await this.getActiveUserOrThrow(userId);
+    return this.setupTotpProvider.confirm2faSetup(userId, dto);
   }
 
   async verifyTotp(userId: string, dto: VerifyTotpDto) {
