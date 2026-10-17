@@ -65,7 +65,7 @@ export class User {
   lastVerificationEmailSent?: Date;
 
   @Exclude()
-  @Column({ nullable: true })
+  @Column({ nullable: true, type: 'varchar', length: 64 })
   verificationCode?: string;
 
   @Exclude()
