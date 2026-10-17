@@ -97,7 +97,7 @@ impl WorkspaceBookingContract {
     /// - Adjacent intervals that only touch at a boundary
     ///   (`existing.end == new.start` or `new.end == existing.start`) do **not**
     ///   overlap and are allowed.
-      fn is_slot_available(env: &Env, workspace_id: &String, start_time: u64, end_time: u64) -> bool {
+    fn is_slot_available(env: &Env, workspace_id: &String, start_time: u64, end_time: u64) -> bool {
         let booking_ids: Vec<String> = env
             .storage()
             .persistent()
@@ -125,6 +125,42 @@ impl WorkspaceBookingContract {
             }
         }
         true
+    }
+
+    /// Returns the total seats already booked by active bookings for
+    /// `workspace_id` that overlap the half-open interval [`start_time`, `end_time`).
+    ///
+    /// Uses saturating addition to avoid overflow; the sum is bounded by the
+    /// workspace capacity (`u32::MAX` at most), so ordinary wrapping is not
+    /// a concern in practice.
+    fn booked_seats_in_window(
+        env: &Env,
+        workspace_id: &String,
+        start_time: u64,
+        end_time: u64,
+    ) -> u32 {
+        let booking_ids: Vec<String> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::ActiveWorkspaceBookings(workspace_id.clone()))
+            .unwrap_or(Vec::new(env));
+
+        let mut total: u32 = 0;
+        for i in 0..booking_ids.len() {
+            let bid = booking_ids.get(i).unwrap();
+            let booking: Booking = match env.storage().persistent().get(&DataKey::Booking(bid)) {
+                Some(b) => b,
+                None => continue,
+            };
+            if !booking.status.is_active() {
+                continue;
+            }
+            // Same half-open overlap predicate as is_slot_available.
+            if booking.start_time < end_time && booking.end_time > start_time {
+                total = total.saturating_add(booking.seats_requested);
+            }
+        }
+        total
     }
 
     /// Removes `booking_id` from the active-bookings index for `workspace_id`.
@@ -378,19 +414,21 @@ impl WorkspaceBookingContract {
 
     // ── Booking ───────────────────────────────────────────────────────────────
 
-    /// Reserve a workspace for a time slot.
+    /// Reserve seats in a workspace for a time slot.
     ///
     /// The caller must have pre-approved the contract to spend `amount` of the
     /// payment token (or the caller's auth tree must cover the sub-invocation).
     /// Cost is rounded **up** to the nearest full hour.
     ///
-    /// Overlap is checked **before** payment transfer (C13). A conflicting
-    /// request returns `BookingConflict` and never moves funds.
+    /// All capacity and seat-count validations happen **before** payment
+    /// transfer so that invalid requests never move funds.
     ///
-    /// * `booking_id`   – unique ID chosen by the caller (e.g. a UUID).
-    /// * `workspace_id` – workspace to book.
-    /// * `start_time`   – Unix timestamp (seconds) for start of reservation.
-    /// * `end_time`     – Unix timestamp (seconds) for end of reservation.
+    /// * `booking_id`      – unique ID chosen by the caller (e.g. a UUID).
+    /// * `workspace_id`    – workspace to book.
+    /// * `start_time`      – Unix timestamp (seconds) for start of reservation.
+    /// * `end_time`        – Unix timestamp (seconds) for end of reservation.
+    /// * `seats_requested` – number of seats to reserve (≥ 1,
+    ///                       ≤ remaining available capacity in the window).
     pub fn book_workspace(
         env: Env,
         member: Address,
@@ -398,14 +436,21 @@ impl WorkspaceBookingContract {
         workspace_id: String,
         start_time: u64,
         end_time: u64,
+        seats_requested: u32,
     ) -> Result<(), Error> {
         member.require_auth();
 
+        // ── 1. Argument validation ────────────────────────────────────────────
         if booking_id.len() > MAX_ID_LEN {
             return Err(Error::StringTooLong);
         }
         if workspace_id.len() > MAX_ID_LEN {
             return Err(Error::StringTooLong);
+        }
+
+        // seats_requested must be at least 1.
+        if seats_requested == 0 {
+            return Err(Error::InvalidSeatCount);
         }
 
         if env
@@ -422,26 +467,58 @@ impl WorkspaceBookingContract {
             return Err(Error::InvalidTimeRange);
         }
 
+        // ── 2. Load workspace and validate capacity ───────────────────────────
         let workspace: Workspace = env
             .storage()
             .persistent()
             .get(&DataKey::Workspace(workspace_id.clone()))
             .ok_or(Error::WorkspaceNotFound)?;
 
+        // seats_requested must not exceed the workspace's total capacity.
+        if seats_requested > workspace.capacity {
+            return Err(Error::CapacityExceeded);
+        }
+
         if workspace.availability != WorkspaceAvailability::Available {
             return Err(Error::WorkspaceUnavailable);
         }
 
+        // ── 3. Check time-slot conflict and remaining seat capacity ───────────
+        // Count seats already booked by active bookings that overlap the
+        // requested window. Uses saturating arithmetic to guard against overflow.
+        let already_booked =
+            Self::booked_seats_in_window(&env, &workspace_id, start_time, end_time);
+
+        // Remaining capacity = workspace.capacity − already_booked.
+        // Because already_booked is derived from stored active bookings and each
+        // was validated against workspace.capacity at booking time, the subtraction
+        // cannot underflow, but we use saturating_sub defensively.
+        let remaining = workspace.capacity.saturating_sub(already_booked);
+
+        if seats_requested > remaining {
+            return Err(Error::CapacityExceeded);
+        }
+
+        // If the new booking would consume ALL remaining seats we also need
+        // to ensure there is no direct time-slot conflict (i.e. the slot is
+        // still physically usable).  When the workspace has capacity > 1 the
+        // seat check above is the binding constraint; when capacity == 1 a
+        // full-seat booking (seats_requested == 1 == capacity) means remaining
+        // would be 0 only if already_booked == 1, which is caught above.
+        // The is_slot_available check below catches the case where
+        // `already_booked == 0` but a single-seat workspace had a prior
+        // full booking (no remaining but no double-count).
         if !Self::is_slot_available(&env, &workspace_id, start_time, end_time) {
             return Err(Error::BookingConflict);
         }
 
+        // ── 4. Calculate payment ──────────────────────────────────────────────
         // Cost = hourly_rate × ⌈duration_seconds / 3600⌉
         let duration_secs = end_time - start_time;
         let duration_hours = duration_secs.div_ceil(3600);
         let amount: u128 = workspace.hourly_rate * duration_hours as u128;
 
-        // Collect payment from member → contract
+        // ── 5. Collect payment (only after all validations pass) ──────────────
         let payment_token = Self::get_payment_token(&env)?;
         token::Client::new(&env, &payment_token).transfer(
             &member,
@@ -449,6 +526,7 @@ impl WorkspaceBookingContract {
             &(amount as i128),
         );
 
+        // ── 6. Persist booking and update indexes ─────────────────────────────
         let booking = Booking {
             id: booking_id.clone(),
             workspace_id: workspace_id.clone(),
@@ -457,6 +535,7 @@ impl WorkspaceBookingContract {
             end_time,
             status: BookingStatus::initial(),
             amount_paid: amount,
+            seats_requested,
             created_at: now,
             cancelled_at: None,
             completed_at: None,
@@ -466,7 +545,7 @@ impl WorkspaceBookingContract {
             .persistent()
             .set(&DataKey::Booking(booking_id.clone()), &booking);
 
-              // Index: workspace → bookings (full history — never pruned)
+        // Index: workspace → bookings (full history — never pruned)
         let mut ws_bookings: Vec<String> = env
             .storage()
             .persistent()

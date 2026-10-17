@@ -218,6 +218,9 @@ pub struct Booking {
     /// Amount paid for booking
     pub amount_paid: u128,
 
+    /// Number of seats reserved (must be ≥ 1 and ≤ workspace capacity)
+    pub seats_requested: u32,
+
     /// Timestamp when booking was created
     pub created_at: u64,
 
