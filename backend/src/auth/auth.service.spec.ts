@@ -1,8 +1,11 @@
 import { Test } from '@nestjs/testing';
+import { createHash } from 'node:crypto';
 import {
   BadRequestException,
+  ConflictException,
   InternalServerErrorException,
   NotFoundException,
+  UnauthorizedException,
 } from '@nestjs/common';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { AuthService } from './auth.service';
@@ -36,11 +39,19 @@ jest.mock('otplib', () => ({
  * `auth/providers/refresh-token-rotation.spec.ts` — register the
  * collaborators as plain inline mocks rather than the full DI graph.
  */
-describe('AuthService.resendVerificationOtp (#203)', () => {
+describe('AuthService email verification codes', () => {
   let service: AuthService;
-  let users: { findOne: jest.Mock; save: jest.Mock };
-  let userHelper: { generateVerificationCode: jest.Mock };
+  let users: { findOne: jest.Mock; create: jest.Mock; save: jest.Mock };
+  let userHelper: {
+    generateVerificationCode: jest.Mock;
+    isValidPassword: jest.Mock;
+    hashPassword: jest.Mock;
+    formatUserResponse: jest.Mock;
+  };
   let email: { sendVerificationEmail: jest.Mock };
+  let jwt: { generateAccessToken: jest.Mock; generateTokens: jest.Mock };
+  let refreshTokens: { saveRefreshToken: jest.Mock };
+  let audit: { authSuccess: jest.Mock; authFailure: jest.Mock };
   let user: Partial<User>;
 
   beforeEach(async () => {
@@ -53,13 +64,28 @@ describe('AuthService.resendVerificationOtp (#203)', () => {
     };
     users = {
       findOne: jest.fn().mockResolvedValue(user),
+      create: jest.fn((data) => data),
       save: jest.fn().mockResolvedValue(undefined),
     };
     userHelper = {
       generateVerificationCode: jest.fn().mockReturnValue('123456'),
+      isValidPassword: jest.fn().mockReturnValue(true),
+      hashPassword: jest.fn().mockResolvedValue('password-hash'),
+      formatUserResponse: jest.fn((value) => value),
     };
     email = {
       sendVerificationEmail: jest.fn().mockResolvedValue(undefined),
+    };
+    jwt = {
+      generateAccessToken: jest.fn().mockReturnValue('access-token'),
+      generateTokens: jest
+        .fn()
+        .mockReturnValue({ accessToken: 'access-token', refreshToken: 'refresh-token' }),
+    };
+    refreshTokens = { saveRefreshToken: jest.fn().mockResolvedValue(undefined) };
+    audit = {
+      authSuccess: jest.fn().mockResolvedValue(undefined),
+      authFailure: jest.fn().mockResolvedValue(undefined),
     };
 
     const mod = await Test.createTestingModule({
@@ -67,16 +93,16 @@ describe('AuthService.resendVerificationOtp (#203)', () => {
         AuthService,
         { provide: getRepositoryToken(User), useValue: users },
         { provide: UserHelper, useValue: userHelper },
-        { provide: JwtHelper, useValue: {} },
+        { provide: JwtHelper, useValue: jwt },
         { provide: EmailService, useValue: email },
         { provide: ConfigService, useValue: { get: () => undefined } },
-        { provide: RefreshTokenRepositoryOperations, useValue: {} },
+        { provide: RefreshTokenRepositoryOperations, useValue: refreshTokens },
         { provide: SetupTotpProvider, useValue: {} },
         { provide: VerifyTotpProvider, useValue: {} },
         { provide: ManageTotpProvider, useValue: {} },
         {
           provide: AuditService,
-          useValue: { authSuccess: jest.fn(), authFailure: jest.fn() },
+          useValue: audit,
         },
       ],
     }).compile();
@@ -92,7 +118,9 @@ describe('AuthService.resendVerificationOtp (#203)', () => {
     });
     expect(userHelper.generateVerificationCode).toHaveBeenCalled();
     expect(users.save).toHaveBeenCalledWith(
-      expect.objectContaining({ verificationCode: '123456' }),
+      expect.objectContaining({
+        verificationCode: createHash('sha256').update('123456').digest('hex'),
+      }),
     );
     expect(email.sendVerificationEmail).toHaveBeenCalledWith(
       user.email,
@@ -100,6 +128,91 @@ describe('AuthService.resendVerificationOtp (#203)', () => {
       'Jane Doe',
     );
     expect(result).toEqual({ message: UserMessages.OTP_SENT });
+  });
+
+  it('persists a digest on registration while emailing the raw code', async () => {
+    users.findOne.mockResolvedValue(null);
+
+    await service.createUser({
+      email: 'Jane.Doe@Example.com',
+      firstname: 'Jane',
+      lastname: 'Doe',
+      password: 'StrongPass1!',
+    });
+
+    expect(users.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        email: 'jane.doe@example.com',
+        verificationCode: createHash('sha256').update('123456').digest('hex'),
+      }),
+    );
+    expect(email.sendVerificationEmail).toHaveBeenCalledWith(
+      user.email,
+      '123456',
+      'Jane Doe',
+    );
+  });
+
+  it('maps a concurrent duplicate-email insert to the existing conflict response', async () => {
+    users.findOne.mockResolvedValue(null);
+    users.save.mockRejectedValue({ code: '23505' });
+
+    const error = await service
+      .createUser({
+        email: 'jane.doe@example.com',
+        firstname: 'Jane',
+        lastname: 'Doe',
+        password: 'StrongPass1!',
+      })
+      .catch((err) => err);
+
+    expect(error).toBeInstanceOf(ConflictException);
+    expect(error.message).toBe(UserMessages.EMAIL_ALREADY_EXIST);
+    expect(audit.authFailure).toHaveBeenCalledWith(
+      AuditAction.REGISTER,
+      'jane.doe@example.com',
+      { reason: 'email_already_exists' },
+    );
+  });
+
+  it('accepts a valid code stored as a digest', async () => {
+    user.verificationCode = createHash('sha256').update('123456').digest('hex');
+    user.verificationCodeExpiresAt = new Date(Date.now() + 60_000);
+
+    await service.verifyOtp({ email: user.email!, otp: '123456' });
+
+    expect(user.isVerified).toBe(true);
+    expect(user.verificationCode).toBe('');
+    expect(refreshTokens.saveRefreshToken).toHaveBeenCalledWith(
+      user,
+      'refresh-token',
+    );
+  });
+
+  it('rejects an invalid code', async () => {
+    user.verificationCode = createHash('sha256').update('123456').digest('hex');
+    user.verificationCodeExpiresAt = new Date(Date.now() + 60_000);
+
+    const error = await service
+      .verifyOtp({ email: user.email!, otp: '654321' })
+      .catch((err) => err);
+
+    expect(error).toBeInstanceOf(UnauthorizedException);
+    expect(error.message).toBe(UserMessages.INVALID_OTP);
+    expect(user.isVerified).not.toBe(true);
+  });
+
+  it('rejects an expired code even when the submitted code matches', async () => {
+    user.verificationCode = createHash('sha256').update('123456').digest('hex');
+    user.verificationCodeExpiresAt = new Date(Date.now() - 60_000);
+
+    const error = await service
+      .verifyOtp({ email: user.email!, otp: '123456' })
+      .catch((err) => err);
+
+    expect(error).toBeInstanceOf(UnauthorizedException);
+    expect(error.message).toBe(UserMessages.OTP_EXPIRED);
+    expect(user.isVerified).not.toBe(true);
   });
 
   it('returns 400 instead of 500 when the email is missing', async () => {

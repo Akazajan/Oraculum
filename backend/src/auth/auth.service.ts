@@ -33,10 +33,28 @@ import { Disable2faDto } from './dto/disable-2fa.dto';
 import { AuditAction, AuditService } from '../audit/audit.service';
 import { ErrorCatch } from '../utils/error';
 import { getCurrentActorFromAls } from '../common/utils/current-actor.util';
+import { createHash, timingSafeEqual } from 'node:crypto';
 
 const DEFAULT_PASSWORD_RESET_OTP_MINUTES = 10;
 const MAX_LOGIN_ATTEMPTS = 5;
 const LOCKOUT_MINUTES = 15;
+
+function hashVerificationCode(code: string): string {
+  return createHash('sha256').update(code).digest('hex');
+}
+
+function matchesVerificationCode(
+  storedHash: string | undefined,
+  code: string,
+): boolean {
+  const expectedHash = Buffer.from(hashVerificationCode(code), 'hex');
+  const hasValidHash = /^[a-f0-9]{64}$/i.test(storedHash ?? '');
+  const actualHash = hasValidHash
+    ? Buffer.from(storedHash!, 'hex')
+    : Buffer.alloc(expectedHash.length);
+
+  return timingSafeEqual(expectedHash, actualHash) && hasValidHash;
+}
 
 @Injectable()
 export class AuthService {
@@ -63,14 +81,15 @@ export class AuthService {
 
   //create user
   async createUser(createUserDto: CreateUserDto) {
+    const email = createUserDto.email.trim().toLowerCase();
     const existingUser = await this.userRepository.findOne({
-      where: { email: createUserDto.email },
+      where: { email },
     });
 
     if (existingUser) {
       await this.auditService.authFailure(
         AuditAction.REGISTER,
-        createUserDto.email,
+        email,
         { reason: 'email_already_exists' },
       );
       throw new ConflictException(UserMessages.EMAIL_ALREADY_EXIST);
@@ -82,7 +101,7 @@ export class AuthService {
     if (!validPassword) {
       await this.auditService.authFailure(
         AuditAction.REGISTER,
-        createUserDto.email,
+        email,
         { reason: 'weak_password' },
       );
       throw new ConflictException(UserMessages.IS_VALID_PASSWORD);
@@ -93,16 +112,16 @@ export class AuthService {
     const verificationCode = this.userHelper.generateVerificationCode();
     const expiration = moment().add(10, 'minutes').toDate();
     const newUser = this.userRepository.create({
-      email: createUserDto.email,
+      email,
       firstname: createUserDto.firstname,
       lastname: createUserDto.lastname,
       password: hashedPassword,
       role: UserRole.USER,
-      verificationCode: verificationCode,
+      verificationCode: hashVerificationCode(verificationCode),
       verificationCodeExpiresAt: expiration,
       isVerified: false,
     });
-    await this.userRepository.save(newUser);
+    await this.saveUserOrThrowConflict(newUser, AuditAction.REGISTER, email);
 
     await this.emailService.sendVerificationEmail(
       newUser.email,
@@ -125,14 +144,15 @@ export class AuthService {
   }
 
   async createAdminUser(createUserDto: CreateUserDto) {
+    const email = createUserDto.email.trim().toLowerCase();
     const existingUser = await this.userRepository.findOne({
-      where: { email: createUserDto.email },
+      where: { email },
     });
 
     if (existingUser) {
       await this.auditService.authFailure(
         AuditAction.REGISTER_ADMIN,
-        createUserDto.email,
+        email,
         { reason: 'email_already_exists' },
       );
       throw new ConflictException(UserMessages.EMAIL_ALREADY_EXIST);
@@ -144,7 +164,7 @@ export class AuthService {
     if (!validPassword) {
       await this.auditService.authFailure(
         AuditAction.REGISTER_ADMIN,
-        createUserDto.email,
+        email,
         { reason: 'weak_password' },
       );
       throw new ConflictException(UserMessages.IS_VALID_PASSWORD);
@@ -153,13 +173,17 @@ export class AuthService {
       createUserDto.password,
     );
     const newUser = this.userRepository.create({
-      email: createUserDto.email,
+      email,
       firstname: createUserDto.firstname,
       lastname: createUserDto.lastname,
       password: hashedPassword,
       role: UserRole.ADMIN,
     });
-    await this.userRepository.save(newUser);
+    await this.saveUserOrThrowConflict(
+      newUser,
+      AuditAction.REGISTER_ADMIN,
+      email,
+    );
 
     await this.auditService.adminAction(
       AuditAction.REGISTER_ADMIN,
@@ -175,6 +199,29 @@ export class AuthService {
       user: this.userHelper.formatUserResponse(newUser),
       accessToken,
     };
+  }
+
+  private async saveUserOrThrowConflict(
+    user: User,
+    action: AuditAction,
+    email: string,
+  ): Promise<void> {
+    try {
+      await this.userRepository.save(user);
+    } catch (error) {
+      const dbError = error as {
+        code?: string;
+        driverError?: { code?: string };
+      };
+      if (dbError?.code !== '23505' && dbError?.driverError?.code !== '23505') {
+        throw error;
+      }
+
+      await this.auditService.authFailure(action, email, {
+        reason: 'email_already_exists',
+      });
+      throw new ConflictException(UserMessages.EMAIL_ALREADY_EXIST);
+    }
   }
 
   async verifyOtp(verifyOtpDto: VerifyOtpDto) {
@@ -195,15 +242,6 @@ export class AuthService {
       throw new UnauthorizedException(UserMessages.USER_NOT_FOUND);
     }
 
-    if (user.verificationCode !== otp) {
-      await this.auditService.authFailure(
-        AuditAction.OTP_FAILED,
-        email,
-        { reason: 'invalid_code', userId: user.id },
-      );
-      throw new UnauthorizedException(UserMessages.INVALID_OTP);
-    }
-
     if (
       !user.verificationCodeExpiresAt ||
       user.verificationCodeExpiresAt < new Date()
@@ -214,6 +252,15 @@ export class AuthService {
         { reason: 'expired', userId: user.id },
       );
       throw new UnauthorizedException(UserMessages.OTP_EXPIRED);
+    }
+
+    if (!matchesVerificationCode(user.verificationCode, otp)) {
+      await this.auditService.authFailure(
+        AuditAction.OTP_FAILED,
+        email,
+        { reason: 'invalid_code', userId: user.id },
+      );
+      throw new UnauthorizedException(UserMessages.INVALID_OTP);
     }
 
     user.isVerified = true;
@@ -256,7 +303,7 @@ export class AuthService {
 
       const verificationCode = this.userHelper.generateVerificationCode();
 
-      user.verificationCode = verificationCode;
+      user.verificationCode = hashVerificationCode(verificationCode);
       user.verificationCodeExpiresAt = moment().add(10, 'minutes').toDate();
       await this.userRepository.save(user);
 
