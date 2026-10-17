@@ -1,4 +1,8 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+} from '@nestjs/common';
 import { GenerateInvoiceProvider } from './providers/generate-invoice.provider';
 import { FindInvoicesProvider } from './providers/find-invoices.provider';
 import { PdfInvoiceProvider } from './providers/pdf-invoice.provider';
@@ -69,8 +73,28 @@ export class InvoicesService {
 
     this.statusTransitionProvider.validateTransition(invoice.status, to);
 
-    invoice.status = to;
-    return this.invoicesRepository.save(invoice);
+    if (invoice.status === to) {
+      return invoice;
+    }
+
+    const result = await this.invoicesRepository
+      .createQueryBuilder()
+      .update(Invoice)
+      .set({ status: to })
+      .where('id = :id AND status = :currentStatus', {
+        id: invoiceId,
+        currentStatus: invoice.status,
+      })
+      .returning('*')
+      .execute();
+
+    if (result.affected !== 1) {
+      throw new ConflictException(
+        `Invoice "${invoiceId}" was updated by another request`,
+      );
+    }
+
+    return this.invoicesRepository.create(result.raw[0]);
   }
 
   validateTransition(from: InvoiceStatus, to: InvoiceStatus): void {
