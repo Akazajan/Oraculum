@@ -15,6 +15,59 @@ fn setup() -> (Env, Address, Address, ResourceCreditsContractClient<'static>) {
     (env, admin, token, client)
 }
 
+// ── CT-14: initialize input validation ──────────────────────────────────────
+
+/// Initialize must reject when payment_token == admin, because that would
+/// silently misroute all fee payments to the admin address.
+#[test]
+fn test_initialize_rejects_token_equal_to_admin() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, ResourceCreditsContract);
+    let client = ResourceCreditsContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+
+    // Passing the admin address as the payment token must fail.
+    let result = client.try_initialize(&admin, &admin);
+    assert_eq!(result, Err(Ok(super::Error::InvalidAddress)));
+}
+
+/// Calling initialize a second time must always fail, regardless of the
+/// addresses supplied.
+#[test]
+fn test_initialize_rejects_double_init() {
+    let (env, _admin, token, client) = setup();
+
+    let new_admin = Address::generate(&env);
+    let new_token = Address::generate(&env);
+
+    let result = client.try_initialize(&new_admin, &new_token);
+    assert_eq!(result, Err(Ok(super::Error::AlreadyInitialized)));
+
+    // Existing config is unchanged.
+    assert_eq!(client.payment_token(), token);
+}
+
+/// A successful initialization must store and expose the payment token.
+#[test]
+fn test_initialize_stores_payment_token() {
+    let (_env, _admin, token, client) = setup();
+    assert_eq!(client.payment_token(), token);
+}
+
+/// payment_token() must fail when the contract has not been initialized.
+#[test]
+fn test_payment_token_uninitialized_returns_not_set() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, ResourceCreditsContract);
+    let client = ResourceCreditsContractClient::new(&env, &contract_id);
+
+    let result = client.try_payment_token();
+    assert_eq!(result, Err(Ok(super::Error::PaymentTokenNotSet)));
+}
+
 // ── FIX #272: spend_credits → total_supply decrement test ───────────────────
 
 #[test]
@@ -28,7 +81,7 @@ fn test_spend_credits_decrements_total_supply() {
     assert_eq!(client.balance(&member), 1_000u128);
 
     // Spend 400 credits
-    client.spend_credits(&member, &400u128);
+    client.spend_credits(&member, &member, &400u128);
 
     // Total supply should decrease by 400
     assert_eq!(client.total_supply(), 600u128);
@@ -43,7 +96,7 @@ fn test_spend_all_credits() {
     client.mint_credits(&admin, &member, &500u128);
     assert_eq!(client.total_supply(), 500u128);
 
-    client.spend_credits(&member, &500u128);
+    client.spend_credits(&member, &member, &500u128);
     assert_eq!(client.total_supply(), 0u128);
     assert_eq!(client.balance(&member), 0u128);
 }
@@ -56,7 +109,7 @@ fn test_spend_insufficient_balance() {
     client.mint_credits(&admin, &member, &100u128);
     assert_eq!(client.total_supply(), 100u128);
 
-    let result = client.try_spend_credits(&member, &200u128);
+    let result = client.try_spend_credits(&member, &member, &200u128);
     assert_eq!(result, Err(Ok(super::Error::InsufficientBalance)));
     // Supply should remain unchanged
     assert_eq!(client.total_supply(), 100u128);
@@ -69,7 +122,7 @@ fn test_spend_zero_amount_rejected() {
 
     client.mint_credits(&admin, &member, &100u128);
 
-    let result = client.try_spend_credits(&member, &0u128);
+    let result = client.try_spend_credits(&member, &member, &0u128);
     assert_eq!(result, Err(Ok(super::Error::InvalidAmount)));
     assert_eq!(client.total_supply(), 100u128);
 }
@@ -85,11 +138,11 @@ fn test_multiple_mints_and_spends() {
     assert_eq!(client.total_supply(), 500u128);
 
     // Spend partially
-    client.spend_credits(&member, &150u128);
+    client.spend_credits(&member, &member, &150u128);
     assert_eq!(client.total_supply(), 350u128);
 
     // Spend again
-    client.spend_credits(&member, &100u128);
+    client.spend_credits(&member, &member, &100u128);
     assert_eq!(client.total_supply(), 250u128);
     assert_eq!(client.balance(&member), 250u128);
 }
@@ -168,7 +221,7 @@ fn test_transfer_credits_self_transfer_rejected() {
     client.mint_credits(&admin, &member, &1_000u128);
     assert_eq!(client.balance(&member), 1_000u128);
 
-    let result = client.try_transfer_credits(&member, &member, &500u128);
+    let result = client.try_transfer_credits(&member, &member, &member, &500u128);
     assert_eq!(result, Err(Ok(super::Error::SelfTransfer)));
     assert_eq!(client.balance(&member), 1_000u128);
     assert_eq!(client.total_supply(), 1_000u128);
@@ -181,9 +234,50 @@ fn test_transfer_credits_success() {
     let to = Address::generate(&env);
 
     client.mint_credits(&admin, &from, &1_000u128);
-    client.transfer_credits(&from, &to, &300u128);
+    client.transfer_credits(&from, &from, &to, &300u128);
 
     assert_eq!(client.balance(&from), 700u128);
     assert_eq!(client.balance(&to), 300u128);
     assert_eq!(client.total_supply(), 1_000u128);
+}
+
+#[test]
+fn test_transfer_credits_unauthorized_caller_rejected() {
+    let (env, admin, _token, client) = setup();
+    let owner = Address::generate(&env);
+    let other = Address::generate(&env);
+
+    client.mint_credits(&admin, &owner, &500u128);
+
+    // `other` tries to transfer from `owner`'s account.
+    let result = client.try_transfer_credits(&other, &owner, &other, &100u128);
+    assert_eq!(result, Err(Ok(super::Error::Unauthorized)));
+    assert_eq!(client.balance(&owner), 500u128);
+}
+
+#[test]
+fn test_transfer_credits_insufficient_balance_rejected() {
+    let (env, admin, _token, client) = setup();
+    let from = Address::generate(&env);
+    let to = Address::generate(&env);
+
+    client.mint_credits(&admin, &from, &100u128);
+
+    let result = client.try_transfer_credits(&from, &from, &to, &200u128);
+    assert_eq!(result, Err(Ok(super::Error::InsufficientBalance)));
+    assert_eq!(client.balance(&from), 100u128);
+    assert_eq!(client.balance(&to), 0u128);
+}
+
+#[test]
+fn test_transfer_zero_amount_rejected() {
+    let (env, admin, _token, client) = setup();
+    let from = Address::generate(&env);
+    let to = Address::generate(&env);
+
+    client.mint_credits(&admin, &from, &100u128);
+
+    let result = client.try_transfer_credits(&from, &from, &to, &0u128);
+    assert_eq!(result, Err(Ok(super::Error::InvalidAmount)));
+    assert_eq!(client.balance(&from), 100u128);
 }
