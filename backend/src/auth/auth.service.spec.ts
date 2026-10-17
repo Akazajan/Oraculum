@@ -18,9 +18,7 @@ import { ConfigService } from '@nestjs/config';
 import { UserHelper } from './helper/user-helper';
 import { UserMessages } from './helper/user-messages';
 
-// `otplib` pulls in ESM-only deps (@scure/base) that Jest cannot parse
-// outside of transformIgnorePatterns, and it is an external service
-// irrelevant to these tests — mock it so the suite runs in isolation.
+// `otplib` is an external service irrelevant to these tests — mock it so the suite runs in isolation.
 jest.mock('otplib', () => ({
   generateSecret: jest.fn(() => 'JBSWY3DPEHPK3PXP'),
   generateURI: jest.fn(() => 'otpauth://totp/example'),
@@ -31,10 +29,6 @@ jest.mock('otplib', () => ({
  * #203 — resendVerificationOtp must surface typed HTTP exceptions
  * (400/404) instead of wrapping every error in a 500, while still
  * normalising unexpected failures to InternalServerErrorException.
- *
- * Follows the project's standard pattern from
- * `auth/providers/refresh-token-rotation.spec.ts` — register the
- * collaborators as plain inline mocks rather than the full DI graph.
  */
 describe('AuthService.resendVerificationOtp (#203)', () => {
   let service: AuthService;
@@ -102,12 +96,33 @@ describe('AuthService.resendVerificationOtp (#203)', () => {
     expect(result).toEqual({ message: UserMessages.OTP_SENT });
   });
 
+  it('normalizes the email before lookup and delivery', async () => {
+    await service.resendVerificationOtp('  Jane.Doe@example.COM  ');
+
+    expect(users.findOne).toHaveBeenCalledWith({
+      where: { email: 'jane.doe@example.com' },
+    });
+    expect(email.sendVerificationEmail).toHaveBeenCalledWith(
+      'jane.doe@example.com',
+      '123456',
+      'Jane Doe',
+    );
+  });
+
   it('returns 400 instead of 500 when the email is missing', async () => {
     const err = await service.resendVerificationOtp('').catch((e) => e);
 
     expect(err).toBeInstanceOf(BadRequestException);
     expect(err.getStatus()).toBe(400);
     expect(err.message).toBe(UserMessages.EMAIL_REQUIRED);
+    expect(users.findOne).not.toHaveBeenCalled();
+  });
+
+  it('returns 400 when the email is only whitespace', async () => {
+    const err = await service.resendVerificationOtp('   ').resolve(() => undefined).catch((e) => e);
+
+    expect(err).toBeInstanceOf(BadRequestException);
+    expect(err.getStatus()).toBe(400);
     expect(users.findOne).not.toHaveBeenCalled();
   });
 
@@ -214,6 +229,21 @@ describe('AuthService.resendResetPasswordVerificationOtp (#204)', () => {
     expect(result).toEqual({ message: UserMessages.OTP_SENT });
   });
 
+  it('normalizes the email for reset lookup and delivery', async () => {
+    await service.resendResetPasswordVerificationOtp({
+      email: '  JANE.DOE@EXAMPLE.COM ',
+    });
+
+    expect(users.findOne).toHaveBeenCalledWith({
+      where: { email: 'jane.doe@example.com' },
+    });
+    expect(email.sendPasswordResetEmail).toHaveBeenCalledWith(
+      'jane.doe@example.com',
+      '654321',
+      'Jane Doe',
+    );
+  });
+
   it('returns 400 instead of 500 when the email is missing', async () => {
     const err = await service
       .resendResetPasswordVerificationOtp({ email: '' })
@@ -222,6 +252,16 @@ describe('AuthService.resendResetPasswordVerificationOtp (#204)', () => {
     expect(err).toBeInstanceOf(BadRequestException);
     expect(err.getStatus()).toBe(400);
     expect(err.message).toBe(UserMessages.EMAIL_REQUIRED);
+    expect(users.findOne).not.toHaveBeenCalled();
+  });
+
+  it('returns 400 when the email is only whitespace', async () => {
+    const err = await service
+      .resendResetPasswordVerificationOtp({ email: '   ' })
+      .catch((e) => e);
+
+    expect(err).toBeInstanceOf(BadRequestException);
+    expect(err.getStatus()).toBe(400);
     expect(users.findOne).not.toHaveBeenCalled();
   });
 
@@ -247,5 +287,91 @@ describe('AuthService.resendResetPasswordVerificationOtp (#204)', () => {
 
     expect(err).toBeInstanceOf(InternalServerErrorException);
     expect(err.getStatus()).toBe(500);
+  });
+});
+
+/**
+ * BE-17 — email normalization must be consistent across registration,
+ * login, reset and uniqueness checks. Case/whitespace variants of the
+ * same address must resolve to one account.
+ */
+describe('AuthService email normalization (BE-17)', () => {
+  let service: AuthService;
+  let users: { findOne: jest.Mock; save: jest.Mock; create: jest.Mock };
+  let userHelper: { generateVerificationCode: jest.Mock };
+  let email: {
+    sendVerificationEmail: jest.Mock;
+    sendPasswordResetEmail: jest.Mock;
+  };
+  let user: Partial<User>;
+
+  beforeEach(async () => {
+    user = {
+      id: 'user-1',
+      email: 'jane.doe@example.com',
+      firstname: 'Jane',
+      lastname: 'Doe',
+      role: 'USER' as any,
+    };
+    users = {
+      findOne: jest.fn().mockResolvedValue(user),
+      save: jest.fn().mockResolvedValue(undefined),
+      create: jest.fn(),
+    };
+    userHelper = {
+      generateVerificationCode: jest.fn().mockReturnValue('123456'),
+    };
+    email = {
+      sendVerificationEmail: jest.fn().mockResolvedValue(undefined),
+      sendPasswordResetEmail: jest.fn().mockResolvedValue(undefined),
+    };
+
+    const mod = await Test.createTestingModule({
+      providers: [
+        AuthService,
+        { provide: getRepositoryToken(User), useValue: users },
+        { provide: UserHelper, useValue: userHelper },
+        { provide: JwtHelper, useValue: {} },
+        { provide: EmailService, useValue: email },
+        { provide: ConfigService, useValue: { get: () => undefined } },
+        { provide: RefreshTokenRepositoryOperations, useValue: {} },
+        { provide: SetupTotpProvider, useValue: {} },
+        { provide: VerifyTotpProvider, useValue: {} },
+        { provide: ManageTotpProvider, useValue: {} },
+        {
+          provide: AuditService,
+          useValue: { authSuccess: jest.fn(), authFailure: jest.fn() },
+        },
+      ],
+    }).compile();
+
+    service = mod.get(AuthService);
+  });
+
+  it('resolves case variants to the same account on resend verification', async () => {
+    await service.resendVerificationOtp('Jane.Doe@example.COM');
+
+    expect(users.findOne).toHaveBeenCalledWith({
+      where: { email: 'jane.doe@example.com' },
+    });
+  });
+
+  it('resolves whitespace variants to the same account on reset', async () => {
+    await service.resendResetPasswordVerificationOtp({
+      email: '  jane.doe@example.com  ',
+    });
+
+    expect(users.findOne).toHaveBeenCalledWith({
+      where: { email: 'jane.doe@example.com' },
+    });
+  });
+
+  it('treats case/variants as the same account for uniqueness checks', async () => {
+    await service.resendVerificationOtp(' Jane.Doe@example.COM ');
+
+    expect(users.findOne).toHaveBeenCalledWith({
+      where: { email: 'jane.doe@example.com' },
+    });
+    expect(users.create).not.toHaveBeenCalled();
   });
 });
