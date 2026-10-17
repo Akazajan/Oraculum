@@ -33,10 +33,33 @@ import { Disable2faDto } from './dto/disable-2fa.dto';
 import { AuditAction, AuditService } from '../audit/audit.service';
 import { ErrorCatch } from '../utils/error';
 import { getCurrentActorFromAls } from '../common/utils/current-actor.util';
+import { createHash, timingSafeEqual } from 'node:crypto';
 
 const DEFAULT_PASSWORD_RESET_OTP_MINUTES = 10;
 const MAX_LOGIN_ATTEMPTS = 5;
 const LOCKOUT_MINUTES = 15;
+
+function hashVerificationCode(code: string): string {
+  return createHash('sha256').update(code).digest('hex');
+}
+
+function matchesVerificationCode(
+  storedHash: string | undefined,
+  code: string,
+): boolean {
+  const expectedHash = Buffer.from(hashVerificationCode(code), 'hex');
+  const hasValidHash = /^[a-f0-9]{64}$/i.test(storedHash ?? '');
+  const actualHash = hasValidHash
+    ? Buffer.from(storedHash!, 'hex')
+    : Buffer.alloc(expectedHash.length);
+
+  return timingSafeEqual(expectedHash, actualHash) && hasValidHash;
+// BE-17 — Single source of truth for email normalization. Every lookup,
+// uniqueness check, and persistence path must funnel through this helper so
+// case/whitespace variants resolve to one account.
+function normalizeEmail(email: string): string {
+  return (email ?? '').trim().toLowerCase();
+}
 
 @Injectable()
 export class AuthService {
@@ -63,14 +86,16 @@ export class AuthService {
 
   //create user
   async createUser(createUserDto: CreateUserDto) {
+    const email = createUserDto.email.trim().toLowerCase();
+    const email = normalizeEmail(createUserDto.email);
     const existingUser = await this.userRepository.findOne({
-      where: { email: createUserDto.email },
+      where: { email },
     });
 
     if (existingUser) {
       await this.auditService.authFailure(
         AuditAction.REGISTER,
-        createUserDto.email,
+        email,
         { reason: 'email_already_exists' },
       );
       throw new ConflictException(UserMessages.EMAIL_ALREADY_EXIST);
@@ -82,7 +107,7 @@ export class AuthService {
     if (!validPassword) {
       await this.auditService.authFailure(
         AuditAction.REGISTER,
-        createUserDto.email,
+        email,
         { reason: 'weak_password' },
       );
       throw new ConflictException(UserMessages.IS_VALID_PASSWORD);
@@ -93,16 +118,16 @@ export class AuthService {
     const verificationCode = this.userHelper.generateVerificationCode();
     const expiration = moment().add(10, 'minutes').toDate();
     const newUser = this.userRepository.create({
-      email: createUserDto.email,
+      email,
       firstname: createUserDto.firstname,
       lastname: createUserDto.lastname,
       password: hashedPassword,
       role: UserRole.USER,
-      verificationCode: verificationCode,
+      verificationCode: hashVerificationCode(verificationCode),
       verificationCodeExpiresAt: expiration,
       isVerified: false,
     });
-    await this.userRepository.save(newUser);
+    await this.saveUserOrThrowConflict(newUser, AuditAction.REGISTER, email);
 
     await this.emailService.sendVerificationEmail(
       newUser.email,
@@ -125,14 +150,16 @@ export class AuthService {
   }
 
   async createAdminUser(createUserDto: CreateUserDto) {
+    const email = createUserDto.email.trim().toLowerCase();
+    const email = normalizeEmail(createUserDto.email);
     const existingUser = await this.userRepository.findOne({
-      where: { email: createUserDto.email },
+      where: { email },
     });
 
     if (existingUser) {
       await this.auditService.authFailure(
         AuditAction.REGISTER_ADMIN,
-        createUserDto.email,
+        email,
         { reason: 'email_already_exists' },
       );
       throw new ConflictException(UserMessages.EMAIL_ALREADY_EXIST);
@@ -144,7 +171,7 @@ export class AuthService {
     if (!validPassword) {
       await this.auditService.authFailure(
         AuditAction.REGISTER_ADMIN,
-        createUserDto.email,
+        email,
         { reason: 'weak_password' },
       );
       throw new ConflictException(UserMessages.IS_VALID_PASSWORD);
@@ -153,13 +180,17 @@ export class AuthService {
       createUserDto.password,
     );
     const newUser = this.userRepository.create({
-      email: createUserDto.email,
+      email,
       firstname: createUserDto.firstname,
       lastname: createUserDto.lastname,
       password: hashedPassword,
       role: UserRole.ADMIN,
     });
-    await this.userRepository.save(newUser);
+    await this.saveUserOrThrowConflict(
+      newUser,
+      AuditAction.REGISTER_ADMIN,
+      email,
+    );
 
     await this.auditService.adminAction(
       AuditAction.REGISTER_ADMIN,
@@ -177,8 +208,32 @@ export class AuthService {
     };
   }
 
+  private async saveUserOrThrowConflict(
+    user: User,
+    action: AuditAction,
+    email: string,
+  ): Promise<void> {
+    try {
+      await this.userRepository.save(user);
+    } catch (error) {
+      const dbError = error as {
+        code?: string;
+        driverError?: { code?: string };
+      };
+      if (dbError?.code !== '23505' && dbError?.driverError?.code !== '23505') {
+        throw error;
+      }
+
+      await this.auditService.authFailure(action, email, {
+        reason: 'email_already_exists',
+      });
+      throw new ConflictException(UserMessages.EMAIL_ALREADY_EXIST);
+    }
+  }
+
   async verifyOtp(verifyOtpDto: VerifyOtpDto) {
-    const { email, otp } = verifyOtpDto;
+    const { otp } = verifyOtpDto;
+    const email = normalizeEmail(verifyOtpDto.email);
 
     if (!email) {
       throw new BadRequestException(UserMessages.EMAIL_REQUIRED);
@@ -195,15 +250,6 @@ export class AuthService {
       throw new UnauthorizedException(UserMessages.USER_NOT_FOUND);
     }
 
-    if (user.verificationCode !== otp) {
-      await this.auditService.authFailure(
-        AuditAction.OTP_FAILED,
-        email,
-        { reason: 'invalid_code', userId: user.id },
-      );
-      throw new UnauthorizedException(UserMessages.INVALID_OTP);
-    }
-
     if (
       !user.verificationCodeExpiresAt ||
       user.verificationCodeExpiresAt < new Date()
@@ -214,6 +260,15 @@ export class AuthService {
         { reason: 'expired', userId: user.id },
       );
       throw new UnauthorizedException(UserMessages.OTP_EXPIRED);
+    }
+
+    if (!matchesVerificationCode(user.verificationCode, otp)) {
+      await this.auditService.authFailure(
+        AuditAction.OTP_FAILED,
+        email,
+        { reason: 'invalid_code', userId: user.id },
+      );
+      throw new UnauthorizedException(UserMessages.INVALID_OTP);
     }
 
     user.isVerified = true;
@@ -245,6 +300,7 @@ export class AuthService {
 
   async resendVerificationOtp(email: string) {
     try {
+      email = normalizeEmail(email);
       if (!email) {
         throw new BadRequestException(UserMessages.EMAIL_REQUIRED);
       }
@@ -256,7 +312,7 @@ export class AuthService {
 
       const verificationCode = this.userHelper.generateVerificationCode();
 
-      user.verificationCode = verificationCode;
+      user.verificationCode = hashVerificationCode(verificationCode);
       user.verificationCodeExpiresAt = moment().add(10, 'minutes').toDate();
       await this.userRepository.save(user);
 
@@ -276,14 +332,15 @@ export class AuthService {
   }
 
   async login(loginUserDto: LoginUserDto) {
+    const email = normalizeEmail(loginUserDto.email);
     const user = await this.userRepository.findOne({
-      where: { email: loginUserDto.email },
+      where: { email },
     });
 
     // B22 – locked accounts are rejected up-front with the exact same
     // response shape as bad credentials (no account probing).
     if (user && user.lockoutUntil && user.lockoutUntil > new Date()) {
-      await this.auditService.authFailure(AuditAction.LOGIN_FAILED, loginUserDto.email, {
+      await this.auditService.authFailure(AuditAction.LOGIN_FAILED, email, {
         reason: 'locked',
         userId: user.id,
       });
@@ -302,7 +359,7 @@ export class AuthService {
       }
       await this.auditService.authFailure(
         AuditAction.LOGIN_FAILED,
-        loginUserDto.email,
+        email,
         { reason: !user ? 'unknown_email' : 'bad_password' },
       );
       throw new UnauthorizedException(UserMessages.INVALID_CREDENTIALS);
@@ -319,10 +376,10 @@ export class AuthService {
     }
 
     if (!user.isVerified) {
-      await this.resendVerificationOtp(loginUserDto.email);
+      await this.resendVerificationOtp(email);
       await this.auditService.authFailure(
         AuditAction.LOGIN_FAILED,
-        loginUserDto.email,
+        email,
         { reason: 'unverified', userId: user.id },
       );
       return {
@@ -492,8 +549,9 @@ export class AuthService {
       throw new BadRequestException(UserMessages.EMAIL_REQUIRED);
     }
 
+    const email = normalizeEmail(sendPasswordResetOtpDto.email);
     const user = await this.userRepository.findOne({
-      where: { email: sendPasswordResetOtpDto.email },
+      where: { email },
     });
 
     if (!user) {
@@ -501,11 +559,11 @@ export class AuthService {
       // the response is identical to the "user exists" path: callers cannot
       // distinguish between an existing and a non-existing account.
       this.logger.warn(
-        `Password-reset OTP requested for unknown email: ${sendPasswordResetOtpDto.email}`,
+        `Password-reset OTP requested for unknown email: ${email}`,
       );
       await this.auditService.authFailure(
         AuditAction.PASSWORD_RESET_REQUEST,
-        sendPasswordResetOtpDto.email,
+        email,
         { reason: 'unknown_email' },
       );
       throw new NotFoundException(UserMessages.OTP_SENT);
@@ -549,12 +607,13 @@ export class AuthService {
         throw new BadRequestException(UserMessages.EMAIL_REQUIRED);
       }
 
+      const email = normalizeEmail(resendOtpDto.email);
       const user = await this.userRepository.findOne({
-        where: { email: resendOtpDto.email },
+        where: { email },
       });
       if (!user) {
         this.logger.warn(
-          `Password-reset OTP resend requested for unknown email: ${resendOtpDto.email}`,
+          `Password-reset OTP resend requested for unknown email: ${email}`,
         );
         throw new NotFoundException(UserMessages.OTP_SENT);
       }
@@ -615,8 +674,9 @@ export class AuthService {
       throw new BadRequestException(UserMessages.OTP_REQUIRED);
     }
 
+    const email = normalizeEmail(verifyOtpDto.email);
     const user = await this.userRepository.findOne({
-      where: { email: verifyOtpDto.email },
+      where: { email },
     });
 
     if (!user) {
@@ -626,7 +686,7 @@ export class AuthService {
     if (user.passwordResetCode !== verifyOtpDto.otp) {
       await this.auditService.authFailure(
         AuditAction.PASSWORD_RESET_FAILED,
-        verifyOtpDto.email,
+        email,
         { reason: 'invalid_code', userId: user.id },
       );
       throw new UnauthorizedException(UserMessages.INVALID_OTP);
@@ -639,7 +699,7 @@ export class AuthService {
     ) {
       await this.auditService.authFailure(
         AuditAction.PASSWORD_RESET_FAILED,
-        verifyOtpDto.email,
+        email,
         { reason: 'expired', userId: user.id },
       );
       throw new UnauthorizedException(UserMessages.OTP_EXPIRED);
