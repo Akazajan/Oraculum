@@ -2,6 +2,7 @@ import { Test } from '@nestjs/testing';
 import { createHash } from 'node:crypto';
 import {
   BadRequestException,
+  ConflictException,
   InternalServerErrorException,
   NotFoundException,
   UnauthorizedException,
@@ -133,7 +134,7 @@ describe('AuthService email verification codes', () => {
     users.findOne.mockResolvedValue(null);
 
     await service.createUser({
-      email: 'jane.doe@example.com',
+      email: 'Jane.Doe@Example.com',
       firstname: 'Jane',
       lastname: 'Doe',
       password: 'StrongPass1!',
@@ -141,6 +142,7 @@ describe('AuthService email verification codes', () => {
 
     expect(users.create).toHaveBeenCalledWith(
       expect.objectContaining({
+        email: 'jane.doe@example.com',
         verificationCode: createHash('sha256').update('123456').digest('hex'),
       }),
     );
@@ -148,6 +150,28 @@ describe('AuthService email verification codes', () => {
       user.email,
       '123456',
       'Jane Doe',
+    );
+  });
+
+  it('maps a concurrent duplicate-email insert to the existing conflict response', async () => {
+    users.findOne.mockResolvedValue(null);
+    users.save.mockRejectedValue({ code: '23505' });
+
+    const error = await service
+      .createUser({
+        email: 'jane.doe@example.com',
+        firstname: 'Jane',
+        lastname: 'Doe',
+        password: 'StrongPass1!',
+      })
+      .catch((err) => err);
+
+    expect(error).toBeInstanceOf(ConflictException);
+    expect(error.message).toBe(UserMessages.EMAIL_ALREADY_EXIST);
+    expect(audit.authFailure).toHaveBeenCalledWith(
+      AuditAction.REGISTER,
+      'jane.doe@example.com',
+      { reason: 'email_already_exists' },
     );
   });
 

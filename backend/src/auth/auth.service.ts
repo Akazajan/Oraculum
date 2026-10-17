@@ -81,14 +81,15 @@ export class AuthService {
 
   //create user
   async createUser(createUserDto: CreateUserDto) {
+    const email = createUserDto.email.trim().toLowerCase();
     const existingUser = await this.userRepository.findOne({
-      where: { email: createUserDto.email },
+      where: { email },
     });
 
     if (existingUser) {
       await this.auditService.authFailure(
         AuditAction.REGISTER,
-        createUserDto.email,
+        email,
         { reason: 'email_already_exists' },
       );
       throw new ConflictException(UserMessages.EMAIL_ALREADY_EXIST);
@@ -100,7 +101,7 @@ export class AuthService {
     if (!validPassword) {
       await this.auditService.authFailure(
         AuditAction.REGISTER,
-        createUserDto.email,
+        email,
         { reason: 'weak_password' },
       );
       throw new ConflictException(UserMessages.IS_VALID_PASSWORD);
@@ -111,7 +112,7 @@ export class AuthService {
     const verificationCode = this.userHelper.generateVerificationCode();
     const expiration = moment().add(10, 'minutes').toDate();
     const newUser = this.userRepository.create({
-      email: createUserDto.email,
+      email,
       firstname: createUserDto.firstname,
       lastname: createUserDto.lastname,
       password: hashedPassword,
@@ -120,7 +121,7 @@ export class AuthService {
       verificationCodeExpiresAt: expiration,
       isVerified: false,
     });
-    await this.userRepository.save(newUser);
+    await this.saveUserOrThrowConflict(newUser, AuditAction.REGISTER, email);
 
     await this.emailService.sendVerificationEmail(
       newUser.email,
@@ -143,14 +144,15 @@ export class AuthService {
   }
 
   async createAdminUser(createUserDto: CreateUserDto) {
+    const email = createUserDto.email.trim().toLowerCase();
     const existingUser = await this.userRepository.findOne({
-      where: { email: createUserDto.email },
+      where: { email },
     });
 
     if (existingUser) {
       await this.auditService.authFailure(
         AuditAction.REGISTER_ADMIN,
-        createUserDto.email,
+        email,
         { reason: 'email_already_exists' },
       );
       throw new ConflictException(UserMessages.EMAIL_ALREADY_EXIST);
@@ -162,7 +164,7 @@ export class AuthService {
     if (!validPassword) {
       await this.auditService.authFailure(
         AuditAction.REGISTER_ADMIN,
-        createUserDto.email,
+        email,
         { reason: 'weak_password' },
       );
       throw new ConflictException(UserMessages.IS_VALID_PASSWORD);
@@ -171,13 +173,17 @@ export class AuthService {
       createUserDto.password,
     );
     const newUser = this.userRepository.create({
-      email: createUserDto.email,
+      email,
       firstname: createUserDto.firstname,
       lastname: createUserDto.lastname,
       password: hashedPassword,
       role: UserRole.ADMIN,
     });
-    await this.userRepository.save(newUser);
+    await this.saveUserOrThrowConflict(
+      newUser,
+      AuditAction.REGISTER_ADMIN,
+      email,
+    );
 
     await this.auditService.adminAction(
       AuditAction.REGISTER_ADMIN,
@@ -193,6 +199,29 @@ export class AuthService {
       user: this.userHelper.formatUserResponse(newUser),
       accessToken,
     };
+  }
+
+  private async saveUserOrThrowConflict(
+    user: User,
+    action: AuditAction,
+    email: string,
+  ): Promise<void> {
+    try {
+      await this.userRepository.save(user);
+    } catch (error) {
+      const dbError = error as {
+        code?: string;
+        driverError?: { code?: string };
+      };
+      if (dbError?.code !== '23505' && dbError?.driverError?.code !== '23505') {
+        throw error;
+      }
+
+      await this.auditService.authFailure(action, email, {
+        reason: 'email_already_exists',
+      });
+      throw new ConflictException(UserMessages.EMAIL_ALREADY_EXIST);
+    }
   }
 
   async verifyOtp(verifyOtpDto: VerifyOtpDto) {
