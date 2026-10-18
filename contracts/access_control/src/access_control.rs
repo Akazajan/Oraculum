@@ -273,17 +273,29 @@ impl AccessControlModule {
         matches!(user_role, UserRole::Admin)
     }
 
+    /// Require that `caller` is an administrator (single-admin or multisig).
+    ///
+    /// CT-28: being on the admin list is not sufficient — a blacklisted
+    /// administrator may not act. The blacklist is checked here, at the one
+    /// choke point every privileged mutation goes through, so proposal
+    /// creation, voting and the direct admin operations cannot drift apart.
     pub fn require_admin(env: &Env, caller: &Address) -> AccessControlResult<()> {
-        if let Some(multisig_config) = Self::get_multisig_config(env) {
-            if multisig_config.admins.contains(caller) {
-                caller.require_auth();
-                return Ok(());
-            }
-        } else if Self::is_admin(env, caller.clone()) {
-            caller.require_auth();
-            return Ok(());
+        let is_configured_admin = if let Some(multisig_config) = Self::get_multisig_config(env) {
+            multisig_config.admins.contains(caller)
+        } else {
+            Self::is_admin(env, caller.clone())
+        };
+
+        if !is_configured_admin {
+            return Err(AccessControlError::AdminRequired);
         }
-        Err(AccessControlError::AdminRequired)
+
+        if Self::is_blacklisted(env, caller) {
+            return Err(AccessControlError::UserBlacklisted);
+        }
+
+        caller.require_auth();
+        Ok(())
     }
 
     /// Check if the system is initialized
@@ -603,6 +615,13 @@ impl AccessControlModule {
     pub fn blacklist_user(env: &Env, caller: Address, user: Address) -> AccessControlResult<()> {
         Self::require_admin(env, &caller)?;
 
+        // CT-28: an administrator cannot blacklist themselves. In single-admin
+        // mode that would leave the only account able to lift the restriction
+        // blacklisted, permanently freezing governance.
+        if caller == user {
+            return Err(AccessControlError::InvalidAddress);
+        }
+
         env.storage()
             .persistent()
             .set(&DataKey::Blacklisted(user.clone()), &true);
@@ -884,8 +903,25 @@ impl AccessControlModule {
             }
         }
 
+        // CT-28: blacklist checks apply to execution, not only to voting.
+        // A proposal raised by a blacklisted administrator is not executable,
+        // and approvals cast by blacklisted signers stop counting towards the
+        // quorum. Filtering instead of failing outright means the remaining
+        // signers can still reach the threshold, so blacklisting one signer
+        // cannot permanently freeze governance.
+        if Self::is_blacklisted(env, &proposal.proposer) {
+            return Err(AccessControlError::UserBlacklisted);
+        }
+
+        let mut eligible_approvals = 0u32;
+        for approver in proposal.approvals.iter() {
+            if !Self::is_blacklisted(env, &approver) {
+                eligible_approvals += 1;
+            }
+        }
+
         // Validate signatures
-        if proposal.approvals.len() < proposal.required_signatures {
+        if eligible_approvals < proposal.required_signatures {
             return Err(AccessControlError::InsufficientApprovals);
         }
 
@@ -1454,31 +1490,6 @@ impl AccessControlModule {
             caller,
             ProposalAction::UpdateMultisigConfig(new_config),
         )
-    }
-
-    /// Validate the raw parameters of a multisig configuration, returning the
-    /// most specific error for the violation.
-    ///
-    /// Shared by first-time initialization and reconfiguration so both paths
-    /// enforce the same `1 <= threshold <= signer_count` rule and reject
-    /// duplicate signers.
-    fn validate_multisig_input(config: &MultiSigConfig) -> AccessControlResult<()> {
-        if config.admins.is_empty() {
-            return Err(AccessControlError::InvalidAddress);
-        }
-        if config.required_signatures == 0 {
-            return Err(AccessControlError::ThresholdTooLow);
-        }
-        if config.required_signatures > config.admins.len() {
-            return Err(AccessControlError::ThresholdTooHigh);
-        }
-        if config.has_duplicate_admins() {
-            return Err(AccessControlError::DuplicateAdmin);
-        }
-        if !config.validate() {
-            return Err(AccessControlError::InvalidMultisigConfig);
-        }
-        Ok(())
     }
 
     /// Check if emergency mode is active
