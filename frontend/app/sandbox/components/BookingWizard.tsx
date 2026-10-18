@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { AvailabilityCalendar } from "./AvailabilityCalendar";
 import SeatMap, { type Seat, type SeatStatus } from "./SeatMap";
+import { formatNaira } from "@/lib/utils";
 
 // ---- Types ----
 
@@ -73,14 +74,6 @@ const TYPE_COLORS: Record<string, string> = {
 };
 
 // ---- Helpers ----
-
-function formatNaira(kobo: number) {
-  return (kobo / 100).toLocaleString("en-NG", {
-    style: "currency",
-    currency: "NGN",
-    maximumFractionDigits: 0,
-  });
-}
 
 function daysBetween(start: string, end: string) {
   const diff =

@@ -393,6 +393,9 @@ class ApiClient {
         response.headers?.get?.("content-disposition") ?? null
       ),
     };
+  }
+
+  /**
    * `post` that never participates in the 401 refresh flow. Reserved for the
    * refresh endpoint itself, so a rejected refresh cannot trigger another one.
    */

@@ -17,7 +17,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { toast } from "sonner";
-import { formatDate } from "@/lib/utils";
+import { formatDate, formatNaira } from "@/lib/utils";
 
 const STATUS_STYLES: Record<BookingStatus, string> = {
   PENDING: "bg-amber-50 text-amber-700",
@@ -47,10 +47,7 @@ function BookingRow({ booking, onCancelled }: { booking: Booking; onCancelled: (
   const { mutateAsync: initPayment, isPending: paying } = useInitializePayment();
   const [confirmCancel, setConfirmCancel] = useState(false);
 
-  const amountNaira = (booking.totalAmount / 100).toLocaleString("en-NG", {
-    style: "currency",
-    currency: "NGN",
-  });
+  const amountNaira = formatNaira(booking.totalAmount);
 
   async function handleCancel() {
     await submitCancelAction({

@@ -6,6 +6,7 @@ import { useGetAllBookings } from "@/lib/react-query/hooks/admin/bookings/useGet
 import { useUpdateBookingStatus } from "@/lib/react-query/hooks/admin/bookings/useUpdateBookingStatus";
 import { BookingStatus } from "@/lib/types/booking";
 import { BookOpen, ChevronLeft, ChevronRight } from "lucide-react";
+import { formatNaira } from "@/lib/utils";
 
 const STATUSES: { value: BookingStatus | ""; label: string }[] = [
   { value: "", label: "All" },
@@ -24,14 +25,6 @@ const STATUS_COLORS: Record<BookingStatus, string> = {
 
 function formatDate(iso: string): string {
   return new Date(iso).toLocaleDateString("en-NG", { dateStyle: "medium" });
-}
-
-function formatNaira(kobo: number): string {
-  return new Intl.NumberFormat("en-NG", {
-    style: "currency",
-    currency: "NGN",
-    minimumFractionDigits: 0,
-  }).format(kobo / 100);
 }
 
 export default function AdminBookingsPage() {

@@ -15,6 +15,7 @@ import {
   RefreshCcw,
   Loader2,
 } from "lucide-react";
+import { formatNaira } from "@/lib/utils";
 
 const TYPE_LABELS: Record<string, string> = {
   COWORKING: "Coworking",
@@ -44,13 +45,7 @@ export default function WorkspaceDetailPage({
     router.push(`/bookings/new?workspaceId=${workspace.id}`);
   }
 
-  const hourlyNaira = workspace
-    ? (workspace.hourlyRate / 100).toLocaleString("en-NG", {
-        style: "currency",
-        currency: "NGN",
-        maximumFractionDigits: 0,
-      })
-    : "";
+  const hourlyNaira = workspace ? formatNaira(workspace.hourlyRate) : "";
 
   return (
     <DashboardLayout>
