@@ -18,7 +18,7 @@ import { PaymentStatus } from '../enums/payment-status.enum';
 import { PaystackProvider } from './paystack.provider';
 import { SorobanEscrowProvider } from './soroban-escrow.provider';
 import { ConfirmBookingProvider } from '../../bookings/providers/confirm-booking.provider';
-import { HandleWebhookProvider } from './handle-webhook.provider';
+import { HandleWebhookProvider, redactSensitive } from './handle-webhook.provider';
 
 type InMemoryStore = {
   payment: Payment;
@@ -83,6 +83,7 @@ describe('HandleWebhookProvider booking-payment confirmation', () => {
     } as unknown as EmailService;
     const auditService = {
       paymentSuccess: jest.fn(),
+      paymentFailure: jest.fn(),
     } as unknown as AuditService;
     const configService = {
       get: jest.fn(),
@@ -103,7 +104,7 @@ describe('HandleWebhookProvider booking-payment confirmation', () => {
       dataSource,
     );
 
-    return { provider, dataSource, paystackProvider };
+    return { provider, dataSource, paystackProvider, auditService };
   }
 
   function createStore(): InMemoryStore {
@@ -173,6 +174,58 @@ describe('HandleWebhookProvider booking-payment confirmation', () => {
     expect(store.booking.status).toBe(BookingStatus.CONFIRMED);
     expect(store.user.membershipStatus).toBe(MembershipStatus.ACTIVE);
     expect(store.user.memberSince).toBeInstanceOf(Date);
+  });
+
+  it('persists charge.failed details with a safe code and no secrets or personal data', async () => {
+    const store = createStore();
+    const { provider, auditService } = createProvider(store);
+    const secretToken = 'AUTH_secret_token_value';
+    const signature = 'a'.repeat(128);
+
+    await provider.handle(
+      Buffer.from(
+        JSON.stringify({
+          event: 'charge.failed',
+          id: 'evt-1',
+          data: {
+            reference: paymentReference,
+            status: 'failed',
+            channel: 'card',
+            gateway_response: 'Declined for member@example.com',
+            authorization: { authorization_code: secretToken, signature },
+            customer: { email: 'member@example.com', phone: '+2348000000000' },
+          },
+        }),
+      ),
+      'valid-signature',
+    );
+
+    expect(store.payment.status).toBe(PaymentStatus.FAILED);
+    expect(auditService.paymentFailure).toHaveBeenCalledTimes(1);
+    const details = (auditService.paymentFailure as jest.Mock).mock.calls[0][2];
+    expect(details.errorCode).toBe('CHARGE_FAILED');
+    expect(details.paymentReference).toBe(paymentReference);
+    const serialized = JSON.stringify(details);
+    expect(serialized).not.toContain(secretToken);
+    expect(serialized).not.toContain(signature);
+    expect(serialized).not.toContain('member@example.com');
+    expect(serialized).not.toContain('+2348000000000');
+  });
+
+  it('redactSensitive strips tokens, signatures and personal data', () => {
+    const out = JSON.stringify(
+      redactSensitive({
+        errorCode: 'CHARGE_FAILED',
+        token: 'tok_123',
+        nested: { signature: 'sig', email: 'a@b.com' },
+        note: 'sent to a@b.com with Bearer abc.def',
+      }),
+    );
+    expect(out).toContain('CHARGE_FAILED');
+    expect(out).not.toContain('tok_123');
+    expect(out).not.toContain('"sig"');
+    expect(out).not.toContain('a@b.com');
+    expect(out).not.toContain('abc.def');
   });
 
   it('rejects malformed JSON before opening a transaction', async () => {
