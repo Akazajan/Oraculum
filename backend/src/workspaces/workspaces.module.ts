@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { Workspace } from './entities/workspace.entity';
+import { Booking } from '../bookings/entities/booking.entity';
 import { WorkspacesService } from './workspaces.service';
 import { WorkspacesController } from './workspaces.controller';
 import { CreateWorkspaceProvider } from './providers/create-workspace.provider';
@@ -16,7 +17,7 @@ import { CacheInvalidationProvider } from '../common/providers/cache-invalidatio
 import { WorkspaceSyncService } from '../workspace_sync';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Workspace]), AuditModule],
+  imports: [TypeOrmModule.forFeature([Workspace, Booking]), AuditModule],
   controllers: [WorkspacesController, AdminWorkspacesController],
   providers: [
     WorkspacesService,

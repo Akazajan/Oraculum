@@ -56,8 +56,6 @@ export class GenerateInvoiceProvider {
         })
       : null;
 
-    const invoiceNumber = await this.nextInvoiceNumber();
-
     const lineItems = [
       {
         description: workspace
@@ -71,8 +69,7 @@ export class GenerateInvoiceProvider {
       },
     ];
 
-    const invoice = this.invoicesRepository.create({
-      invoiceNumber,
+    const saved = await this.createWithUniqueInvoiceNumber({
       userId: payment.userId,
       bookingId: payment.bookingId,
       paymentId: payment.id,
@@ -82,10 +79,8 @@ export class GenerateInvoiceProvider {
       paidAt: payment.paidAt,
       lineItems,
     });
-
-    const saved = await this.invoicesRepository.save(invoice);
     this.logger.log(
-      `Invoice ${invoiceNumber} generated for payment ${paymentId}`,
+      `Invoice ${saved.invoiceNumber} generated for payment ${paymentId}`,
     );
 
     if (user) {
@@ -111,6 +106,50 @@ export class GenerateInvoiceProvider {
     }
 
     return saved;
+  }
+
+  /**
+   * B47 — Generates an invoice using a PostgreSQL sequence value while
+   * guaranteeing uniqueness under concurrent creation. The invoice
+   * insert is wrapped in a transaction so a failure does not surface a
+   * half-created record, and the number is only considered consumed
+   * once the insert commits. If a concurrent caller somehow collides
+   * on the same number, the unique index triggers a retry with a fresh
+   * sequence value.
+   */
+  private async createWithUniqueInvoiceNumber(
+    data: Partial<Invoice>,
+  ): Promise<Invoice> {
+    const MAX_RETRIES = 3;
+
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      const invoiceNumber = await this.nextInvoiceNumber();
+
+      try {
+        return await this.dataSource.transaction(async (manager) => {
+          const draft = manager.create(Invoice, {
+            ...data,
+            invoiceNumber,
+          });
+          return manager.save(draft);
+        });
+      } catch (err) {
+        const message =
+          err instanceof Error ? err.message : 'unknown invoice error';
+        const isCollision =
+          typeof message === 'string' &&
+          message.toLowerCase().includes('duplicate');
+
+        if (!isCollision || attempt === MAX_RETRIES) {
+          throw err;
+        }
+        this.logger.warn(
+          `Invoice number ${invoiceNumber} collided under concurrency — retrying with fresh number`,
+        );
+      }
+    }
+
+    throw new Error('Failed to allocate a unique invoice number');
   }
 
   private async nextInvoiceNumber(): Promise<string> {

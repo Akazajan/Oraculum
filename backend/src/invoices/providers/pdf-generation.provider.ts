@@ -1,8 +1,13 @@
-import { Injectable, Logger } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import { Invoice } from '../entities/invoice.entity';
 import { PdfInvoiceProvider } from './pdf-invoice.provider';
 import { PdfGenerationFallbackProvider } from './pdf-generation-fallback.provider';
 import { withRetry } from '../../utils/retry.util';
+import { randomUUID } from 'node:crypto';
 
 export const PDF_RETRY_MAX_ATTEMPTS = 3;
 export const PDF_RETRY_BASE_DELAY_MS = 500;
@@ -68,30 +73,52 @@ export class PdfGenerationProvider {
   ) {}
 
   async generate(invoice: Invoice): Promise<Buffer> {
+    const correlationId = randomUUID();
+    let attemptCount = 0;
+
     try {
       return await withRetry(
-        () => this.pdfInvoiceProvider.generate(invoice),
+        async () => {
+          attemptCount += 1;
+          const pdf = await this.pdfInvoiceProvider.generate(invoice);
+          if (!Buffer.isBuffer(pdf) || pdf.length === 0) {
+            throw new Error('PDF generator returned an empty document');
+          }
+          return pdf;
+        },
         {
           maxAttempts: PDF_RETRY_MAX_ATTEMPTS,
           baseDelayMs: PDF_RETRY_BASE_DELAY_MS,
           maxDelayMs: PDF_RETRY_MAX_DELAY_MS,
           isRetryable: isTransientPdfError,
-          onRetry: (error, attempt, nextDelayMs) => {
+          onRetry: (_error, attempt, nextDelayMs) => {
             this.logger.warn(
-              `PDF generation attempt ${attempt} failed for invoice ` +
-                `${invoice.invoiceNumber}: ${(error as Error).message}. ` +
-                `Retrying in ${nextDelayMs}ms...`,
+              `PDF generation attempt ${attempt} failed ` +
+                `(reference ${correlationId}). Retrying in ${nextDelayMs}ms...`,
             );
           },
         },
       );
     } catch (error) {
-      this.fallbackProvider.handlePermanentFailure(
-        invoice,
-        error,
-        PDF_RETRY_MAX_ATTEMPTS,
+      try {
+        this.fallbackProvider.handlePermanentFailure(
+          invoice,
+          error,
+          attemptCount,
+          correlationId,
+        );
+      } catch {
+        this.logger.error(
+          `PDF generation and fallback handling failed (reference ${correlationId})`,
+        );
+        throw new ServiceUnavailableException(
+          `Invoice PDF is unavailable. Retry later or contact support with reference ${correlationId}.`,
+        );
+      }
+
+      throw new ServiceUnavailableException(
+        `Invoice PDF is unavailable and has been queued for retry. Contact support with reference ${correlationId} if the problem continues.`,
       );
-      throw error;
     }
   }
 }

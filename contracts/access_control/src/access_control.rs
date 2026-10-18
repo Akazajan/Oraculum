@@ -38,6 +38,12 @@ pub enum DataKey {
 /// Prevents resource exhaustion / oversized proposal execution.
 pub const MAX_BATCH_SIZE: u32 = 50;
 
+/// CT-27: Upper bound on the number of expired proposals a single
+/// `cleanup_expired_proposals` invocation will remove. Keeps the per-call work
+/// deterministic regardless of how large the pending set has grown, while
+/// repeated calls still make monotonic progress.
+pub const MAX_CLEANUP_PER_CALL: u32 = 20;
+
 pub struct AccessControlModule;
 
 impl AccessControlModule {
@@ -84,19 +90,6 @@ impl AccessControlModule {
             return Err(AccessControlError::ConfigurationError);
         }
 
-        if admins.is_empty() || required_signatures == 0 || required_signatures > admins.len() {
-            return Err(AccessControlError::InvalidAddress);
-        }
-
-        // Validate no duplicate admins
-        for i in 0..admins.len() {
-            for j in (i + 1)..admins.len() {
-                if admins.get(i).unwrap() == admins.get(j).unwrap() {
-                    return Err(AccessControlError::DuplicateAdmin);
-                }
-            }
-        }
-
         // Set reasonable defaults for thresholds
         let critical_threshold = (required_signatures + 1).min(admins.len());
         let emergency_threshold = (critical_threshold + 1).min(admins.len());
@@ -111,9 +104,9 @@ impl AccessControlModule {
             proposal_expiry_duration: 604800, // 7 days default
         };
 
-        if !multisig_config.validate() {
-            return Err(AccessControlError::InvalidMultisigConfig);
-        }
+        // Reject empty signer sets, out-of-range thresholds and duplicate
+        // signers before any state is written.
+        Self::validate_multisig_input(&multisig_config)?;
 
         env.storage()
             .persistent()
@@ -160,6 +153,32 @@ impl AccessControlModule {
             (admins.clone(), config.clone()),
         );
 
+        Ok(())
+    }
+
+    /// Validate the raw parameters of a multisig configuration, returning the
+    /// most specific error for the violation.
+    ///
+    /// Enforces `1 <= required_signatures <= signer_count`, a non-empty signer
+    /// set, and rejects duplicate signers so a single address cannot satisfy
+    /// more than one slot of a quorum. Shared by initialization and every
+    /// reconfiguration path that builds a [`MultiSigConfig`].
+    pub fn validate_multisig_input(config: &MultiSigConfig) -> AccessControlResult<()> {
+        if config.admins.is_empty() {
+            return Err(AccessControlError::InvalidAddress);
+        }
+        if config.required_signatures == 0 {
+            return Err(AccessControlError::ThresholdTooLow);
+        }
+        if config.required_signatures > config.admins.len() {
+            return Err(AccessControlError::ThresholdTooHigh);
+        }
+        if config.has_duplicate_admins() {
+            return Err(AccessControlError::DuplicateAdmin);
+        }
+        if !config.validate() {
+            return Err(AccessControlError::InvalidMultisigConfig);
+        }
         Ok(())
     }
 
@@ -551,10 +570,12 @@ impl AccessControlModule {
     }
 
     pub fn remove_role(env: &Env, caller: Address, user: Address) -> AccessControlResult<()> {
+        // CT-29: `require_admin` already binds the caller's signature (both the
+        // single-admin and multisig branches call `require_auth`). Binding it a
+        // second time here made every authorized removal fail the host's
+        // "frame is already authorized" check, so authenticate exactly once,
+        // before any state is touched.
         Self::require_admin(env, &caller)?;
-        // C02 / issue #460: bind Soroban auth on role removal. The single-admin
-        // branch of require_admin previously skipped require_auth.
-        caller.require_auth();
 
         if let Some(admin) = Self::get_admin(env) {
             if user == admin {
@@ -783,8 +804,6 @@ impl AccessControlModule {
         approver: Address,
         proposal_id: u64,
     ) -> AccessControlResult<()> {
-        Self::require_admin(env, &approver)?;
-
         let mut proposal: PendingProposal = env
             .storage()
             .persistent()
@@ -801,6 +820,10 @@ impl AccessControlModule {
             return Err(AccessControlError::ProposalExpired);
         }
 
+        // One signer, one vote: detect a repeated approval (or an approval
+        // after a rejection) before any authorization work. This keeps the
+        // approval count monotonically increasing by exactly one per signer
+        // and makes a duplicate call a cheap, explicit no-op rejection.
         if proposal.approvals.contains(&approver) {
             return Err(AccessControlError::AlreadyApproved);
         }
@@ -808,6 +831,8 @@ impl AccessControlModule {
         if proposal.rejections.contains(&approver) {
             return Err(AccessControlError::AlreadyRejected);
         }
+
+        Self::require_admin(env, &approver)?;
 
         proposal.approvals.push_back(approver.clone());
 
@@ -910,9 +935,9 @@ impl AccessControlModule {
                 );
             }
             ProposalAction::UpdateMultisigConfig(new_config) => {
-                if !new_config.validate() {
-                    return Err(AccessControlError::InvalidMultisigConfig);
-                }
+                // Reconfiguration must satisfy the same threshold and
+                // duplicate-signer rules as first-time initialization.
+                Self::validate_multisig_input(&new_config)?;
                 env.storage()
                     .persistent()
                     .set(&DataKey::MultiSigConfig, &new_config);
@@ -922,15 +947,36 @@ impl AccessControlModule {
                     proposal.proposer.clone(),
                 );
             }
+            ProposalAction::EmergencyPause(reason) => {
+                // CT-30: Emergency mode activation policy.
+                //
+                // This action is classified `ProposalType::Emergency`, so it
+                // requires the multisig `emergency_threshold` (the highest
+                // threshold) and is intentionally NOT time-locked: emergency
+                // activation must be able to take effect as soon as the
+                // emergency quorum approves it. It cannot bypass multisig
+                // because reaching this arm already required those approvals.
+                //
+                // Effect: raise the emergency flag and pause the contract,
+                // halting all guarded mutations until the emergency quorum
+                // clears it via `ClearEmergencyMode`.
+                env.storage()
+                    .persistent()
+                    .set(&DataKey::EmergencyMode, &true);
+                env.storage().persistent().set(&DataKey::Paused, &true);
+
+                env.events().publish(
+                    (symbol_short!("emrg_on"), reason),
+                    proposal.proposer.clone(),
+                );
+            }
             ProposalAction::ClearEmergencyMode => {
                 env.storage()
                     .persistent()
                     .set(&DataKey::EmergencyMode, &false);
 
-                env.events().publish(
-                    (symbol_short!("clr_emrg"),),
-                    proposal.proposer.clone(),
-                );
+                env.events()
+                    .publish((symbol_short!("clr_emrg"),), proposal.proposer.clone());
             }
             ProposalAction::BatchBlacklist(users) => {
                 // Size pre-validated; process every address exactly once
@@ -1032,12 +1078,10 @@ impl AccessControlModule {
                     env.storage()
                         .persistent()
                         .set(&DataKey::UserRole(new_admin.clone()), &UserRole::Admin);
-                    env.storage()
-                        .persistent()
-                        .set(
-                            &DataKey::UserRole(proposal.proposer.clone()),
-                            &UserRole::Guest,
-                        );
+                    env.storage().persistent().set(
+                        &DataKey::UserRole(proposal.proposer.clone()),
+                        &UserRole::Guest,
+                    );
                 } else {
                     // Single-admin mode: transfer ownership via DataKey::Admin
                     let current_admin =
@@ -1056,10 +1100,7 @@ impl AccessControlModule {
                         .set(&DataKey::UserRole(new_admin.clone()), &UserRole::Admin);
                     env.storage()
                         .persistent()
-                        .set(
-                            &DataKey::UserRole(current_admin.clone()),
-                            &UserRole::Guest,
-                        );
+                        .set(&DataKey::UserRole(current_admin.clone()), &UserRole::Guest);
                 }
 
                 env.events().publish(
@@ -1137,8 +1178,7 @@ impl AccessControlModule {
         // A proposal can be rejected once enough admins can block its approval threshold.
         let multisig_config =
             Self::get_multisig_config(env).ok_or(AccessControlError::MultisigNotEnabled)?;
-        let rejection_threshold =
-            multisig_config.admins.len() - proposal.required_signatures + 1;
+        let rejection_threshold = multisig_config.admins.len() - proposal.required_signatures + 1;
 
         if proposal.rejections.len() >= rejection_threshold {
             // Proposal rejected - clean it up using the dedicated helper
@@ -1175,6 +1215,12 @@ impl AccessControlModule {
         if proposal.proposer != proposer {
             return Err(AccessControlError::Unauthorized);
         }
+
+        // CT-29: cancelling a proposal is a state mutation and must be bound to
+        // the proposer's signature. Comparing addresses alone is not
+        // authentication: without this check any account could cancel another
+        // admin's proposal by passing the proposer's public address.
+        proposer.require_auth();
 
         if proposal.executed {
             return Err(AccessControlError::ProposalAlreadyExecuted);
@@ -1237,6 +1283,12 @@ impl AccessControlModule {
     }
 
     /// Clean up expired proposals (can be called by anyone)
+    ///
+    /// CT-27: removes at most [`MAX_CLEANUP_PER_CALL`] expired proposals per
+    /// invocation, giving the call a deterministic upper bound on work even
+    /// when the pending set is near its maximum. Callers repeat the call to
+    /// drain a larger backlog; progress is monotonic, so expired entries can
+    /// never permanently block new proposals.
     pub fn cleanup_expired_proposals(env: &Env) -> AccessControlResult<u32> {
         let pending_list: Vec<u64> = env
             .storage()
@@ -1248,6 +1300,9 @@ impl AccessControlModule {
         let mut cleaned_count = 0u32;
 
         for proposal_id in pending_list.iter() {
+            if cleaned_count >= MAX_CLEANUP_PER_CALL {
+                break;
+            }
             if let Some(proposal) = env
                 .storage()
                 .persistent()
@@ -1316,7 +1371,7 @@ impl AccessControlModule {
             .set(&DataKey::ProposalStats, &stats);
 
         env.events()
-            .publish((symbol_short!("rejected_cleanup"), proposal_id), ());
+            .publish((symbol_short!("rej_clean"), proposal_id), ());
 
         Ok(())
     }
@@ -1358,6 +1413,72 @@ impl AccessControlModule {
 
         // This should be done via proposal
         Err(AccessControlError::AdminRequired)
+    }
+
+    /// Build a full multisig configuration from raw parameters and route it
+    /// through the multisig proposal flow.
+    ///
+    /// Unlike [`Self::update_multisig_config`], which rejects direct calls
+    /// outright, this is the supported entry point for reconfiguration: the
+    /// assembled configuration must pass [`MultiSigConfig::validate`], and the
+    /// change is recorded as a `UpdateMultisigConfig` proposal that other
+    /// signers must approve before it takes effect. Returns the new proposal
+    /// id. The caller's authorization is enforced by
+    /// [`Self::create_proposal`].
+    #[allow(clippy::too_many_arguments)]
+    pub fn propose_multisig_config(
+        env: &Env,
+        caller: Address,
+        admins: Vec<Address>,
+        required_signatures: u32,
+        critical_threshold: u32,
+        emergency_threshold: u32,
+        time_lock_duration: u64,
+        max_pending_proposals: u32,
+        proposal_expiry_duration: u64,
+    ) -> AccessControlResult<u64> {
+        let new_config = MultiSigConfig {
+            admins,
+            required_signatures,
+            critical_threshold,
+            emergency_threshold,
+            time_lock_duration,
+            max_pending_proposals,
+            proposal_expiry_duration,
+        };
+
+        Self::validate_multisig_input(&new_config)?;
+
+        Self::create_proposal(
+            env,
+            caller,
+            ProposalAction::UpdateMultisigConfig(new_config),
+        )
+    }
+
+    /// Validate the raw parameters of a multisig configuration, returning the
+    /// most specific error for the violation.
+    ///
+    /// Shared by first-time initialization and reconfiguration so both paths
+    /// enforce the same `1 <= threshold <= signer_count` rule and reject
+    /// duplicate signers.
+    fn validate_multisig_input(config: &MultiSigConfig) -> AccessControlResult<()> {
+        if config.admins.is_empty() {
+            return Err(AccessControlError::InvalidAddress);
+        }
+        if config.required_signatures == 0 {
+            return Err(AccessControlError::ThresholdTooLow);
+        }
+        if config.required_signatures > config.admins.len() {
+            return Err(AccessControlError::ThresholdTooHigh);
+        }
+        if config.has_duplicate_admins() {
+            return Err(AccessControlError::DuplicateAdmin);
+        }
+        if !config.validate() {
+            return Err(AccessControlError::InvalidMultisigConfig);
+        }
+        Ok(())
     }
 
     /// Check if emergency mode is active

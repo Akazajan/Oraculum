@@ -44,7 +44,9 @@ export default function LoginForm({ onEmailLogin, isLoading }: LoginFormProps) {
   } = useForm<LoginFormValues>({
     resolver: zodResolver(loginFormSchema),
     defaultValues,
-    mode: "onSubmit",
+    // "onTouched" surfaces a field's problem as soon as the user leaves it, so
+    // the message arrives before the submit attempt, not after it.
+    mode: "onTouched",
   });
 
   const onSubmit = (values: LoginFormValues) => onEmailLogin(values);
@@ -61,6 +63,9 @@ export default function LoginForm({ onEmailLogin, isLoading }: LoginFormProps) {
         {/* Login Form */}
         <form
           onSubmit={handleSubmit(onSubmit)}
+          // The schema is the single source of truth, and its messages are the
+          // ones wired to the fields through aria-describedby.
+          noValidate
           className="bg-white rounded-xl shadow-sm border border-gray-200 p-8"
         >
           <div className="space-y-6">
@@ -77,14 +82,16 @@ export default function LoginForm({ onEmailLogin, isLoading }: LoginFormProps) {
                   <Mail className="h-5 w-5 text-gray-400" />
                 </div>
                 <input
+                  id="email"
                   type="email"
                   {...register("email")}
-                  required
+                  aria-invalid={errors.email ? true : undefined}
+                  aria-describedby={errors.email ? "email-error" : undefined}
                   className="block w-full pl-10 pr-3 py-3 border border-gray-300 rounded-lg placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-300 focus:border-transparent transition-all"
                   placeholder="Enter your email"
                 />
                 {errors.email?.message && (
-                  <p className="text-xs text-red-600 mt-1">
+                  <p id="email-error" className="text-xs text-red-600 mt-1">
                     {errors.email.message}
                   </p>
                 )}
@@ -104,9 +111,11 @@ export default function LoginForm({ onEmailLogin, isLoading }: LoginFormProps) {
                   <Lock className="h-5 w-5 text-gray-400" />
                 </div>
                 <input
+                  id="password"
                   type={showPassword ? "text" : "password"}
                   {...register("password")}
-                  required
+                  aria-invalid={errors.password ? true : undefined}
+                  aria-describedby={errors.password ? "password-error" : undefined}
                   className="block w-full pl-10 pr-10 py-3 border border-gray-300 rounded-lg placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-300 focus:border-transparent transition-all"
                   placeholder="Enter your password"
                 />
@@ -114,6 +123,8 @@ export default function LoginForm({ onEmailLogin, isLoading }: LoginFormProps) {
                 <button
                   type="button"
                   onClick={() => setShowPassword(!showPassword)}
+                  aria-label={showPassword ? "Hide password" : "Show password"}
+                  aria-pressed={showPassword}
                   className="absolute inset-y-0 right-0 pr-3 flex items-center"
                 >
                   {showPassword ? (
@@ -123,7 +134,7 @@ export default function LoginForm({ onEmailLogin, isLoading }: LoginFormProps) {
                   )}
                 </button>
                 {errors.password?.message && (
-                  <p className="text-xs text-red-600 mt-1">
+                  <p id="password-error" className="text-xs text-red-600 mt-1">
                     {errors.password.message}
                   </p>
                 )}
@@ -168,7 +179,7 @@ export default function LoginForm({ onEmailLogin, isLoading }: LoginFormProps) {
         {/* Sign Up Link */}
         <div className="text-center">
           <p className="text-gray-600">
-            Don't have an account?{" "}
+            Don&apos;t have an account?{" "}
             <Link
               href="/register"
               className="text-gray-900 hover:text-gray-700 font-medium"

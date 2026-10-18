@@ -6,11 +6,17 @@ import {
   CreateDateColumn,
   UpdateDateColumn,
   DeleteDateColumn,
+  ValueTransformer,
 } from 'typeorm';
 import { Exclude } from 'class-transformer';
 import { RefreshToken } from '../../auth/entities/refreshToken.entity';
 import { UserRole } from '../enums/userRoles.enum';
 import { MembershipStatus } from '../enums/membership-status.enum';
+
+const normalizedEmailTransformer: ValueTransformer = {
+  to: (email: string) => email.trim().toLowerCase(),
+  from: (email: string) => email,
+};
 
 @Entity('users')
 export class User {
@@ -26,7 +32,7 @@ export class User {
   @Column({ nullable: true })
   username?: string;
 
-  @Column({ unique: true })
+  @Column({ unique: true, transformer: normalizedEmailTransformer })
   email: string;
 
   @Exclude()
@@ -65,7 +71,7 @@ export class User {
   lastVerificationEmailSent?: Date;
 
   @Exclude()
-  @Column({ nullable: true })
+  @Column({ nullable: true, type: 'varchar', length: 64 })
   verificationCode?: string;
 
   @Exclude()

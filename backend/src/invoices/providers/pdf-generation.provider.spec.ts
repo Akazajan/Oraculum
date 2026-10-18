@@ -1,3 +1,4 @@
+import { Logger, ServiceUnavailableException } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import {
   PdfGenerationProvider,
@@ -148,14 +149,16 @@ describe('PdfGenerationProvider', () => {
     expect(pdfInvoiceProvider.generate).toHaveBeenCalledTimes(3);
   });
 
-  it('queues permanent failure after exhausting retries', async () => {
+  it('queues permanent failure and returns an actionable error', async () => {
     const transientErr = Object.assign(new Error('timeout'), {
       code: 'ETIMEDOUT',
     });
     pdfInvoiceProvider.generate.mockRejectedValue(transientErr);
 
     const invoice = makeInvoice();
-    await expect(provider.generate(invoice)).rejects.toThrow('timeout');
+    const generation = provider.generate(invoice);
+    await expect(generation).rejects.toThrow(ServiceUnavailableException);
+    await expect(generation).rejects.toThrow(/queued for retry.*reference/i);
 
     expect(pdfInvoiceProvider.generate).toHaveBeenCalledTimes(
       PDF_RETRY_MAX_ATTEMPTS,
@@ -165,6 +168,9 @@ describe('PdfGenerationProvider', () => {
     expect(queue[0].invoiceId).toBe(invoice.id);
     expect(queue[0].invoiceNumber).toBe('INV-00001');
     expect(queue[0].attemptCount).toBe(PDF_RETRY_MAX_ATTEMPTS);
+    expect(queue[0].correlationId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+    );
   });
 
   it('does not retry on non-transient error', async () => {
@@ -174,13 +180,58 @@ describe('PdfGenerationProvider', () => {
 
     const invoice = makeInvoice();
     await expect(provider.generate(invoice)).rejects.toThrow(
-      'invalid invoice data',
+      ServiceUnavailableException,
     );
 
     expect(pdfInvoiceProvider.generate).toHaveBeenCalledTimes(1);
     const queue = fallbackProvider.getFailedQueue();
     expect(queue).toHaveLength(1);
     expect(queue[0].attemptCount).toBe(1);
+  });
+
+  it('does not return an empty buffer as a successful PDF', async () => {
+    pdfInvoiceProvider.generate.mockResolvedValue(Buffer.alloc(0));
+
+    await expect(provider.generate(makeInvoice())).rejects.toThrow(
+      ServiceUnavailableException,
+    );
+    expect(fallbackProvider.getFailedQueue()).toHaveLength(1);
+  });
+
+  it('returns an actionable error and logs only a reference when fallback fails', async () => {
+    const invoice = makeInvoice();
+    pdfInvoiceProvider.generate.mockRejectedValue(
+      new Error('sensitive invoice details'),
+    );
+    jest
+      .spyOn(fallbackProvider, 'handlePermanentFailure')
+      .mockImplementation(() => {
+        throw new Error('fallback internals');
+      });
+    const logSpy = jest
+      .spyOn(Logger.prototype, 'error')
+      .mockImplementation(() => undefined);
+
+    let thrown: unknown;
+    try {
+      await provider.generate(invoice);
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(ServiceUnavailableException);
+    expect(thrown).toMatchObject({
+      message: expect.stringMatching(
+        /Retry later or contact support with reference [0-9a-f-]+/i,
+      ),
+    });
+    expect(logSpy).toHaveBeenCalledTimes(1);
+    const logMessage = logSpy.mock.calls[0][0] as string;
+    expect(logMessage).toMatch(/reference [0-9a-f-]+/i);
+    expect(logMessage).not.toContain(invoice.id);
+    expect(logMessage).not.toContain(invoice.invoiceNumber);
+    expect(logMessage).not.toContain('sensitive invoice details');
+    expect(logMessage).not.toContain('fallback internals');
   });
 });
 
@@ -191,9 +242,22 @@ describe('PdfGenerationFallbackProvider', () => {
     provider = new PdfGenerationFallbackProvider();
   });
 
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
   it('queues failure on handlePermanentFailure', () => {
     const invoice = makeInvoice();
-    provider.handlePermanentFailure(invoice, new Error('boom'), 3);
+    const correlationId = 'correlation-123';
+    const logSpy = jest
+      .spyOn(Logger.prototype, 'error')
+      .mockImplementation(() => undefined);
+    provider.handlePermanentFailure(
+      invoice,
+      new Error('boom'),
+      3,
+      correlationId,
+    );
 
     const queue = provider.getFailedQueue();
     expect(queue).toHaveLength(1);
@@ -203,6 +267,13 @@ describe('PdfGenerationFallbackProvider', () => {
     expect(queue[0].error).toBe('boom');
     expect(queue[0].attemptCount).toBe(3);
     expect(queue[0].failedAt).toBeInstanceOf(Date);
+    expect(queue[0].correlationId).toBe(correlationId);
+    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining(correlationId));
+    const logMessage = logSpy.mock.calls[0][0] as string;
+    expect(logMessage).not.toContain(invoice.id);
+    expect(logMessage).not.toContain(invoice.invoiceNumber);
+    expect(logMessage).not.toContain(invoice.userId);
+    expect(logMessage).not.toContain('boom');
   });
 
   it('removeFromQueue removes and returns the failure', () => {

@@ -27,6 +27,7 @@ import {
 } from '@nestjs/swagger';
 import { BookingsService } from './bookings.service';
 import { CreateBookingDto } from './dto/create-booking.dto';
+import { CreateRecurringBookingDto } from './dto/create-recurring-booking.dto';
 import { BookingQueryDto } from './dto/booking-query.dto';
 import { RolesGuard } from '../auth/guard/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorators';
@@ -38,6 +39,7 @@ import { Booking } from './entities/booking.entity';
 import { CsvExportService } from '../common/csv-export/csv-export.service';
 import { ExportBookingsProvider } from './providers/export-bookings.provider';
 import { CreateRecurringBookingDto } from '../modules/bookings/recurring-booking';
+import { IdempotencyGuard } from '../common/guards/idempotency.guard';
 
 @ApiTags('bookings')
 @ApiBearerAuth('bearer')
@@ -55,6 +57,7 @@ export class BookingsController {
   ) {}
 
   @Post()
+  @UseInterceptors(IdempotencyGuard)
   @ApiOperation({ summary: 'Create a booking' })
   @ApiOkResponse({ description: 'Booking created', type: Booking })
   async create(
@@ -66,8 +69,8 @@ export class BookingsController {
   }
 
   @Post('recurring')
-  @ApiOperation({ summary: 'Create recurring bookings' })
-  @ApiOkResponse({ description: 'Recurring bookings created', type: [Booking] })
+  @ApiOperation({ summary: 'Create a recurring booking series atomically' })
+  @ApiOkResponse({ description: 'Recurring series created', type: Booking, isArray: true })
   async createRecurring(
     @Body() dto: CreateRecurringBookingDto,
     @GetCurrentUser('id') userId: string,

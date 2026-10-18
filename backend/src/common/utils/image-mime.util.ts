@@ -47,6 +47,8 @@ export function detectImageMimeType(
   return null;
 }
 
+export const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB
+
 export function assertAllowedImageMimeType(file: Express.Multer.File): void {
   if (!file?.buffer) {
     throw new BadRequestException('No file uploaded');
@@ -65,4 +67,22 @@ export function assertAllowedImageMimeType(file: Express.Multer.File): void {
       'File content does not match its declared type',
     );
   }
+}
+
+export function assertFileSize(file: Express.Multer.File): void {
+  if (!file?.buffer) {
+    throw new BadRequestException('No file uploaded');
+  }
+
+  const fileSize = file.buffer.length;
+  if (fileSize > MAX_FILE_SIZE) {
+    throw new BadRequestException(
+      `File size exceeds maximum allowed size of ${MAX_FILE_SIZE / 1024 / 1024}MB`,
+    );
+  }
+}
+
+export function assertAllowedImageFile(file: Express.Multer.File): void {
+  assertAllowedImageMimeType(file);
+  assertFileSize(file);
 }

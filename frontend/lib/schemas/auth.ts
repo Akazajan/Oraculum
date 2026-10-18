@@ -1,5 +1,33 @@
 import { z } from "zod";
 
+/**
+ * Constraints mirrored from the backend auth DTOs
+ * (`backend/src/auth/dto/create-user.dto.ts`) so the client rejects exactly what
+ * the API rejects instead of letting a request fail server-side:
+ * `@MaxLength(254)` on email, `@MaxLength(30)` on names, `@StrongPassword` on
+ * passwords (at least one lowercase, uppercase, number and special character).
+ */
+export const EMAIL_MAX_LENGTH = 254;
+export const NAME_MAX_LENGTH = 30;
+export const PASSWORD_MIN_LENGTH = 8;
+
+/** Human-readable version of {@link strongPasswordSchema}, for field help text. */
+export const PASSWORD_REQUIREMENTS =
+  `At least ${PASSWORD_MIN_LENGTH} characters, including an uppercase letter, ` +
+  "a lowercase letter, a number and a special character.";
+
+/** Same rule as the backend's `@StrongPassword` decorator. */
+export const strongPasswordSchema = z
+  .string()
+  .min(
+    PASSWORD_MIN_LENGTH,
+    `Password must be at least ${PASSWORD_MIN_LENGTH} characters`
+  )
+  .regex(/[a-z]/, "Password must contain at least one lowercase letter")
+  .regex(/[A-Z]/, "Password must contain at least one uppercase letter")
+  .regex(/[0-9]/, "Password must contain at least one number")
+  .regex(/[^A-Za-z0-9]/, "Password must contain at least one special character");
+
 // Personal Info Schema
 export const personalInfoSchema = z.object({
   fullName: z
@@ -12,7 +40,7 @@ export const personalInfoSchema = z.object({
     .string()
     .min(1, "Email is required")
     .email("Please enter a valid email address")
-    .max(255, "Email must be less than 255 characters"),
+    .max(EMAIL_MAX_LENGTH, `Email must be at most ${EMAIL_MAX_LENGTH} characters`),
 
   phoneNumber: z
     .string()
@@ -28,13 +56,9 @@ export const personalInfoSchema = z.object({
 // Account Setup Schema
 export const accountSetupSchema = z
   .object({
-    // Option 1: Pass message directly as string (simplest)
     userType: z.enum(["member", "staff", "visitor"], {
       message: "Please select a user type",
     }),
-
-    // Or Option 2: Pass just the string
-    // userType: z.enum(['member', 'staff', 'visitor'], 'Please select a user type'),
 
     organizationName: z
       .string()
@@ -42,16 +66,7 @@ export const accountSetupSchema = z
       .min(2, "Organization name must be at least 2 characters")
       .max(100, "Organization name must be less than 100 characters"),
 
-    password: z
-      .string()
-      .min(8, "Password must be at least 8 characters")
-      .regex(/[A-Z]/, "Password must contain at least one uppercase letter")
-      .regex(/[a-z]/, "Password must contain at least one lowercase letter")
-      .regex(/[0-9]/, "Password must contain at least one number")
-      .regex(
-        /[^A-Za-z0-9]/,
-        "Password must contain at least one special character"
-      ),
+    password: strongPasswordSchema,
 
     confirmPassword: z.string().min(1, "Please confirm your password"),
 
@@ -78,7 +93,7 @@ export const forgotPasswordSchema = z.object({
     .string()
     .min(1, "Email is required")
     .email("Please enter a valid email address")
-    .max(255, "Email must be less than 255 characters"),
+    .max(EMAIL_MAX_LENGTH, `Email must be at most ${EMAIL_MAX_LENGTH} characters`),
 });
 
 export type ForgotPasswordForm = z.infer<typeof forgotPasswordSchema>;

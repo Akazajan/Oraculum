@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { EntityManager } from 'typeorm';
 import { CreateBookingDto } from './dto/create-booking.dto';
+import { CreateRecurringBookingDto } from './dto/create-recurring-booking.dto';
 import { BookingQueryDto } from './dto/booking-query.dto';
 import { CreateBookingProvider } from './providers/create-booking.provider';
 import { ConfirmBookingProvider } from './providers/confirm-booking.provider';
@@ -37,6 +38,15 @@ export class BookingsService {
 
   createRecurring(dto: CreateRecurringBookingDto, userId: string) {
     return this.recurringBookingService.create(dto, userId);
+  }
+
+  /**
+   * BE-29 — Create a recurring booking series atomically.
+   * Delegates to the provider, which runs the whole series inside a single
+   * transaction: all occurrences commit together or none do.
+   */
+  createRecurring(dto: CreateRecurringBookingDto, userId: string) {
+    return this.createBookingProvider.createRecurring(dto, userId);
   }
 
   /**

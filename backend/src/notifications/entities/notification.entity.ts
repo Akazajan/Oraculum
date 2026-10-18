@@ -4,6 +4,8 @@ import {
   Column,
   ManyToOne,
   CreateDateColumn,
+  UpdateDateColumn,
+  DeleteDateColumn,
   Index,
   JoinColumn,
 } from 'typeorm';
@@ -12,6 +14,7 @@ import { NotificationType } from '../enums/notification-type.enum';
 
 @Entity('notifications')
 @Index(['userId', 'isRead'])
+@Index(['deletedAt'])
 export class Notification {
   @PrimaryGeneratedColumn('uuid')
   id: string;
@@ -41,4 +44,10 @@ export class Notification {
 
   @CreateDateColumn()
   createdAt: Date;
+
+  @UpdateDateColumn()
+  updatedAt: Date;
+
+  @DeleteDateColumn()
+  deletedAt: Date | null;
 }

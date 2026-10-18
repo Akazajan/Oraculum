@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { User } from '../entities/user.entity';
 import { Repository } from 'typeorm';
 import { ErrorCatch } from '../../utils/error';
+import { normalizeEmail } from '../../utils/normalize-email';
 
 @Injectable()
 export class FindOneUserByEmailProvider {
@@ -13,9 +14,10 @@ export class FindOneUserByEmailProvider {
 
   public async getUser(email: string): Promise<User> {
     try {
+      const normalizedEmail = normalizeEmail(email);
       const user = await this.usersRepository.findOne({
         where: {
-          email,
+          email: normalizedEmail,
         },
       });
 

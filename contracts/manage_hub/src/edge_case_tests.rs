@@ -9,7 +9,7 @@
 use super::*;
 use crate::membership_token::{DataKey as MembershipDataKey, MembershipTokenContract};
 use crate::types::MembershipStatus;
-use soroban_sdk::testutils::{Address as _, BytesN as _};
+use soroban_sdk::testutils::{Address as _, BytesN as _, Ledger as _};
 use soroban_sdk::{map, Address, BytesN, Env, String};
 
 // ---------------------------------------------------------------------------
@@ -31,7 +31,7 @@ fn issue_test_token(env: &Env, client: &ContractClient, admin: &Address) -> Byte
     let token_id = BytesN::<32>::random(env);
     let user = Address::generate(env);
     let expiry = env.ledger().timestamp() + 86400; // 1 day from now
-    client.issue_token(&token_id, &user, expiry);
+    client.issue_token(&token_id, &user, &expiry);
     token_id
 }
 
@@ -87,12 +87,15 @@ fn test_zero_amount_staking_tier() {
 
 #[test]
 fn test_expired_token_operations_rejected() {
-    let (env, admin, _contract_id) = setup_contract();
+    let (env, _admin, _contract_id) = setup_contract();
     let client = ContractClient::new(&env, &_contract_id);
+
+    // Advance ledger so timestamp > 0, making timestamp - 1 a valid subtraction.
+    env.ledger().with_mut(|l| l.timestamp = 1_000);
 
     let token_id = BytesN::<32>::random(&env);
     let user = Address::generate(&env);
-    // Expiry in the past.
+    // Expiry in the past — must be rejected.
     let expiry = env.ledger().timestamp() - 1;
     let result = client.try_issue_token(&token_id, &user, &expiry);
     assert!(result.is_err());
@@ -107,13 +110,15 @@ fn test_subscription_expired_status() {
     let payment_token = Address::generate(&env);
     let sub_id = String::from_str(&env, "sub_expired");
 
+    // Register the payment token as the USDC contract so payment validation passes.
+    client.set_usdc_contract(&admin, &payment_token);
+
     // Create with 0 duration — immediately expired.
     client.create_subscription(&sub_id, &user, &payment_token, &100i128, &0u64);
 
-    let sub = client.get_subscription(&sub_id);
     // With duration 0 the subscription may be in any terminal state.
     // At minimum it should exist.
-    assert!(sub.is_ok());
+    let _sub = client.get_subscription(&sub_id);
 }
 
 // ---------------------------------------------------------------------------
@@ -284,7 +289,7 @@ fn test_admin_can_create_and_deactivate_tier() {
     client.create_tier(&admin, &params);
 
     let tier = client.get_tier(&String::from_str(&env, "deact_tier"));
-    assert!(tier.is_ok());
+    assert!(tier.is_active);
 
     // Deactivate
     client.deactivate_tier(&admin, &String::from_str(&env, "deact_tier"));
@@ -351,7 +356,7 @@ fn test_update_metadata_on_token_without_metadata() {
     let token_id = issue_test_token(&env, &client, &admin);
 
     let mut updates = soroban_sdk::Map::<String, common_types::MetadataValue>::new(&env);
-    updates.put(
+    updates.set(
         String::from_str(&env, "color"),
         common_types::MetadataValue::Text(String::from_str(&env, "blue")),
     );
@@ -359,20 +364,6 @@ fn test_update_metadata_on_token_without_metadata() {
     // Updating metadata on a token that has never had metadata set should fail.
     let result = client.try_update_token_metadata(&token_id, &updates);
     assert!(result.is_err());
-}
-
-// ---------------------------------------------------------------------------
-// Additional edge-case: hello endpoint with empty string
-// ---------------------------------------------------------------------------
-
-#[test]
-fn test_hello_with_empty_string() {
-    let (env, _admin, _contract_id) = setup_contract();
-    let client = ContractClient::new(&env, &_contract_id);
-
-    let result = client.hello(&String::from_str(&env, ""));
-    assert_eq!(result.len(), 1);
-    assert_eq!(result.get(0).unwrap(), String::from_str(&env, ""));
 }
 
 // ---------------------------------------------------------------------------
@@ -438,6 +429,93 @@ fn test_batch_transfer_reports_missing_token() {
     assert!(!item.success);
     assert_eq!(item.token_id, missing);
     assert_eq!(item.error_code, u32::from(crate::errors::Error::TokenNotFound));
+}
+
+// ---------------------------------------------------------------------------
+// #752 (CT-33) — Batch atomicity and per-item failure semantics
+// ---------------------------------------------------------------------------
+
+/// A single failing item must not roll back the items that already succeeded
+/// in the same invocation: the successful mint is persisted, the failing one
+/// is reported as a per-item outcome, and the call still returns `Ok`.
+#[test]
+fn test_batch_mint_persists_successful_items_after_a_failure() {
+    let (env, _admin, contract_id) = setup_contract();
+    let client = ContractClient::new(&env, &contract_id);
+
+    let user = Address::generate(&env);
+    let expiry = env.ledger().timestamp() + 86_400;
+
+    let id_ok = BytesN::<32>::random(&env);
+    let id_dup = id_ok.clone();
+
+    // Pre-issue the id used by the *second* entry so it collides.
+    client.issue_token(&id_dup, &user, &expiry);
+
+    let mut batch = soroban_sdk::Vec::new(&env);
+    // First entry: a fresh id that should succeed.
+    batch.push_back(crate::types::BatchMintParams {
+        id: id_ok.clone(),
+        user: user.clone(),
+        expiry_date: expiry,
+    });
+    // Second entry: the already-issued id that must fail.
+    batch.push_back(crate::types::BatchMintParams {
+        id: id_dup.clone(),
+        user: user.clone(),
+        expiry_date: expiry,
+    });
+
+    // A mixed batch returns Ok with one outcome per item (no full revert).
+    let results = client.batch_mint(&batch);
+    assert_eq!(results.len(), 2);
+    assert!(results.get(0).unwrap().success);
+    assert!(!results.get(1).unwrap().success);
+
+    // Persisted state after the failure: the successful entry is committed
+    // (reading it back would error if a sibling failure had rolled it back).
+    let created = client.get_token(&id_ok);
+    assert_eq!(created.user, user);
+}
+
+/// When every item fails, the call still returns `Ok` with one failure outcome
+/// per item (and persists nothing new).
+#[test]
+fn test_batch_mint_all_failures_reports_every_item() {
+    let (env, _admin, contract_id) = setup_contract();
+    let client = ContractClient::new(&env, &contract_id);
+
+    let user = Address::generate(&env);
+    let expiry = env.ledger().timestamp() + 86_400;
+
+    let id_a = BytesN::<32>::random(&env);
+    let id_b = BytesN::<32>::random(&env);
+    // Pre-issue both so both batch entries collide.
+    client.issue_token(&id_a, &user, &expiry);
+    client.issue_token(&id_b, &user, &expiry);
+
+    let mut batch = soroban_sdk::Vec::new(&env);
+    batch.push_back(crate::types::BatchMintParams {
+        id: id_a.clone(),
+        user: user.clone(),
+        expiry_date: expiry,
+    });
+    batch.push_back(crate::types::BatchMintParams {
+        id: id_b.clone(),
+        user: user.clone(),
+        expiry_date: expiry,
+    });
+
+    let results = client.batch_mint(&batch);
+    assert_eq!(results.len(), 2);
+    for (i, item) in results.iter().enumerate() {
+        assert_eq!(item.index, i as u32);
+        assert!(!item.success);
+        assert_eq!(
+            item.error_code,
+            u32::from(crate::errors::Error::TokenAlreadyIssued)
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------

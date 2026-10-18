@@ -37,7 +37,6 @@ fn make_config(env: &Env) -> StakingConfig {
         staking_token: Address::generate(env),
         reward_pool: Address::generate(env),
         emergency_unstake_penalty_bps: 500, // 5 %
-        lock_duration: 100,
     }
 }
 
@@ -174,23 +173,6 @@ fn test_staking_config_excessive_penalty_bps_fails() {
     );
 }
 
-/// set_staking_config with lock_duration > 2 years must fail.
-#[test]
-fn test_staking_config_excessive_lock_duration_fails() {
-    let (env, admin) = setup_env();
-    let contract_id = env.register(Contract, ());
-    let client = ContractClient::new(&env, &contract_id);
-    client.set_admin(&admin);
-
-    let mut config = make_config(&env);
-    config.lock_duration = MAX_LOCK + 1;
-
-    let result = client.try_set_staking_config(&admin, &config);
-    assert!(
-        result.is_err(),
-        "config.lock_duration > MAX_LOCK must be rejected"
-    );
-}
 
 // ---------------------------------------------------------------------------
 // Criterion 3 — Valid stakes and rewards remain unchanged
@@ -272,7 +254,11 @@ fn test_reward_calculation_normal_values_no_overflow() {
         emergency_unstaked: false,
     };
 
-    let rewards = RewardsModule::calculate_pending_rewards(&env, &stake).unwrap();
+    // RewardsModule accesses storage (tier lookup) and ledger timestamp,
+    // both of which require a contract execution frame.
+    let rewards = env.as_contract(&contract_id, || {
+        RewardsModule::calculate_pending_rewards(&env, &stake).unwrap()
+    });
     // 1_000_000 * 1000/10000 * (1yr/1yr) * 10000/10000 = 100_000
     assert_eq!(rewards, 100_000, "annual reward must be 10% of principal");
     assert!(rewards >= 0, "rewards must not wrap to negative");
@@ -319,8 +305,11 @@ fn test_reward_calculation_overflow_fails_not_wraps() {
         emergency_unstaked: false,
     };
 
+    // RewardsModule accesses storage and ledger; must run inside a contract frame.
     // Must return an error, not silently wrap.
-    let result = RewardsModule::calculate_pending_rewards(&env, &stake);
+    let result = env.as_contract(&contract_id, || {
+        RewardsModule::calculate_pending_rewards(&env, &stake)
+    });
     assert!(
         result.is_err(),
         "i128::MAX principal with 100% rate must fail with overflow error, not wrap"
@@ -343,5 +332,76 @@ fn test_emergency_unstake_penalty_overflow_propagates() {
     assert!(
         result.is_none(),
         "i128::MAX * 10_000 must overflow and return None"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// CT-36 — accumulating stakes is overflow-safe and performs no partial writes
+// ---------------------------------------------------------------------------
+
+/// Adding to an existing stake must validate the accumulated principal with
+/// checked arithmetic *before* the external token transfer. When the
+/// accumulation overflows, the call must return a stable contract error and
+/// move no tokens (no partial write).
+#[test]
+fn test_stake_accumulation_overflow_moves_no_tokens() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(Contract, ());
+    let client = ContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+
+    // Real staking token + reward pool so the transfer path is exercised.
+    let staking_token = env.register_stellar_asset_contract_v2(admin.clone());
+    let reward_token = env.register_stellar_asset_contract_v2(admin.clone());
+    let sac = soroban_sdk::token::StellarAssetClient::new(&env, &staking_token.address());
+
+    let config = StakingConfig {
+        staking_enabled: true,
+        emergency_unstake_penalty_bps: 500,
+        staking_token: staking_token.address(),
+        reward_pool: reward_token.address(),
+    };
+    client.set_staking_config(&admin, &config);
+
+    // min_stake_amount == 1 so the near-max stake is accepted.
+    let tier = make_tier(&env, "acc_overflow_tier", 100);
+    client.create_staking_tier(&admin, &tier);
+
+    let staker = Address::generate(&env);
+    sac.mint(&staker, &i128::MAX);
+
+    // First stake locks i128::MAX - 1, leaving exactly 1 token.
+    client.stake_tokens(
+        &staker,
+        &String::from_str(&env, "acc_overflow_tier"),
+        &(i128::MAX - 1),
+    );
+    assert_eq!(sac.balance(&staker), 1);
+    assert_eq!(
+        client.get_stake_info(&staker).unwrap().amount,
+        i128::MAX - 1
+    );
+
+    // A second stake would overflow the accumulated principal. It must fail
+    // before any transfer, so the staker keeps their last token and the
+    // recorded stake stays untouched.
+    let result = client.try_stake_tokens(
+        &staker,
+        &String::from_str(&env, "acc_overflow_tier"),
+        &10,
+    );
+    assert!(result.is_err(), "overflowing accumulation must be rejected");
+    assert_eq!(
+        sac.balance(&staker),
+        1,
+        "no tokens may move when accumulation overflows"
+    );
+    assert_eq!(
+        client.get_stake_info(&staker).unwrap().amount,
+        i128::MAX - 1,
+        "recorded stake must be unchanged when accumulation overflows"
     );
 }

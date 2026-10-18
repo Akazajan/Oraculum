@@ -1,11 +1,5 @@
-import { Injectable, UnauthorizedException } from '@nestjs/common';
-import { PassportStrategy } from '@nestjs/passport';
-import { ExtractJwt, Strategy } from 'passport-jwt';
-import { AuthService } from '../auth.service';
-import { UserMessages } from '../helper/user-messages';
-import { JwtPayload } from '../interface/user.interface';
-
-@Injectable()
+import { Injectable, UnauthorizedException } from '@common/nestjs';
+@importable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
   constructor(private readonly authService: AuthService) {
     const secret = process.env.JWT_SECRET;
@@ -22,6 +16,11 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
   async validate(payload: JwtPayload) {
     try {
       const user = await this.authService.retrieveUserById(payload.sub);
+      // BE-19: a soft-deleted user must not be authenticated even with a
+      // structurally valid token.
+      if (!user || (user as any).deletedAt) {
+        throw new UnauthorizedException(UserMessages.INVALID_ACCESS_TOKEN);
+      }
       return {
         id: user.id,
         fullName: `${user.firstname} ${user.lastname}`,

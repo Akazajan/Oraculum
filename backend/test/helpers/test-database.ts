@@ -1,4 +1,5 @@
 import { PrismaClient } from '@prisma/client';
+import { randomUUID } from 'crypto';
 
 export class TestDatabaseHelper {
   constructor(private readonly prisma: PrismaClient) {}
@@ -14,6 +15,23 @@ export class TestDatabaseHelper {
         `TRUNCATE TABLE "${table}" RESTART IDENTITY CASCADE;`,
       );
     }
+  }
+
+  /**
+   * Creates a workspace admin transfer proposal with explicit expiry semantics.
+   * Acceptance at the exact expiry timestamp is rejected (strict inequality):
+   * a proposal is only acceptable while `now < expiresAt`.
+   */
+  async createAdminTransferProposal(workspaceId: string, proposedById: string, targetUserId: string, expiresAt: Date) {
+    return this.prisma.adminTransferProposal.create({
+      data: {
+        id: randomUUID(),
+        workspaceId,
+        proposedById,
+        targetUserId,
+        expiresAt,
+      },
+    });
   }
 
   async createTestUser(override = {}) {
@@ -37,5 +55,34 @@ export class TestDatabaseHelper {
         ...override,
       },
     });
+  }
+
+  /**
+   * Returns a bounded page of workspace booking history with stable ordering
+   * and a continuation indicator.
+   */
+  async getWorkspaceBookingHistory(
+    workspaceId: string,
+    options: { cursor?: string; limit?: number } = {},
+  ) {
+    const limit = Math.max(1, Math.min(options.limit ?? 20, 100));
+    const cursor = options.cursor;
+
+    const bookings = await this.prisma.booking.findMany({
+      where: { workspaceId },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: limit + 1,
+      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+    });
+
+    const hasMore = bookings.length > limit;
+    const page = hasMore ? bookings.slice(0, limit) : bookings;
+    const nextCursor = hasMore ? page[page.length - 1].id : null;
+
+    return {
+      items: page,
+      nextCursor,
+      hasMore,
+    };
   }
 }

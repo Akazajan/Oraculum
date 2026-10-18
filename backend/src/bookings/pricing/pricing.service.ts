@@ -11,12 +11,15 @@ const PLAN_DAYS: Record<PlanType, number> = {
   [PlanType.YEARLY]: 264,
 };
 
-const PLAN_DISCOUNT: Record<PlanType, number> = {
+// B37 — Discounts are stored as integer percent points so the pricing
+// math stays in integer minor units and never introduces floating-point
+// artifacts (e.g. 0.05 * gross losing a kobo to IEEE-754 rounding).
+const PLAN_DISCOUNT_PCT: Record<PlanType, number> = {
   [PlanType.DAILY]: 0,
-  [PlanType.WEEKLY]: 0.05,
-  [PlanType.MONTHLY]: 0.1,
-  [PlanType.QUARTERLY]: 0.15,
-  [PlanType.YEARLY]: 0.2,
+  [PlanType.WEEKLY]: 5,
+  [PlanType.MONTHLY]: 10,
+  [PlanType.QUARTERLY]: 15,
+  [PlanType.YEARLY]: 20,
 };
 
 @Injectable()
@@ -25,6 +28,11 @@ export class PricingService {
    * Calculate total booking amount in kobo.
    * For DAILY plan the actual calendar days between startDate and endDate are used.
    * For all other plans the fixed multipliers are used.
+   *
+   * The discount is applied with integer arithmetic
+   * (gross * (100 - discountPct)) / 100 so the result is deterministic
+   * and free of floating-point drift. Half-unit rounding follows the
+   * documented floor rule.
    */
   calculateAmount(
     hourlyRateKobo: number,
@@ -33,6 +41,19 @@ export class PricingService {
     startDate: string,
     endDate: string,
   ): number {
+    if (hourlyRateKobo < 0) {
+      throw new Error('Hourly rate cannot be negative');
+    }
+
+    if (seatCount < 0) {
+      throw new Error('Seat count cannot be negative');
+    }
+
+    const discount = PLAN_DISCOUNT[planType];
+    if (discount < 0) {
+      throw new Error('Discount cannot be negative');
+    }
+
     let days: number;
 
     if (planType === PlanType.DAILY) {
@@ -45,14 +66,15 @@ export class PricingService {
     }
 
     const gross = hourlyRateKobo * PLAN_WORKING_HOURS * days * seatCount;
-    const discount = PLAN_DISCOUNT[planType];
     return Math.floor(gross * (1 - discount));
+    const discountPct = PLAN_DISCOUNT_PCT[planType];
+    return Math.floor((gross * (100 - discountPct)) / 100);
   }
 
   getPlanSummary(planType: PlanType): { days: number; discountPct: number } {
     return {
       days: PLAN_DAYS[planType],
-      discountPct: PLAN_DISCOUNT[planType] * 100,
+      discountPct: PLAN_DISCOUNT_PCT[planType],
     };
   }
 }

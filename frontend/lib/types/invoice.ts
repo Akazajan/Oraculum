@@ -9,6 +9,15 @@ export interface LineItem {
   amountNaira: number;
 }
 
+/**
+ * A downloaded invoice document, ready to hand to the browser. `filename` is
+ * always a single safe path segment carrying a `.pdf` extension.
+ */
+export interface InvoiceDownload {
+  blob: Blob;
+  filename: string;
+}
+
 export interface Invoice {
   id: string;
   invoiceNumber: string;

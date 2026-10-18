@@ -140,14 +140,14 @@ impl MembershipTokenContract {
 
         // Emit agent registered event for observability
         let default_metadata = TokenMetadata {
-            description: String::from_env(env),
+            description: String::from_str(env, ""),
             attributes: Map::new(env),
             version: 0,
             last_updated: current_time,
             updated_by: admin.clone(),
         };
         env.events().publish(
-            (symbol_short!("agent_registered"), id.clone()),
+            (symbol_short!("agent_reg"), id.clone()),
             AgentRegisteredEvent {
                 agent_id: id.clone(),
                 owner: user.clone(),
@@ -413,17 +413,31 @@ impl MembershipTokenContract {
     }
 
     pub fn get_token(env: Env, id: BytesN<32>) -> Result<MembershipToken, Error> {
-        // Retrieve token
+        // Retrieve from the canonical storage key.
         let token: MembershipToken = env
             .storage()
             .persistent()
-            .get(&DataKey::Token(id))
+            .get(&DataKey::Token(id.clone()))
             .ok_or(Error::TokenNotFound)?;
 
-        // Check token status based on expiry date
+        // Check token status based on expiry date.
         let current_time = env.ledger().timestamp();
         if token.status == MembershipStatus::Active && current_time > token.expiry_date {
             return Err(Error::TokenExpired);
+        }
+
+        // Lazy migration: ensure the token is also present in the V2 slot so
+        // that any tooling or future read path that prefers TokenV2 finds an
+        // up-to-date copy.  This is a no-op for tokens that have already been
+        // written to TokenV2 during a previous read or write.
+        if !env
+            .storage()
+            .persistent()
+            .has(&DataKey::TokenV2(id.clone()))
+        {
+            env.storage()
+                .persistent()
+                .set(&DataKey::TokenV2(id.clone()), &token);
         }
 
         Ok(token)
@@ -673,7 +687,7 @@ impl MembershipTokenContract {
 
         // Emit agent metadata updated event for observability
         env.events().publish(
-            (symbol_short!("agent_metadata_updated"), token_id.clone()),
+            (symbol_short!("agnt_meta"), token_id.clone()),
             AgentMetadataUpdatedEvent {
                 agent_id: token_id.clone(),
                 updater: caller.clone(),

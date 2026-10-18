@@ -43,7 +43,13 @@ export class HealthService {
     ]);
 
     const getVal = (r: PromiseSettledResult<HealthCheckResult>) =>
-      r.status === 'fulfilled' ? r.value : { status: 'unhealthy' as const, latencyMs: 0, error: (r.reason as Error)?.message };
+      r.status === 'fulfilled'
+        ? r.value
+        : {
+            status: 'unhealthy' as const,
+            latencyMs: 0,
+            error: 'Dependency health check unavailable',
+          };
 
     const dbResult = getVal(database);
     const redisResult = getVal(redis);
@@ -77,7 +83,7 @@ export class HealthService {
       return {
         status: 'unhealthy',
         latencyMs: Date.now() - start,
-        error: (err as Error).message,
+        error: 'Database health check unavailable',
       };
     }
   }
@@ -103,7 +109,7 @@ export class HealthService {
       return {
         status: 'unhealthy',
         latencyMs: Date.now() - start,
-        error: (err as Error).message,
+        error: 'Redis health check unavailable',
       };
     }
   }
@@ -116,7 +122,7 @@ export class HealthService {
         return {
           status: 'unhealthy',
           latencyMs: Date.now() - start,
-          error: 'PAYSTACK_SECRET_KEY not configured',
+          error: 'Payments health check unavailable',
         };
       }
       // Use Paystack balance endpoint as a lightweight connectivity check
@@ -134,7 +140,7 @@ export class HealthService {
       return {
         status: 'unhealthy',
         latencyMs: Date.now() - start,
-        error: (err as Error).message,
+        error: 'Payments health check unavailable',
       };
     }
   }
@@ -154,7 +160,7 @@ export class HealthService {
       return {
         status: 'unhealthy',
         latencyMs: Date.now() - start,
-        error: (err as Error).message,
+        error: 'Storage health check unavailable',
       };
     }
   }

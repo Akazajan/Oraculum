@@ -98,6 +98,18 @@ impl PaymentEscrowContract {
         Ok(())
     }
 
+       /// Basis points are parts-per-10,000; anything above 10,000 (100%) is
+    /// not a valid fee and would cause settlement to try transferring more
+    /// than the deposited amount, underflowing.
+    const MAX_FEE_BPS: u32 = 10_000;
+
+    fn require_valid_fee_bps(fee_bps: u32) -> Result<(), Error> {
+        if fee_bps > Self::MAX_FEE_BPS {
+            return Err(Error::InvalidFeeBps);
+        }
+        Ok(())
+    }
+
     // ── Initialisation ────────────────────────────────────────────────────────
 
     /// One-time setup.
@@ -114,10 +126,12 @@ impl PaymentEscrowContract {
         fee_recipient: Address,
         fee_bps: u32,
     ) -> Result<(), Error> {
-        if env.storage().instance().has(&DataKey::Admin) {
+                if env.storage().instance().has(&DataKey::Admin) {
             return Err(Error::AlreadyInitialized);
         }
+        Self::require_valid_fee_bps(fee_bps)?;
         admin.require_auth();
+
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage()
             .instance()
@@ -173,8 +187,9 @@ impl PaymentEscrowContract {
     }
 
     /// Update the default fee basis points.
-    pub fn set_fee_bps(env: Env, caller: Address, fee_bps: u32) -> Result<(), Error> {
+        pub fn set_fee_bps(env: Env, caller: Address, fee_bps: u32) -> Result<(), Error> {
         Self::require_admin(&env, &caller)?;
+        Self::require_valid_fee_bps(fee_bps)?;
         env.storage()
             .instance()
             .set(&DataKey::DefaultFeeBps, &fee_bps);
