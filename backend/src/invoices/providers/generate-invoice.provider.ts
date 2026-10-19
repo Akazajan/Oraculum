@@ -9,6 +9,10 @@ import { Workspace } from '../../workspaces/entities/workspace.entity';
 import { InvoiceStatus } from '../enums/invoice-status.enum';
 import { EmailService } from '../../email/email.service';
 import { PdfGenerationProvider } from './pdf-generation.provider';
+import {
+  InvoiceSequenceProvider,
+  isInvoiceNumberCollision,
+} from './invoice-sequence.provider';
 
 @Injectable()
 export class GenerateInvoiceProvider {
@@ -28,6 +32,7 @@ export class GenerateInvoiceProvider {
     private readonly dataSource: DataSource,
     private readonly emailService: EmailService,
     private readonly pdfGenerationProvider: PdfGenerationProvider,
+    private readonly invoiceSequenceProvider: InvoiceSequenceProvider,
   ) {}
 
   async generateForPayment(paymentId: string): Promise<Invoice> {
@@ -69,21 +74,27 @@ export class GenerateInvoiceProvider {
       },
     ];
 
-    const saved = await this.createWithUniqueInvoiceNumber({
-      userId: payment.userId,
-      bookingId: payment.bookingId,
-      paymentId: payment.id,
-      amountKobo: payment.amount,
-      currency: payment.currency,
-      status: InvoiceStatus.PAID,
-      paidAt: payment.paidAt,
-      lineItems,
-    });
+    const { invoice: saved, created } =
+      await this.createWithUniqueInvoiceNumber({
+        userId: payment.userId,
+        bookingId: payment.bookingId,
+        paymentId: payment.id,
+        amountKobo: payment.amount,
+        currency: payment.currency,
+        status: InvoiceStatus.PAID,
+        paidAt: payment.paidAt,
+        lineItems,
+      });
     this.logger.log(
-      `Invoice ${saved.invoiceNumber} generated for payment ${paymentId}`,
+      created
+        ? `Invoice ${saved.invoiceNumber} generated for payment ${paymentId}`
+        : `Invoice ${saved.invoiceNumber} already exists for payment ${paymentId} — returning it`,
     );
 
-    if (user) {
+    // Only the transaction that actually inserted the row notifies the
+    // customer. A caller that lost the race must not send a second
+    // "invoice ready" email for the same invoice.
+    if (created && user) {
       this.pdfGenerationProvider
         .generate(saved)
         .then((pdfBuffer) => {
@@ -109,38 +120,64 @@ export class GenerateInvoiceProvider {
   }
 
   /**
-   * B47 — Generates an invoice using a PostgreSQL sequence value while
-   * guaranteeing uniqueness under concurrent creation. The invoice
-   * insert is wrapped in a transaction so a failure does not surface a
-   * half-created record, and the number is only considered consumed
-   * once the insert commits. If a concurrent caller somehow collides
-   * on the same number, the unique index triggers a retry with a fresh
-   * sequence value.
+   * BE-51 — Generates an invoice using a number allocated from the
+   * PostgreSQL sequence while guaranteeing uniqueness under concurrent
+   * creation.
+   *
+   * Two independent races are handled:
+   *
+   * 1. Two callers generating invoices *at the same time*. The number
+   *    comes from `nextval()`, which is atomic, and the insert runs in
+   *    its own transaction so a failure rolls the row back entirely —
+   *    a failed generation never leaves a half-written (or visible)
+   *    invoice behind. If the unique index on `invoiceNumber` still
+   *    rejects the insert (a database restored from a dump, where the
+   *    sequence can lag behind the rows), the caller retries with a
+   *    freshly allocated number.
+   *
+   * 2. Two callers generating an invoice *for the same payment*. The
+   *    "does one already exist?" lookup at the top of
+   *    `generateForPayment` is a check-then-act and cannot close that
+   *    window on its own, so the partial unique index on `paymentId`
+   *    is the real guard: the loser of the race catches the violation
+   *    and returns the invoice the winner created instead of inserting
+   *    a second one.
    */
   private async createWithUniqueInvoiceNumber(
     data: Partial<Invoice>,
-  ): Promise<Invoice> {
+  ): Promise<{ invoice: Invoice; created: boolean }> {
     const MAX_RETRIES = 3;
 
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-      const invoiceNumber = await this.nextInvoiceNumber();
+      const invoiceNumber =
+        await this.invoiceSequenceProvider.nextInvoiceNumber();
 
       try {
-        return await this.dataSource.transaction(async (manager) => {
+        const invoice = await this.dataSource.transaction(async (manager) => {
           const draft = manager.create(Invoice, {
             ...data,
             invoiceNumber,
           });
           return manager.save(draft);
         });
+        return { invoice, created: true };
       } catch (err) {
-        const message =
-          err instanceof Error ? err.message : 'unknown invoice error';
-        const isCollision =
-          typeof message === 'string' &&
-          message.toLowerCase().includes('duplicate');
+        // The insert lost the race against a concurrent generation for
+        // the same payment. Surface the winner's invoice rather than
+        // burning the whole call.
+        if (data.paymentId && isInvoiceNumberCollision(err)) {
+          const concurrent = await this.invoicesRepository.findOne({
+            where: { paymentId: data.paymentId },
+          });
+          if (concurrent) {
+            this.logger.warn(
+              `Invoice ${invoiceNumber} discarded — payment ${data.paymentId} was already invoiced as ${concurrent.invoiceNumber}`,
+            );
+            return { invoice: concurrent, created: false };
+          }
+        }
 
-        if (!isCollision || attempt === MAX_RETRIES) {
+        if (!isInvoiceNumberCollision(err) || attempt === MAX_RETRIES) {
           throw err;
         }
         this.logger.warn(
@@ -150,13 +187,5 @@ export class GenerateInvoiceProvider {
     }
 
     throw new Error('Failed to allocate a unique invoice number');
-  }
-
-  private async nextInvoiceNumber(): Promise<string> {
-    const result = await this.dataSource.query<{ nextval: string }[]>(
-      `SELECT nextval('invoice_number_seq')`,
-    );
-    const seq = parseInt(result[0].nextval, 10);
-    return `INV-${String(seq).padStart(5, '0')}`;
   }
 }
