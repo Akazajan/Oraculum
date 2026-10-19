@@ -20,9 +20,15 @@ impl RoyaltyModule {
     fn validate_config(recipients: &Vec<RoyaltyRecipient>) -> Result<u32, Error> {
         let mut total_percentage: u32 = 0;
 
-        for recipient in recipients.iter() {
+        for (index, recipient) in recipients.iter().enumerate() {
             if recipient.percentage == 0 {
                 return Err(Error::InvalidPaymentAmount);
+            }
+
+            for previous_index in 0..index {
+                if recipients.get(previous_index).unwrap().address == recipient.address {
+                    return Err(Error::InvalidPaymentAmount);
+                }
             }
 
             total_percentage = total_percentage
@@ -97,6 +103,8 @@ impl RoyaltyModule {
             if !cfg.enabled || cfg.recipients.is_empty() {
                 return Ok(0);
             }
+
+            Self::validate_config(&cfg.recipients)?;
 
             // Calculate royalties with deterministic rounding (CT-16)
             // Ensure total_royalty <= sale_price
