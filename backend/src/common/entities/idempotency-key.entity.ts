@@ -7,7 +7,7 @@ import {
 } from 'typeorm';
 
 @Entity('idempotency_keys')
-@Index(['key', 'userId'], { unique: true })
+@Index(['key', 'userId', 'endpoint'], { unique: true })
 @Index(['expiresAt'])
 export class IdempotencyKey {
   @PrimaryGeneratedColumn('uuid')
