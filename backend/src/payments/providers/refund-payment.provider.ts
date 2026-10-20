@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
   NotFoundException,
@@ -12,6 +13,12 @@ import { PaystackProvider } from './paystack.provider';
 import { UserRole } from '../../users/enums/userRoles.enum';
 
 /**
+ * BE-46 — Prevent duplicate refunds under concurrent requests.
+ *
+ * Reserves the payment in REFUNDING via a conditional UPDATE before
+ * contacting the provider. Only one concurrent caller wins the race;
+ * losers see ConflictException. Provider failures roll status back to
+ * SUCCESS so the refund remains retryable without double-crediting.
  * Currency-safe integer helpers for minor units (kobo, cents, …).
  * Never use floating-point arithmetic on money amounts (BE-47).
  */
@@ -103,6 +110,15 @@ export class RefundPaymentProvider {
       throw new ForbiddenException('You can only refund your own payments');
     }
 
+    if (payment.status === PaymentStatus.REFUNDED) {
+      throw new BadRequestException('Payment is already refunded');
+    }
+
+    if (payment.status === PaymentStatus.REFUNDING) {
+      throw new ConflictException('Refund already in progress');
+    }
+
+    if (payment.status !== PaymentStatus.SUCCESS) {
     if (
       payment.status !== PaymentStatus.SUCCESS &&
       payment.status !== PaymentStatus.REFUNDED
@@ -112,6 +128,31 @@ export class RefundPaymentProvider {
       );
     }
 
+    // Atomic reserve: SUCCESS → REFUNDING. Concurrent callers get 0 affected rows.
+    const reserve = await this.paymentsRepository
+      .createQueryBuilder()
+      .update(Payment)
+      .set({ status: PaymentStatus.REFUNDING })
+      .where('id = :id', { id: paymentId })
+      .andWhere('status = :status', { status: PaymentStatus.SUCCESS })
+      .execute();
+
+    if (!reserve.affected) {
+      throw new ConflictException(
+        'Refund already in progress or payment is no longer refundable',
+      );
+    }
+
+    try {
+      await this.paystackProvider.initiateRefund(payment.providerReference);
+    } catch (err) {
+      // Failure remains retryable — release the hold back to SUCCESS.
+      await this.paymentsRepository.update(
+        { id: paymentId, status: PaymentStatus.REFUNDING },
+        { status: PaymentStatus.SUCCESS },
+      );
+      throw err;
+    }
     const remaining = toMinorUnits(payment.amount) - toMinorUnits(payment.refundedAmount ?? 0);
     if (remaining <= 0n) {
       throw new BadRequestException('Payment has already been fully refunded');

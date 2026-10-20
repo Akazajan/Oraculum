@@ -121,6 +121,14 @@ export class User {
   @Column({ nullable: true, type: 'varchar', length: 255 })
   totpSecret?: string;
 
+  /**
+   * BE-11 — Secret produced by setup but not yet confirmed with a valid TOTP.
+   * Cleared on successful confirm; must never enable twoFactorEnabled alone.
+   */
+  @Exclude()
+  @Column({ nullable: true, type: 'varchar', length: 255 })
+  totpPendingSecret?: string;
+
   @Exclude()
   @Column({ type: 'jsonb', nullable: true })
   totpBackupCodes?: string[];

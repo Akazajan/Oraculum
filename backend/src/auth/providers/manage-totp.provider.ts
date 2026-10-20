@@ -57,6 +57,9 @@ export class ManageTotpProvider {
     }
 
     user.twoFactorEnabled = false;
+    user.totpSecret = null;
+    user.totpPendingSecret = null;
+    user.totpBackupCodes = null;
     user.totpSecret = null as unknown as undefined;
     user.totpBackupCodes = null as unknown as undefined;
     await this.usersRepository.save(user);
