@@ -16,6 +16,70 @@ type RefreshPayload = JwtPayload & { family?: string };
 //jwt expiry type
 type JwtExpiry = `${number}${'s' | 'm' | 'h' | 'd'}` | number;
 
+/** Minimum length for production-grade JWT secrets. */
+export const MIN_JWT_SECRET_LENGTH = 32;
+
+const EXPIRY_PATTERN = /^(\d+)([smhd])$/;
+
+/**
+ * BE-10 — Validate token configuration at process startup.
+ *
+ * Identifies the invalid setting by name without ever logging or
+ * returning the secret value itself.
+ */
+export function validateTokenConfiguration(
+  env: NodeJS.ProcessEnv | Record<string, string | undefined> = process.env,
+): void {
+  const errors: string[] = [];
+
+  const accessSecret = env.JWT_SECRET;
+  if (!accessSecret || !accessSecret.trim()) {
+    errors.push('JWT_SECRET is missing');
+  } else if (accessSecret.length < MIN_JWT_SECRET_LENGTH) {
+    errors.push(
+      `JWT_SECRET is too short (minimum ${MIN_JWT_SECRET_LENGTH} characters)`,
+    );
+  } else if (/^(test|secret|changeme|password|jwt)/i.test(accessSecret)) {
+    errors.push('JWT_SECRET uses an unsafe default value');
+  }
+
+  const refreshSecret = env.JWT_REFRESH_SECRET;
+  if (!refreshSecret || !refreshSecret.trim()) {
+    errors.push('JWT_REFRESH_SECRET is missing');
+  } else if (refreshSecret.length < MIN_JWT_SECRET_LENGTH) {
+    errors.push(
+      `JWT_REFRESH_SECRET is too short (minimum ${MIN_JWT_SECRET_LENGTH} characters)`,
+    );
+  } else if (accessSecret && refreshSecret === accessSecret) {
+    errors.push(
+      'JWT_REFRESH_SECRET must differ from JWT_SECRET',
+    );
+  }
+
+  for (const key of ['JWT_EXPIRATION', 'JWT_REFRESH_EXPIRATION'] as const) {
+    const value = env[key];
+    if (value === undefined || value === '') continue;
+    if (typeof value === 'number' || /^\d+$/.test(value)) {
+      const n = Number(value);
+      if (!Number.isFinite(n) || n <= 0) {
+        errors.push(`${key} must be a positive duration`);
+      }
+      continue;
+    }
+    if (!EXPIRY_PATTERN.test(value)) {
+      errors.push(
+        `${key} is invalid (expected number or patterns like 15m, 1h, 7d)`,
+      );
+    }
+  }
+
+  if (errors.length > 0) {
+    throw new Error(
+      `Invalid token configuration:\n${errors.map((e) => `  - ${e}`).join('\n')}`,
+    );
+  }
+}
+
 @Injectable()
 export class JwtHelper {
   constructor(private readonly jwtService: JwtService) {}
