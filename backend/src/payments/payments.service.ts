@@ -48,12 +48,22 @@ export class PaymentsService {
     return this.handleWebhookProvider.handle(rawBody, signature);
   }
 
-  refund(paymentId: string, userId: string, userRole: UserRole) {
+  refund(
+    paymentId: string,
+    userId: string,
+    userRole: UserRole,
+    amount?: number,
+  ) {
     this.logger.log(
       `Refund requested for payment ${paymentId} by user ${userId} (role: ${userRole})`,
-      { paymentId, userId, userRole },
+      { paymentId, userId, userRole, amount },
     );
-    return this.refundPaymentProvider.refund(paymentId, userId, userRole);
+    return this.refundPaymentProvider.refund(
+      paymentId,
+      userId,
+      userRole,
+      amount,
+    );
   }
 
   findAll(query: PaymentQuery, userId: string, userRole: UserRole) {

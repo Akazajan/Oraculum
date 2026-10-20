@@ -133,6 +133,14 @@ export class User {
   @Column({ type: 'jsonb', nullable: true })
   totpBackupCodes?: string[];
 
+  /**
+   * Monotonic generation counter for backup-code sets (BE-12 / BE-13).
+   * Incremented on regeneration so concurrent consumers of a replaced
+   * set cannot race against the new hashes.
+   */
+  @Column({ name: 'backup_code_generation', type: 'int', default: 0 })
+  backupCodeGeneration?: number;
+
   @Column({
     type: 'enum',
     enum: MembershipStatus,

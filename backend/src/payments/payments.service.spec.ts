@@ -139,6 +139,7 @@ describe('PaymentsService', () => {
         'payment-1',
         'user-1',
         UserRole.ADMIN,
+        undefined,
       );
       expect(result).toEqual({ id: 'p1' });
       expect(loggerLogSpy).toHaveBeenCalledWith(
@@ -261,5 +262,49 @@ describe('FindPaymentsProvider scoping', () => {
     expect(qb.andWhere).toHaveBeenCalledWith('payment.createdAt <= :toDate', {
       toDate: new Date('2026-07-31T23:59:59.999Z'),
     });
+  });
+});
+
+import {
+  assertRefundWithinCaptured,
+  toMinorUnits,
+} from './providers/refund-payment.provider';
+import { BadRequestException } from '@nestjs/common';
+
+describe('BE-47 refund arithmetic', () => {
+  it('reconciles a full refund against the captured amount', () => {
+    const { nextRefunded, remainingAfter } = assertRefundWithinCaptured(
+      10_000,
+      0,
+      10_000,
+    );
+    expect(nextRefunded).toBe(10_000n);
+    expect(remainingAfter).toBe(0n);
+  });
+
+  it('reconciles sequential partial refunds without exceeding captured', () => {
+    let refunded = 0n;
+    const captured = 10_000n;
+    for (const part of [3_000n, 2_500n, 4_500n]) {
+      const { nextRefunded, remainingAfter } = assertRefundWithinCaptured(
+        captured,
+        refunded,
+        part,
+      );
+      expect(nextRefunded).toBe(refunded + part);
+      expect(remainingAfter).toBe(captured - nextRefunded);
+      refunded = nextRefunded;
+    }
+    expect(refunded).toBe(captured);
+  });
+
+  it('rejects a refund that would exceed the captured amount', () => {
+    expect(() => assertRefundWithinCaptured(10_000, 8_000, 3_000)).toThrow(
+      BadRequestException,
+    );
+  });
+
+  it('rejects non-integer minor units', () => {
+    expect(() => toMinorUnits(10.5)).toThrow(BadRequestException);
   });
 });
