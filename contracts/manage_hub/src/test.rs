@@ -4235,6 +4235,75 @@ fn test_royalty_exact_full_allocation_accepted() {
 }
 
 #[test]
+fn test_royalty_rejected_updates_preserve_existing_config() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(Contract, ());
+    let client = ContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+
+    let token_id = BytesN::<32>::random(&env);
+    let owner = Address::generate(&env);
+    client.issue_token(&token_id, &owner, &(env.ledger().timestamp() + 1000));
+
+    let first = Address::generate(&env);
+    let second = Address::generate(&env);
+    let valid_recipients = vec![
+        &env,
+        types::RoyaltyRecipient {
+            address: first.clone(),
+            percentage: 3000,
+        },
+        types::RoyaltyRecipient {
+            address: second.clone(),
+            percentage: 2000,
+        },
+    ];
+    client.set_royalty(&token_id, &valid_recipients);
+
+    let duplicate_recipients = vec![
+        &env,
+        types::RoyaltyRecipient {
+            address: first.clone(),
+            percentage: 1000,
+        },
+        types::RoyaltyRecipient {
+            address: first.clone(),
+            percentage: 1000,
+        },
+    ];
+    assert_eq!(
+        client.try_set_royalty(&token_id, &duplicate_recipients),
+        Err(Ok(Error::InvalidPaymentAmount))
+    );
+    let info_after_duplicate = client.get_royalty_info(&token_id).unwrap();
+    assert_eq!(info_after_duplicate.config.recipients, valid_recipients);
+    assert_eq!(info_after_duplicate.total_percentage, 5000);
+
+    let excessive_recipients = vec![
+        &env,
+        types::RoyaltyRecipient {
+            address: first,
+            percentage: 6000,
+        },
+        types::RoyaltyRecipient {
+            address: second,
+            percentage: 5000,
+        },
+    ];
+    assert_eq!(
+        client.try_set_royalty(&token_id, &excessive_recipients),
+        Err(Ok(Error::InvalidPaymentAmount))
+    );
+    let info_after_excessive = client.get_royalty_info(&token_id).unwrap();
+    assert_eq!(info_after_excessive.config.recipients, valid_recipients);
+    assert_eq!(info_after_excessive.total_percentage, 5000);
+}
+
+#[test]
 fn test_transfer_with_royalty_events() {
     let env = Env::default();
     env.mock_all_auths();
