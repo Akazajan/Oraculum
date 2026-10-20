@@ -16,6 +16,7 @@ import {
   ChevronRight,
   Building2,
 } from "lucide-react";
+import { formatNaira } from "@/lib/utils";
 
 const TYPE_LABELS: Record<string, string> = {
   COWORKING: "Coworking",
@@ -24,14 +25,6 @@ const TYPE_LABELS: Record<string, string> = {
   HOT_DESK: "Hot Desk",
   DEDICATED_DESK: "Dedicated Desk",
 };
-
-function formatNaira(kobo: number): string {
-  return new Intl.NumberFormat("en-NG", {
-    style: "currency",
-    currency: "NGN",
-    minimumFractionDigits: 0,
-  }).format(kobo / 100);
-}
 
 export default function AdminWorkspacesPage() {
   const [page, setPage] = useState(1);

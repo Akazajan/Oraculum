@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { Workspace } from "@/lib/types/workspace";
 import { MapPin, Users, ArrowRight } from "lucide-react";
+import { formatNaira } from "@/lib/utils";
 
 const TYPE_LABELS: Record<string, string> = {
   COWORKING: "Coworking",
@@ -25,11 +26,7 @@ interface Props {
 }
 
 export default function WorkspaceCard({ workspace }: Props) {
-  const hourlyNaira = (workspace.hourlyRate / 100).toLocaleString("en-NG", {
-    style: "currency",
-    currency: "NGN",
-    maximumFractionDigits: 0,
-  });
+  const hourlyNaira = formatNaira(workspace.hourlyRate);
 
   return (
     <div className="bg-white rounded-xl border border-gray-100 overflow-hidden hover:shadow-md transition-shadow group flex flex-col h-full">

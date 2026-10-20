@@ -103,20 +103,13 @@ export default function WorkspacesPage() {
     setPage(1);
   }, [searchParams]);
 
-  const { data, isLoading, isError, isFetching } = useGetWorkspaces(
+  const { data, isLoading, isError, refetch, isFetching } = useGetWorkspaces(
     toWorkspaceQuery({ search, type }, page, PAGE_SIZE)
   );
-  const { data, isLoading, isError, refetch, isFetching } = useGetWorkspaces({
-    search: search || undefined,
-    type: type || undefined,
-    page,
-    limit: 9,
-  });
 
   const workspaces = data?.data ?? [];
   const meta = data?.meta;
 
-  const hasActiveFilters = searchInput !== "" || type !== "";
   // One explicit state per outcome, so loading, failure, empty and success can
   // never be mistaken for one another.
   const panel = queryPanelState({

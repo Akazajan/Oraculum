@@ -12,14 +12,13 @@ import {
   RefreshCw,
   Trophy,
 } from "lucide-react";
+import { formatNaira as formatCurrency } from "@/lib/utils";
 
+/** Summary figures switch to compact notation once they pass ₦1,000,000. */
 function formatNaira(kobo: number): string {
-  return new Intl.NumberFormat("en-NG", {
-    style: "currency",
-    currency: "NGN",
-    minimumFractionDigits: 0,
+  return formatCurrency(kobo, {
     notation: kobo >= 100_000_000 ? "compact" : "standard",
-  }).format(kobo / 100);
+  });
 }
 
 function StatCard({

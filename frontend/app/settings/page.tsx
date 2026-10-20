@@ -4,11 +4,11 @@ import { useState } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { useAuthState, useAuthActions } from ""/lib/store/authStore";
-import { apiClient } from ""/lib/apiClient";
-import DashboardLayout from ""/components/dashboard/DashboardLayout";
-import TwoFactorModal from ""/components/settings/TwoFactorModal";
-import { use2faStatus } from ""/lib/react-query/hooks/two-factor/use2faStatus";
+import { useAuthState, useAuthActions } from "@/lib/store/authStore";
+import { apiClient } from "@/lib/apiClient";
+import DashboardLayout from "@/components/dashboard/DashboardLayout";
+import TwoFactorModal from "@/components/settings/TwoFactorModal";
+import { use2faStatus } from "@/lib/react-query/hooks/two-factor/use2faStatus";
 import { Eye, EyeOff, Shield, Bell, Palette } from "lucide-react";
 
 /* ✀ Password change schema ✀ */
@@ -111,7 +111,7 @@ export default function SettingsPage() {
   /* ✀ 2FA ✀ */
   const { data: twoFaData } = use2faStatus();
   const twoFaEnabled = twoFaData?.data?.enabled ?? false;
-  const [twoFaModal, setTwoFaModal] = useState<"celup" | "disable" | null>(
+  const [twoFaModal, setTwoFaModal] = useState<"setup" | "disable" | null>(
     null
   );
 
