@@ -8,6 +8,7 @@ import {
   Query,
   ParseUUIDPipe,
   UseGuards,
+  UseInterceptors,
   HttpCode,
   HttpStatus,
   Res,
@@ -38,7 +39,6 @@ import { ApiErrorDto } from '../common/dto/api-error.dto';
 import { Booking } from './entities/booking.entity';
 import { CsvExportService } from '../common/csv-export/csv-export.service';
 import { ExportBookingsProvider } from './providers/export-bookings.provider';
-import { CreateRecurringBookingDto } from '../modules/bookings/recurring-booking';
 import { IdempotencyGuard } from '../common/guards/idempotency.guard';
 
 @ApiTags('bookings')
@@ -69,6 +69,7 @@ export class BookingsController {
   }
 
   @Post('recurring')
+  @UseInterceptors(IdempotencyGuard)
   @ApiOperation({ summary: 'Create a recurring booking series atomically' })
   @ApiOkResponse({ description: 'Recurring series created', type: Booking, isArray: true })
   async createRecurring(
