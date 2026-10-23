@@ -1,5 +1,8 @@
 import { ConfigService } from '@nestjs/config';
-import { SorobanEscrowProvider } from './soroban-escrow.provider';
+import {
+  EscrowOutcomeStatus,
+  SorobanEscrowProvider,
+} from './soroban-escrow.provider';
 
 describe('SorobanEscrowProvider', () => {
   const configValues: Record<string, string> = {
@@ -75,6 +78,55 @@ describe('SorobanEscrowProvider', () => {
     await expect(provider.getEscrowStatus('booking-123')).resolves.toEqual({
       escrowId: 'booking-123',
       status: 'stub',
+    });
+  });
+
+  describe('reconcileEscrow', () => {
+    it('keeps stub status pending and non-final', async () => {
+      const { provider } = createProvider();
+      await expect(provider.reconcileEscrow('e1')).resolves.toMatchObject({
+        status: EscrowOutcomeStatus.PENDING,
+        final: false,
+        retryable: true,
+      });
+    });
+
+    it.each([
+      ['confirmed', EscrowOutcomeStatus.CONFIRMED, true, false],
+      ['failed', EscrowOutcomeStatus.FAILED, true, false],
+      ['timed_out', EscrowOutcomeStatus.TIMED_OUT, false, true],
+    ])('maps %s', async (raw, status, final, retryable) => {
+      const { provider } = createProvider();
+      jest.spyOn(provider, 'getEscrowStatus').mockResolvedValue({ status: raw });
+      await expect(provider.reconcileEscrow('e1')).resolves.toMatchObject({
+        status,
+        final,
+        retryable,
+      });
+    });
+
+    it('treats transient RPC failures as retryable, never final', async () => {
+      const { provider } = createProvider();
+      jest
+        .spyOn(provider, 'getEscrowStatus')
+        .mockRejectedValue(new Error('503 Service Unavailable'));
+      await expect(provider.reconcileEscrow('e1')).resolves.toMatchObject({
+        status: EscrowOutcomeStatus.PENDING,
+        final: false,
+        retryable: true,
+      });
+    });
+
+    it('reports non-transient errors as final failures', async () => {
+      const { provider } = createProvider();
+      jest
+        .spyOn(provider, 'getEscrowStatus')
+        .mockRejectedValue(new Error('contract trapped: invalid escrow'));
+      await expect(provider.reconcileEscrow('e1')).resolves.toMatchObject({
+        status: EscrowOutcomeStatus.FAILED,
+        final: true,
+        retryable: false,
+      });
     });
   });
 });
