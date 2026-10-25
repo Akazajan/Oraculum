@@ -71,6 +71,14 @@ export class Payment {
   @Column({ type: 'enum', enum: PaymentStatus, default: PaymentStatus.PENDING })
   status: PaymentStatus;
 
+  /** Last reconciled Soroban escrow outcome. */
+  @Column({ type: 'varchar', length: 20, nullable: true })
+  escrowStatus: 'pending' | 'confirmed' | 'failed' | 'timed_out' | null;
+
+  /** When the escrow state was last reconciled with the chain. */
+  @Column({ type: 'timestamptz', nullable: true })
+  escrowReconciledAt: Date | null;
+
   @Column({ type: 'timestamptz', nullable: true })
   paidAt: Date;
 
