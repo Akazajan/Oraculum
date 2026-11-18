@@ -367,6 +367,8 @@ impl StakingModule {
             .get(&StakingDataKey::Stake(staker.clone()))
             .ok_or(StakingError::StakeNotFound)?;
 
+        // Normal unstaking is only allowed once the lock has expired. Early
+        // exits must go through `emergency_unstake`, which applies the penalty.
         let now = env.ledger().timestamp();
         if now < stake.unlock_at {
             return Err(StakingError::StillLocked.into());
