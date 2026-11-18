@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   inclusiveDaySpan,
   validateBookingDates,
+  validateBookingTimeRange,
 } from "./bookingValidation";
 
 const TODAY = "2026-10-15";
@@ -148,5 +149,64 @@ describe("validateBookingDates", () => {
     });
 
     expect(errors.endDate).toBe("Daily bookings cannot span more than 31 days.");
+  });
+});
+
+
+describe("validateBookingTimeRange", () => {
+  const base = {
+    selectedDate: "2026-10-15",
+    timeZone: "Africa/Lagos",
+  };
+
+  it("accepts an end time later on the selected date", () => {
+    expect(validateBookingTimeRange({
+      ...base, startTime: "09:00", endTime: "17:00",
+    })).toBeNull();
+  });
+
+  it("rejects an end time earlier on the same day", () => {
+    expect(validateBookingTimeRange({
+      ...base, startTime: "17:00", endTime: "09:00",
+    })).toBe("The end time must be after the start time.");
+  });
+
+  it("rejects equal start and end times unless overnight is explicitly allowed", () => {
+    expect(validateBookingTimeRange({
+      ...base, startTime: "09:00", endTime: "09:00",
+    })).toBe("The end time must be after the start time.");
+    expect(validateBookingTimeRange({
+      ...base, startTime: "09:00", endTime: "09:00", allowOvernight: true,
+    })).toBeNull();
+  });
+
+  it("accepts an explicitly permitted overnight range", () => {
+    expect(validateBookingTimeRange({
+      ...base, startTime: "22:00", endTime: "06:00", allowOvernight: true,
+    })).toBeNull();
+  });
+
+  it("rejects malformed dates and times", () => {
+    expect(validateBookingTimeRange({
+      ...base, selectedDate: "15/10/2026", startTime: "09:00", endTime: "17:00",
+    })).toBe("Select a valid booking date.");
+    expect(validateBookingTimeRange({
+      ...base, startTime: "9am", endTime: "17:00",
+    })).toBe("Enter a valid start time.");
+  });
+
+  it("rejects an unknown timezone", () => {
+    expect(validateBookingTimeRange({
+      ...base, timeZone: "Not/A_Timezone", startTime: "09:00", endTime: "17:00",
+    })).toBe("The start time is invalid in the selected timezone.");
+  });
+
+  it("rejects a local time skipped by a daylight-saving transition", () => {
+    expect(validateBookingTimeRange({
+      selectedDate: "2026-03-08",
+      startTime: "02:30",
+      endTime: "04:00",
+      timeZone: "America/New_York",
+    })).toBe("The start time is invalid in the selected timezone.");
   });
 });
