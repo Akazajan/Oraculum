@@ -171,6 +171,19 @@ export interface DownloadedFile {
   filename: string | null;
 }
 
+/**
+ * Joins an API base URL and endpoint with exactly one slash at their boundary.
+ * Collapsing repeated leading/trailing slashes also avoids malformed URLs when
+ * configuration and caller conventions differ.
+ */
+export function joinApiUrl(baseURL: string, endpoint: string): string {
+  const base = baseURL.replace(/\/+$/, "");
+  const path = endpoint.replace(/^\/+/, "");
+
+  if (!path) return base || "/";
+  return `${base}/${path}`;
+}
+
 function decodeUriComponentSafe(value: string): string {
   try {
     return decodeURIComponent(value);
@@ -239,14 +252,14 @@ export function downloadErrorMessage(status: number): string {
   return `Could not download this invoice (status ${status}). Please try again.`;
 }
 
-class ApiClient {
+export class ApiClient {
   private baseURL: string;
   private token: string | null = null;
   private refreshHandlers: AuthRefreshHandlers | null = null;
   private refreshInFlight: Promise<void> | null = null;
 
   constructor(baseURL: string) {
-    this.baseURL = baseURL;
+    this.baseURL = baseURL.replace(/\/+$/, "");
   }
 
   setToken(token: string | null) {
@@ -312,7 +325,7 @@ class ApiClient {
     attempt = 0,
   ): Promise<T> {
     const { skipAuthRefresh, ...init } = options;
-    const url = `${this.baseURL}${endpoint}`;
+    const url = joinApiUrl(this.baseURL, endpoint);
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
       ...(init.headers as Record<string, string> | undefined),
@@ -372,7 +385,7 @@ class ApiClient {
    * caller's decision.
    */
   async download(endpoint: string): Promise<DownloadedFile> {
-    const url = `${this.baseURL}${endpoint}`;
+    const url = joinApiUrl(this.baseURL, endpoint);
     const headers: Record<string, string> = {};
     if (this.token) headers["Authorization"] = `Bearer ${this.token}`;
 
