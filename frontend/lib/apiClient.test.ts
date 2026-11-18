@@ -1,5 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ApiError, apiClient, parseApiError } from "./apiClient";
+import {
+  ApiClient,
+  ApiError,
+  apiClient,
+  joinApiUrl,
+  parseApiError,
+} from "./apiClient";
+import { DEV_API_URL } from "../utils/env";
 
 interface MockResponseOptions {
   status?: number;
@@ -152,6 +159,56 @@ describe("parseApiError — every response-content variant (FE-01)", () => {
       status: 401,
       message: "Invalid credentials",
     });
+  });
+});
+
+describe("API URL path joining (FE-04)", () => {
+  it("adds the slash when the base and endpoint omit it", () => {
+    expect(joinApiUrl("https://api.oraculum.app/api", "workspaces")).toBe(
+      "https://api.oraculum.app/api/workspaces",
+    );
+  });
+
+  it("collapses duplicate boundary slashes", () => {
+    expect(joinApiUrl("https://api.oraculum.app/api///", "///workspaces")).toBe(
+      "https://api.oraculum.app/api/workspaces",
+    );
+  });
+
+  it("does not add a slash to an empty endpoint", () => {
+    expect(joinApiUrl("https://api.oraculum.app/api/", "")).toBe(
+      "https://api.oraculum.app/api",
+    );
+  });
+
+  it("retains the documented development API default", () => {
+    expect(joinApiUrl(DEV_API_URL, "/workspaces")).toBe(
+      "http://localhost:3000/api/workspaces",
+    );
+  });
+
+  it("uses the join helper for get and download requests", async () => {
+    const client = new ApiClient("https://api.oraculum.app/api/");
+    fetchMock
+      .mockResolvedValueOnce(mockResponse({ status: 200, jsonBody: { ok: true } }))
+      .mockResolvedValueOnce(
+        {
+          ok: true,
+          status: 200,
+          headers: { get: () => null },
+          blob: async () => new Blob(["pdf"]),
+        } as unknown as Response,
+      );
+
+    await client.get("/workspaces");
+    await client.download("///invoices/42/download");
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "https://api.oraculum.app/api/workspaces",
+    );
+    expect(fetchMock.mock.calls[1]?.[0]).toBe(
+      "https://api.oraculum.app/api/invoices/42/download",
+    );
   });
 });
 
