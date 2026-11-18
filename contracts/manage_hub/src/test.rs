@@ -4552,6 +4552,18 @@ fn regression_withdraw_penalty_pool_rejects_excess_amount() {
     assert_eq!(result, Err(Ok(Error::InsufficientBalance)));
 }
 
+#[test]
+fn test_batch_size_rejects_empty_and_oversized() {
+    use crate::batch::BatchModule;
+    use crate::validation::MAX_BATCH_SIZE;
+
+    assert_eq!(BatchModule::check_batch_size(0), Err(Error::Unauthorized));
+    assert_eq!(
+        BatchModule::check_batch_size(MAX_BATCH_SIZE + 1),
+        Err(Error::Unauthorized)
+    );
+    assert_eq!(BatchModule::check_batch_size(1), Ok(()));
+    assert_eq!(BatchModule::check_batch_size(MAX_BATCH_SIZE), Ok(()));
 // ---------------------------------------------------------------------------
 // C49 — Royalty updates must not wipe the existing distribution
 // ---------------------------------------------------------------------------

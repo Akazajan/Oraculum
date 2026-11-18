@@ -585,6 +585,31 @@ fn test_list_tokens_paginated_success_and_invalid_page() {
 }
 
 // ---------------------------------------------------------------------------
+// Batch update atomicity
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_batch_update_failure_rolls_back_earlier_items() {
+    let (env, admin, contract_id) = setup_contract();
+    let client = ContractClient::new(&env, &contract_id);
+    let valid_id = issue_test_token(&env, &client, &admin);
+    let missing_id = BytesN::<32>::random(&env);
+
+    let mut params = soroban_sdk::Vec::new(&env);
+    params.push_back(crate::types::BatchUpdateParams {
+        id: valid_id.clone(),
+        description: String::from_str(&env, "updated"),
+        attributes: soroban_sdk::Map::new(&env),
+    });
+    params.push_back(crate::types::BatchUpdateParams {
+        id: missing_id,
+        description: String::from_str(&env, "missing"),
+        attributes: soroban_sdk::Map::new(&env),
+    });
+
+    assert!(client.try_batch_update(&params).is_err());
+    // The first item must not have been persisted.
+    assert!(client.try_get_token_metadata(&valid_id).is_err());
 // C48 — Subscription expiry timestamp overflow
 // ---------------------------------------------------------------------------
 

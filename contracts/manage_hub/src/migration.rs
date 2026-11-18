@@ -166,6 +166,33 @@ impl MigrationModule {
         }
     }
 
+    /// Reject a migration when the stored version does not match the
+    /// expected source version.
+    pub fn verify_source_version(token: &MembershipToken, expected_version: u32) -> Result<(), Error> {
+        if token.current_version != expected_version {
+            return Err(Error::InvalidMetadataVersion);
+        }
+        Ok(())
+    }
+
+    /// Verify the stored version, then migrate and persist the token.
+    ///
+    /// The version is only bumped after verification succeeds; on failure the
+    /// stored token is left untouched.
+    pub fn migrate_token_checked(
+        env: &Env,
+        token_id: &BytesN<32>,
+        expected_version: u32,
+        new_expiry_date: Option<u64>,
+    ) -> Result<MembershipToken, Error> {
+        let token = Self::load_token(env, token_id)?;
+        Self::verify_source_version(&token, expected_version)?;
+        let new_version = expected_version.checked_add(1).ok_or(Error::TimestampOverflow)?;
+        let updated = Self::migrate_token_fields(&token, new_version, new_expiry_date, None, None);
+        Self::store_token(env, token_id, &updated);
+        Ok(updated)
+    }
+
     /// Build an `UpgradeRecord` for a successful upgrade or rollback.
     pub fn build_record(
         env: &Env,
