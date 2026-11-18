@@ -69,6 +69,12 @@ impl SubscriptionContract {
         Ok(())
     }
 
+    /// `start + duration`, or [`Error::TimestampOverflow`] when it does not
+    /// fit in a `u64`. Shared by subscription creation and renewal.
+    fn checked_expiry(start: u64, duration: u64) -> Result<u64, Error> {
+        start.checked_add(duration).ok_or(Error::TimestampOverflow)
+    }
+
     pub fn set_pause_config(env: Env, admin: Address, config: PauseConfig) -> Result<(), Error> {
         Self::require_admin(&env, &admin)?;
         Self::validate_pause_config(&config)?;
@@ -148,9 +154,7 @@ impl SubscriptionContract {
         let current_time = env.ledger().timestamp();
 
         // Use checked addition to prevent overflow
-        let expires_at = current_time
-            .checked_add(duration)
-            .ok_or(Error::TimestampOverflow)?;
+        let expires_at = Self::checked_expiry(current_time, duration)?;
 
         // Use empty tier_id for legacy subscriptions and default to Monthly billing
         let subscription = Subscription {
@@ -595,12 +599,13 @@ impl SubscriptionContract {
         // Require authorization from subscription owner
         subscription.user.require_auth();
 
-        if subscription.status == MembershipStatus::Paused {
-            return Err(Error::SubscriptionPaused);
-        }
-
+        // A revoked membership is terminal and can never be renewed.
         if subscription.status == MembershipStatus::Revoked {
             return Err(Error::SubscriptionAlreadyRevoked);
+        }
+
+        if subscription.status == MembershipStatus::Paused {
+            return Err(Error::SubscriptionPaused);
         }
 
         if subscription.status == MembershipStatus::Invalid {
@@ -624,9 +629,7 @@ impl SubscriptionContract {
             current_time
         };
 
-        subscription.expires_at = renewal_base
-            .checked_add(duration)
-            .ok_or(Error::TimestampOverflow)?;
+        subscription.expires_at = Self::checked_expiry(renewal_base, duration)?;
         subscription.status = MembershipStatus::Active;
         subscription.amount = amount;
 
@@ -1141,9 +1144,7 @@ impl SubscriptionContract {
         // token_client.transfer(&user, &contract_address, &amount);
 
         let current_time = env.ledger().timestamp();
-        let expires_at = current_time
-            .checked_add(duration)
-            .ok_or(Error::TimestampOverflow)?;
+        let expires_at = Self::checked_expiry(current_time, duration)?;
 
         let subscription = Subscription {
             id: subscription_id.clone(),
