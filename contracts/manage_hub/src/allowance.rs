@@ -155,7 +155,9 @@ impl AllowanceModule {
         Ok(())
     }
 
-    fn is_expired(env: &Env, allowance: &TokenAllowance) -> bool {
+    /// An allowance is unusable at and after its `expires_at` timestamp, so
+    /// spending exactly at the expiry boundary is rejected.
+    pub fn is_expired(env: &Env, allowance: &TokenAllowance) -> bool {
         if let Some(expiry) = allowance.expires_at {
             return env.ledger().timestamp() >= expiry;
         }
