@@ -583,3 +583,41 @@ fn test_list_tokens_paginated_success_and_invalid_page() {
     );
     assert_eq!(past.len(), 0);
 }
+
+// ---------------------------------------------------------------------------
+// C48 — Subscription expiry timestamp overflow
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_create_subscription_expiry_overflow_rejected() {
+    let (env, admin, contract_id) = setup_contract();
+    let client = ContractClient::new(&env, &contract_id);
+    env.ledger().with_mut(|li| li.timestamp = 1_000);
+
+    let user = Address::generate(&env);
+    let payment_token = Address::generate(&env);
+    client.set_usdc_contract(&admin, &payment_token);
+
+    let id = String::from_str(&env, "sub_overflow");
+    let result = client.try_create_subscription(&id, &user, &payment_token, &100_000, &u64::MAX);
+    assert_eq!(result, Err(Ok(Error::TimestampOverflow)));
+}
+
+#[test]
+fn test_renew_subscription_expiry_overflow_rejected() {
+    let (env, admin, contract_id) = setup_contract();
+    let client = ContractClient::new(&env, &contract_id);
+    env.ledger().with_mut(|li| li.timestamp = 1_000);
+
+    let user = Address::generate(&env);
+    let payment_token = Address::generate(&env);
+    client.set_usdc_contract(&admin, &payment_token);
+
+    let id = String::from_str(&env, "sub_renew_overflow");
+    client.create_subscription(&id, &user, &payment_token, &100_000, &86_400);
+    let before = client.get_subscription(&id);
+
+    let result = client.try_renew_subscription(&id, &payment_token, &100_000, &u64::MAX);
+    assert_eq!(result, Err(Ok(Error::TimestampOverflow)));
+    assert_eq!(client.get_subscription(&id).expires_at, before.expires_at);
+}
