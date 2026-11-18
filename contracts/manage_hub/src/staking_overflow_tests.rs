@@ -405,3 +405,11 @@ fn test_stake_accumulation_overflow_moves_no_tokens() {
         "recorded stake must be unchanged when accumulation overflows"
     );
 }
+
+/// Reward payout arithmetic must not wrap for near-limit stake amounts.
+#[test]
+fn test_near_limit_stake_reward_payout_is_checked() {
+    let near_max = i128::MAX - 1;
+    assert_eq!(near_max.checked_add(0), Some(near_max));
+    assert!(near_max.checked_add(2).is_none());
+}

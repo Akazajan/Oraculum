@@ -376,6 +376,12 @@ impl StakingModule {
 
         let rewards = crate::rewards::RewardsModule::calculate_pending_rewards(&env, &stake)?;
 
+        // Guard the total payout against overflow for near-limit stakes.
+        stake
+            .amount
+            .checked_add(rewards)
+            .ok_or(StakingError::Overflow)?;
+
         // CT-37: make withdrawal a one-time terminal transition. Remove the
         // stake record *before* the external token transfers
         // (checks-effects-interactions) so a repeated or re-entrant call finds

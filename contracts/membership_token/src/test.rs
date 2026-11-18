@@ -322,3 +322,42 @@ fn test_transfer_from_with_allowance() {
     assert_eq!(client.balance_of(&to), 300i128);
     assert_eq!(client.allowance(&owner, &spender), 200i128);
 }
+
+#[test]
+fn test_renew_token_rejects_non_positive_period() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(MembershipTokenContract, ());
+    let client = MembershipTokenContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let user = Address::generate(&env);
+    let new_id = BytesN::from_array(&env, &[9; 32]);
+
+    client.set_admin(&admin);
+    assert_eq!(
+        client.try_renew_token(&new_id, &user, &env.ledger().timestamp()),
+        Err(Ok(Error::InvalidExpiryDate))
+    );
+}
+
+#[test]
+fn test_transfer_token_keeps_ownership_indexes_consistent() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(MembershipTokenContract, ());
+    let client = MembershipTokenContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let old_user = Address::generate(&env);
+    let new_user = Address::generate(&env);
+    let token_id = BytesN::from_array(&env, &[7; 32]);
+
+    client.set_admin(&admin);
+    client.issue_token(&token_id, &old_user, &(env.ledger().timestamp() + 1_000));
+    client.transfer_token(&old_user, &token_id, &new_user);
+
+    assert_eq!(client.get_token(&token_id).user, new_user);
+    assert_eq!(client.token_of_user(&new_user), Some(token_id));
+    assert_eq!(client.token_of_user(&old_user), None);
+}

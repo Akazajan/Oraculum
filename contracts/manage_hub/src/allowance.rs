@@ -126,14 +126,14 @@ impl AllowanceModule {
             return Err(Error::Unauthorized);
         }
 
-        if allowance.amount < amount {
-            return Err(Error::InsufficientBalance);
-        }
-
-        allowance.amount = allowance
+        // Reject overspending before any allowance state is mutated.
+        let remaining = allowance
             .amount
             .checked_sub(amount)
-            .ok_or(Error::TimestampOverflow)?;
+            .filter(|r| *r >= 0)
+            .ok_or(Error::InsufficientBalance)?;
+
+        allowance.amount = remaining;
         allowance.updated_at = env.ledger().timestamp();
 
         if allowance.amount == 0 {

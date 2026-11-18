@@ -322,3 +322,20 @@ fn test_consume_allowance_at_expiry_fails() {
         Err(Error::Unauthorized)
     );
 }
+
+#[test]
+fn test_consume_allowance_overspend_rejected_without_mutation() {
+    let env = setup_env();
+    let token_id = new_token_id(&env);
+    let owner = Address::generate(&env);
+    let spender = Address::generate(&env);
+
+    AllowanceModule::approve(&env, &token_id, &owner, &spender, 50, None).unwrap();
+
+    assert_eq!(
+        AllowanceModule::consume_allowance(&env, &token_id, &owner, &spender, 51),
+        Err(Error::InsufficientBalance)
+    );
+    let allowance = AllowanceModule::get_allowance(&env, &token_id, &owner, &spender).unwrap();
+    assert_eq!(allowance.amount, 50);
+}
