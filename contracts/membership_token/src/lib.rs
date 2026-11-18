@@ -519,9 +519,18 @@ impl MembershipTokenContract {
             return Err(Error::TokenAlreadyIssued);
         }
 
-        // Check that the new expiry is in the future
+        // The renewal period must be positive, measured from the later of the
+        // current time or the current expiry.
         let current_time = env.ledger().timestamp();
-        if new_expiry_date <= current_time {
+        let mut base = current_time;
+        if let Some(old_id) = Self::token_of(&env, &user) {
+            if let Ok(old) = Self::load_token(&env, &old_id) {
+                if old.expiry_date > base {
+                    base = old.expiry_date;
+                }
+            }
+        }
+        if new_expiry_date <= base {
             return Err(Error::InvalidExpiryDate);
         }
 
@@ -623,9 +632,9 @@ impl MembershipTokenContract {
         }
 
         // Uniqueness must survive transfers as well as issuance.
-        if Self::has_index_entry(&env, &new_user) && !Self::is_active_member(&env, &new_user) {
-            // New user has a stale index entry but no active membership;
-            // allow the transfer and clean up the stale entry below.
+        // Reject before any write so owner indexes never diverge.
+        if Self::is_active_member(&env, &new_user) {
+            return Err(Error::UserAlreadyHasToken);
         }
 
         token.user = new_user.clone();
@@ -633,15 +642,13 @@ impl MembershipTokenContract {
             .persistent()
             .set(&DataKey::Token(id.clone()), &token);
 
-        // Move the identity index with the token.
-        env.storage()
-            .persistent()
-            .remove(&DataKey::UserToken(old_user.clone()));
-        // Clean up any stale index entry for the new user
-        // Clear old user's index and set new user's index
-        env.storage()
-            .persistent()
-            .remove(&DataKey::UserToken(new_user.clone()));
+        // Move the identity index with the token; only clear the old owner's
+        // entry if it still points at this token.
+        if Self::token_of(&env, &old_user) == Some(id.clone()) {
+            env.storage()
+                .persistent()
+                .remove(&DataKey::UserToken(old_user.clone()));
+        }
         env.storage()
             .persistent()
             .set(&DataKey::UserToken(new_user.clone()), &id);
