@@ -353,8 +353,41 @@ impl WorkspaceBookingContract {
         Ok(())
     }
 
-    /// Toggle a workspace's availability. Unavailable workspaces cannot accept
-    /// new bookings but existing active bookings are unaffected.
+    /// Returns `true` if the workspace has any currently-active booking.
+    ///
+    /// A booking is considered active when its `status` is `Active`
+    /// (not Completed, Cancelled, NoShow, or Expired).
+    fn workspace_has_active_bookings(env: &Env, workspace_id: &String) -> bool {
+        let booking_ids: Vec<String> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::ActiveWorkspaceBookings(workspace_id.clone()))
+            .unwrap_or(Vec::new(env));
+
+        for i in 0..booking_ids.len() {
+            let bid = booking_ids.get(i).unwrap();
+            let booking: Booking = match env.storage().persistent().get(&DataKey::Booking(bid)) {
+                Some(b) => b,
+                None => continue,
+            };
+            if booking.status.is_active() {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Toggle a workspace's availability.
+    ///
+    /// **Deactivation policy (CT-05):**
+    /// - Deactivating a workspace (`is_available = false`) is **blocked** when
+    ///   the workspace has one or more active bookings.  The function returns
+    ///   `Error::WorkspaceHasActiveBookings` (203) so the caller can retry
+    ///   after the bookings have ended, been cancelled, or expired.
+    /// - Reactivating a workspace (`is_available = true`) is always allowed,
+    ///   regardless of whether active bookings exist.
+    /// - Existing bookings are never modified or removed by this function —
+    ///   deactivation only prevents *new* bookings from being created.
     pub fn set_workspace_availability(
         env: Env,
         caller: Address,
@@ -368,6 +401,12 @@ impl WorkspaceBookingContract {
             .persistent()
             .get(&DataKey::Workspace(workspace_id.clone()))
             .ok_or(Error::WorkspaceNotFound)?;
+
+        // CT-05 — Block deactivation when active bookings exist.
+        // Reactivation is always permitted.
+        if !is_available && Self::workspace_has_active_bookings(&env, &workspace_id) {
+            return Err(Error::WorkspaceHasActiveBookings);
+        }
 
         workspace.availability = if is_available {
             WorkspaceAvailability::Available
@@ -860,6 +899,22 @@ impl WorkspaceBookingContract {
             booking_ids: page,
             next_offset,
         }
+    }
+
+    /// Check whether a workspace has any currently-active booking.
+    ///
+    /// Returns `true` if at least one booking with status `Active` exists
+    /// for `workspace_id`.  This query is read-only and never modifies state.
+    pub fn workspace_has_active_bookings_query(
+        env: Env,
+        workspace_id: String,
+    ) -> Result<bool, Error> {
+        let _workspace: Workspace = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Workspace(workspace_id.clone()))
+            .ok_or(Error::WorkspaceNotFound)?;
+        Ok(Self::workspace_has_active_bookings(&env, &workspace_id))
     }
 
     /// Check whether a workspace has no conflicting active booking in the

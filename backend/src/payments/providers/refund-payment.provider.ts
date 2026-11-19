@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
   NotFoundException,
@@ -12,11 +13,68 @@ import { PaystackProvider } from './paystack.provider';
 import { UserRole } from '../../users/enums/userRoles.enum';
 
 /**
- * Refunds a payment.
+ * BE-46 — Prevent duplicate refunds under concurrent requests.
  *
- * Only the Payment row is mutated, so a single save is sufficient and
- * the activity stays non-transactional (BE-12). Future work that adds
- * a refund ledger row should wrap both writes in runInTransaction().
+ * Reserves the payment in REFUNDING via a conditional UPDATE before
+ * contacting the provider. Only one concurrent caller wins the race;
+ * losers see ConflictException. Provider failures roll status back to
+ * SUCCESS so the refund remains retryable without double-crediting.
+ * Currency-safe integer helpers for minor units (kobo, cents, …).
+ * Never use floating-point arithmetic on money amounts (BE-47).
+ */
+export function toMinorUnits(value: number | string | bigint): bigint {
+  if (typeof value === 'bigint') return value;
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value) || !Number.isInteger(value)) {
+      throw new BadRequestException(
+        'Refund amounts must be whole minor units (no fractional currency)',
+      );
+    }
+    return BigInt(value);
+  }
+  if (!/^-?\d+$/.test(value.trim())) {
+    throw new BadRequestException(
+      'Refund amounts must be whole minor units (no fractional currency)',
+    );
+  }
+  return BigInt(value.trim());
+}
+
+export function assertRefundWithinCaptured(
+  amount: number | string | bigint,
+  alreadyRefunded: number | string | bigint,
+  refundRequest: number | string | bigint,
+): { nextRefunded: bigint; remainingAfter: bigint } {
+  const captured = toMinorUnits(amount);
+  const refunded = toMinorUnits(alreadyRefunded);
+  const request = toMinorUnits(refundRequest);
+
+  if (request <= 0n) {
+    throw new BadRequestException('Refund amount must be greater than zero');
+  }
+  if (refunded < 0n || captured < 0n) {
+    throw new BadRequestException('Payment amounts are invalid');
+  }
+  if (refunded > captured) {
+    throw new BadRequestException(
+      'Payment refund ledger is inconsistent: refunded exceeds captured',
+    );
+  }
+  const remaining = captured - refunded;
+  if (request > remaining) {
+    throw new BadRequestException(
+      `Refund of ${request} exceeds remaining refundable balance of ${remaining}`,
+    );
+  }
+  const nextRefunded = refunded + request;
+  return { nextRefunded, remainingAfter: captured - nextRefunded };
+}
+
+/**
+ * Refunds a payment in full or in part.
+ *
+ * Tracks cumulative `refundedAmount` on the Payment row and rejects any
+ * request that would exceed the original captured amount (BE-47).
  */
 @Injectable()
 export class RefundPaymentProvider {
@@ -30,6 +88,11 @@ export class RefundPaymentProvider {
     paymentId: string,
     requestingUserId: string,
     requestingUserRole: UserRole,
+    /**
+     * Optional partial amount in minor units. When omitted, refunds the
+     * entire remaining balance.
+     */
+    amount?: number,
   ): Promise<Payment> {
     const payment = await this.paymentsRepository.findOne({
       where: { id: paymentId },
@@ -47,15 +110,81 @@ export class RefundPaymentProvider {
       throw new ForbiddenException('You can only refund your own payments');
     }
 
+    if (payment.status === PaymentStatus.REFUNDED) {
+      throw new BadRequestException('Payment is already refunded');
+    }
+
+    if (payment.status === PaymentStatus.REFUNDING) {
+      throw new ConflictException('Refund already in progress');
+    }
+
     if (payment.status !== PaymentStatus.SUCCESS) {
+    if (
+      payment.status !== PaymentStatus.SUCCESS &&
+      payment.status !== PaymentStatus.REFUNDED
+    ) {
       throw new BadRequestException(
-        `Only SUCCESS payments can be refunded. Current status: ${payment.status}`,
+        `Only SUCCESS (or partially refunded) payments can be refunded. Current status: ${payment.status}`,
       );
     }
 
-    await this.paystackProvider.initiateRefund(payment.providerReference);
+    // Atomic reserve: SUCCESS → REFUNDING. Concurrent callers get 0 affected rows.
+    const reserve = await this.paymentsRepository
+      .createQueryBuilder()
+      .update(Payment)
+      .set({ status: PaymentStatus.REFUNDING })
+      .where('id = :id', { id: paymentId })
+      .andWhere('status = :status', { status: PaymentStatus.SUCCESS })
+      .execute();
 
-    payment.status = PaymentStatus.REFUNDED;
+    if (!reserve.affected) {
+      throw new ConflictException(
+        'Refund already in progress or payment is no longer refundable',
+      );
+    }
+
+    try {
+      await this.paystackProvider.initiateRefund(payment.providerReference);
+    } catch (err) {
+      // Failure remains retryable — release the hold back to SUCCESS.
+      await this.paymentsRepository.update(
+        { id: paymentId, status: PaymentStatus.REFUNDING },
+        { status: PaymentStatus.SUCCESS },
+      );
+      throw err;
+    }
+    const remaining = toMinorUnits(payment.amount) - toMinorUnits(payment.refundedAmount ?? 0);
+    if (remaining <= 0n) {
+      throw new BadRequestException('Payment has already been fully refunded');
+    }
+
+    const requestAmount =
+      amount === undefined || amount === null
+        ? remaining
+        : toMinorUnits(amount);
+
+    const { nextRefunded, remainingAfter } = assertRefundWithinCaptured(
+      payment.amount,
+      payment.refundedAmount ?? 0,
+      requestAmount,
+    );
+
+    await this.paystackProvider.initiateRefund(
+      payment.providerReference,
+      // Pass minor units as number when safe; provider accepts full or partial.
+      Number(requestAmount),
+    );
+
+    payment.refundedAmount = Number(nextRefunded);
+    payment.status =
+      remainingAfter === 0n ? PaymentStatus.REFUNDED : PaymentStatus.SUCCESS;
+    if (!payment.metadata) payment.metadata = {};
+    payment.metadata = {
+      ...payment.metadata,
+      lastRefundAmount: Number(requestAmount),
+      lastRefundAt: new Date().toISOString(),
+    };
+
     return this.paymentsRepository.save(payment);
   }
 }

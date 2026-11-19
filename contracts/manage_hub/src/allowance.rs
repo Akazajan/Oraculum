@@ -126,14 +126,14 @@ impl AllowanceModule {
             return Err(Error::Unauthorized);
         }
 
-        if allowance.amount < amount {
-            return Err(Error::InsufficientBalance);
-        }
-
-        allowance.amount = allowance
+        // Reject overspending before any allowance state is mutated.
+        let remaining = allowance
             .amount
             .checked_sub(amount)
-            .ok_or(Error::TimestampOverflow)?;
+            .filter(|r| *r >= 0)
+            .ok_or(Error::InsufficientBalance)?;
+
+        allowance.amount = remaining;
         allowance.updated_at = env.ledger().timestamp();
 
         if allowance.amount == 0 {
@@ -155,7 +155,9 @@ impl AllowanceModule {
         Ok(())
     }
 
-    fn is_expired(env: &Env, allowance: &TokenAllowance) -> bool {
+    /// An allowance is unusable at and after its `expires_at` timestamp, so
+    /// spending exactly at the expiry boundary is rejected.
+    pub fn is_expired(env: &Env, allowance: &TokenAllowance) -> bool {
         if let Some(expiry) = allowance.expires_at {
             return env.ledger().timestamp() >= expiry;
         }

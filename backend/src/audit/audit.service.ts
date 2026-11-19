@@ -10,7 +10,7 @@ import {
 } from '../common/context/correlation-context';
 
 // Sensitive fields that should not be logged
-const SENSITIVE_FIELDS = ['password', 'token', 'secret', 'key', 'authorization', 'credential'];
+const SENSITIVE_FIELDS = ['password', 'token', 'secret', 'key', 'authorization', 'credential', 'backupCode', 'backupCodes', 'code'];
 
 /**
  * Public list of audit action codes. Centralised so every contributor
@@ -34,6 +34,9 @@ export const AuditAction = {
   TOTP_LOGIN_FAILED: 'TOTP_LOGIN_FAILED',
   TOTP_ENABLED: 'TOTP_ENABLED',
   TOTP_DISABLED: 'TOTP_DISABLED',
+  BACKUP_CODES_REGENERATED: 'BACKUP_CODES_REGENERATED',
+  BACKUP_CODE_CONSUMED: 'BACKUP_CODE_CONSUMED',
+  BACKUP_CODE_FAILED: 'BACKUP_CODE_FAILED',
   // Users / Roles
   USER_UPDATED: 'USER_UPDATED',
   USER_DELETED: 'USER_DELETED',

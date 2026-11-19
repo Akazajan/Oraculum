@@ -282,3 +282,60 @@ fn test_consume_allowance_exact_limit_succeeds() {
     let remaining = AllowanceModule::get_allowance(&env, &token_id, &owner, &spender);
     assert!(remaining.is_none(), "fully consumed allowance must be removed");
 }
+
+// ---------------------------------------------------------------------------
+// Allowance expiry boundary
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_consume_allowance_before_expiry_succeeds() {
+    use soroban_sdk::testutils::Ledger as _;
+    let env = setup_env();
+    let token_id = new_token_id(&env);
+    let owner = Address::generate(&env);
+    let spender = Address::generate(&env);
+    let expiry = env.ledger().timestamp() + 100;
+
+    AllowanceModule::approve(&env, &token_id, &owner, &spender, 50, Some(expiry)).unwrap();
+    env.ledger().set_timestamp(expiry - 1);
+
+    assert_eq!(
+        AllowanceModule::consume_allowance(&env, &token_id, &owner, &spender, 10),
+        Ok(())
+    );
+}
+
+#[test]
+fn test_consume_allowance_at_expiry_fails() {
+    use soroban_sdk::testutils::Ledger as _;
+    let env = setup_env();
+    let token_id = new_token_id(&env);
+    let owner = Address::generate(&env);
+    let spender = Address::generate(&env);
+    let expiry = env.ledger().timestamp() + 100;
+
+    AllowanceModule::approve(&env, &token_id, &owner, &spender, 50, Some(expiry)).unwrap();
+    env.ledger().set_timestamp(expiry);
+
+    assert_eq!(
+        AllowanceModule::consume_allowance(&env, &token_id, &owner, &spender, 10),
+        Err(Error::Unauthorized)
+    );
+}
+
+#[test]
+fn test_consume_allowance_overspend_rejected_without_mutation() {
+    let env = setup_env();
+    let token_id = new_token_id(&env);
+    let owner = Address::generate(&env);
+    let spender = Address::generate(&env);
+
+    AllowanceModule::approve(&env, &token_id, &owner, &spender, 50, None).unwrap();
+
+    assert_eq!(
+        AllowanceModule::consume_allowance(&env, &token_id, &owner, &spender, 51),
+        Err(Error::InsufficientBalance)
+    );
+    let allowance = AllowanceModule::get_allowance(&env, &token_id, &owner, &spender).unwrap();
+    assert_eq!(allowance.amount, 50);
+}

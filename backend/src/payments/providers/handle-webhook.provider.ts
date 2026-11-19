@@ -29,6 +29,34 @@ const LONG_TERM_PLANS = new Set([
   PlanType.YEARLY,
 ]);
 
+const SENSITIVE_KEY_PATTERN =
+  /token|signature|secret|authorization|auth_code|password|email|phone|name|address|card|bin|last4|customer|ip_address|key/i;
+const SENSITIVE_VALUE_PATTERN =
+  /(bearer\s+[\w.~+/-]+=*)|(sk_(live|test)_\w+)|([\w.+-]+@[\w-]+\.[\w.-]+)|(\b[a-f0-9]{64,128}\b)/gi;
+
+/**
+ * Recursively redacts provider tokens, signatures and personal data from
+ * values that are persisted as payment failure details.
+ */
+export function redactSensitive(value: unknown, depth = 0): unknown {
+  if (value === null || value === undefined) return value;
+  if (typeof value === 'string') {
+    return value.replace(SENSITIVE_VALUE_PATTERN, '[REDACTED]');
+  }
+  if (typeof value !== 'object') return value;
+  if (depth > 5) return '[REDACTED]';
+  if (Array.isArray(value)) {
+    return value.map((v) => redactSensitive(v, depth + 1));
+  }
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+    out[k] = SENSITIVE_KEY_PATTERN.test(k)
+      ? '[REDACTED]'
+      : redactSensitive(v, depth + 1);
+  }
+  return out;
+}
+
 /**
  * Processes Paystack webhooks. The critical state changes
  * (Payment + Booking + on-chain escrow id) are wrapped in a
@@ -98,7 +126,7 @@ export class HandleWebhookProvider {
     if (eventType === 'charge.success') {
       await this.handleChargeSuccess(reference, data, providerEventId);
     } else if (eventType === 'charge.failed') {
-      await this.handleChargeFailed(reference, providerEventId);
+      await this.handleChargeFailed(reference, providerEventId, data);
     } else {
       this.logger.log(`Unhandled Paystack event: ${eventType}`);
     }
@@ -251,6 +279,7 @@ export class HandleWebhookProvider {
   private async handleChargeFailed(
     reference: string,
     providerEventId: string,
+    data: Record<string, unknown> = {},
   ): Promise<void> {
     const payment = await runInTransaction(this.dataSource, async (manager) => {
       const found = await manager.findOne(Payment, {
@@ -288,7 +317,13 @@ export class HandleWebhookProvider {
       provider: payment.provider,
       errorCode: 'CHARGE_FAILED',
       errorMessage: 'Paystack charge.failed webhook received',
-      providerResponse: null,
+      // Only a safe reference is kept; raw provider payload (tokens,
+      // signatures, customer data) is never persisted in failure logs.
+      providerResponse: redactSensitive({
+        providerEventId,
+        status: typeof data.status === 'string' ? data.status : null,
+        channel: typeof data.channel === 'string' ? data.channel : null,
+      }),
       correlationId: getCorrelationId(),
     });
 

@@ -121,9 +121,25 @@ export class User {
   @Column({ nullable: true, type: 'varchar', length: 255 })
   totpSecret?: string;
 
+  /**
+   * BE-11 — Secret produced by setup but not yet confirmed with a valid TOTP.
+   * Cleared on successful confirm; must never enable twoFactorEnabled alone.
+   */
+  @Exclude()
+  @Column({ nullable: true, type: 'varchar', length: 255 })
+  totpPendingSecret?: string;
+
   @Exclude()
   @Column({ type: 'jsonb', nullable: true })
   totpBackupCodes?: string[];
+
+  /**
+   * Monotonic generation counter for backup-code sets (BE-12 / BE-13).
+   * Incremented on regeneration so concurrent consumers of a replaced
+   * set cannot race against the new hashes.
+   */
+  @Column({ name: 'backup_code_generation', type: 'int', default: 0 })
+  backupCodeGeneration?: number;
 
   @Column({
     type: 'enum',

@@ -1,3 +1,5 @@
+import type { KoboAmount, NairaAmount } from "./payment";
+
 export type BookingStatus =
   | "PENDING"
   | "CONFIRMED"
@@ -19,7 +21,7 @@ export interface Booking {
   planType: PlanType;
   startDate: string;
   endDate: string;
-  totalAmount: number; // in kobo
+  totalAmount: KoboAmount;
   status: BookingStatus;
   seatCount: number;
   notes?: string;
@@ -43,8 +45,8 @@ export interface CreateBookingDto {
 }
 
 export interface PriceEstimate {
-  totalAmount: number; // kobo
-  totalAmountNaira: number;
+  totalAmount: KoboAmount;
+  totalAmountNaira: NairaAmount;
   planType: PlanType;
   seatCount: number;
   startDate: string;

@@ -4235,6 +4235,75 @@ fn test_royalty_exact_full_allocation_accepted() {
 }
 
 #[test]
+fn test_royalty_rejected_updates_preserve_existing_config() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(Contract, ());
+    let client = ContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+
+    let token_id = BytesN::<32>::random(&env);
+    let owner = Address::generate(&env);
+    client.issue_token(&token_id, &owner, &(env.ledger().timestamp() + 1000));
+
+    let first = Address::generate(&env);
+    let second = Address::generate(&env);
+    let valid_recipients = vec![
+        &env,
+        types::RoyaltyRecipient {
+            address: first.clone(),
+            percentage: 3000,
+        },
+        types::RoyaltyRecipient {
+            address: second.clone(),
+            percentage: 2000,
+        },
+    ];
+    client.set_royalty(&token_id, &valid_recipients);
+
+    let duplicate_recipients = vec![
+        &env,
+        types::RoyaltyRecipient {
+            address: first.clone(),
+            percentage: 1000,
+        },
+        types::RoyaltyRecipient {
+            address: first.clone(),
+            percentage: 1000,
+        },
+    ];
+    assert_eq!(
+        client.try_set_royalty(&token_id, &duplicate_recipients),
+        Err(Ok(Error::InvalidPaymentAmount))
+    );
+    let info_after_duplicate = client.get_royalty_info(&token_id).unwrap();
+    assert_eq!(info_after_duplicate.config.recipients, valid_recipients);
+    assert_eq!(info_after_duplicate.total_percentage, 5000);
+
+    let excessive_recipients = vec![
+        &env,
+        types::RoyaltyRecipient {
+            address: first,
+            percentage: 6000,
+        },
+        types::RoyaltyRecipient {
+            address: second,
+            percentage: 5000,
+        },
+    ];
+    assert_eq!(
+        client.try_set_royalty(&token_id, &excessive_recipients),
+        Err(Ok(Error::InvalidPaymentAmount))
+    );
+    let info_after_excessive = client.get_royalty_info(&token_id).unwrap();
+    assert_eq!(info_after_excessive.config.recipients, valid_recipients);
+    assert_eq!(info_after_excessive.total_percentage, 5000);
+}
+
+#[test]
 fn test_transfer_with_royalty_events() {
     let env = Env::default();
     env.mock_all_auths();
@@ -4481,4 +4550,141 @@ fn regression_withdraw_penalty_pool_rejects_excess_amount() {
     let (client, admin, _sac) = setup_staking_env(&env);
     let result = client.try_withdraw_penalty_pool(&admin, &1);
     assert_eq!(result, Err(Ok(Error::InsufficientBalance)));
+}
+
+#[test]
+fn test_batch_size_rejects_empty_and_oversized() {
+    use crate::batch::BatchModule;
+    use crate::validation::MAX_BATCH_SIZE;
+
+    assert_eq!(BatchModule::check_batch_size(0), Err(Error::Unauthorized));
+    assert_eq!(
+        BatchModule::check_batch_size(MAX_BATCH_SIZE + 1),
+        Err(Error::Unauthorized)
+    );
+    assert_eq!(BatchModule::check_batch_size(1), Ok(()));
+    assert_eq!(BatchModule::check_batch_size(MAX_BATCH_SIZE), Ok(()));
+// ---------------------------------------------------------------------------
+// C49 — Royalty updates must not wipe the existing distribution
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_royalty_empty_update_preserves_existing_shares() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(Contract, ());
+    let client = ContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+
+    let token_id = BytesN::<32>::random(&env);
+    let owner = Address::generate(&env);
+    client.issue_token(&token_id, &owner, &(env.ledger().timestamp() + 1000));
+
+    let recipients = vec![
+        &env,
+        types::RoyaltyRecipient {
+            address: Address::generate(&env),
+            percentage: 4000,
+        },
+        types::RoyaltyRecipient {
+            address: Address::generate(&env),
+            percentage: 6000,
+        },
+    ];
+    client.set_royalty(&token_id, &recipients);
+
+    let empty: soroban_sdk::Vec<types::RoyaltyRecipient> = soroban_sdk::Vec::new(&env);
+    assert_eq!(
+        client.try_set_royalty(&token_id, &empty),
+        Err(Ok(Error::InvalidPaymentAmount))
+    );
+
+    let info = client.get_royalty_info(&token_id).unwrap();
+    assert_eq!(info.config.recipients, recipients);
+    assert_eq!(info.total_percentage, 10000);
+}
+
+// ---------------------------------------------------------------------------
+// C47 — Revoked memberships cannot be renewed
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_renew_revoked_subscription_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(Contract, ());
+    let client = ContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let user = Address::generate(&env);
+    let payment_token = Address::generate(&env);
+    let subscription_id = String::from_str(&env, "sub_revoked");
+    let duration = 2_592_000u64;
+
+    client.set_admin(&admin);
+    client.set_usdc_contract(&admin, &payment_token);
+    client.create_subscription(&subscription_id, &user, &payment_token, &100_000, &duration);
+    client.revoke_subscription(&subscription_id, &admin);
+
+    let before = client.get_subscription(&subscription_id);
+    let result = client.try_renew_subscription(&subscription_id, &payment_token, &100_000, &duration);
+    assert_eq!(result, Err(Ok(Error::SubscriptionAlreadyRevoked)));
+
+    let after = client.get_subscription(&subscription_id);
+    assert_eq!(after.status, MembershipStatus::Revoked);
+    assert_eq!(after.expires_at, before.expires_at);
+}
+
+#[test]
+fn test_renew_active_subscription_still_allowed() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(Contract, ());
+    let client = ContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let user = Address::generate(&env);
+    let payment_token = Address::generate(&env);
+    let subscription_id = String::from_str(&env, "sub_active");
+    let duration = 2_592_000u64;
+
+    client.set_admin(&admin);
+    client.set_usdc_contract(&admin, &payment_token);
+    client.create_subscription(&subscription_id, &user, &payment_token, &100_000, &duration);
+
+    let before = client.get_subscription(&subscription_id);
+    client.renew_subscription(&subscription_id, &payment_token, &100_000, &duration);
+
+    let after = client.get_subscription(&subscription_id);
+    assert_eq!(after.status, MembershipStatus::Active);
+    assert_eq!(after.expires_at, before.expires_at + duration);
+}
+
+// ---------------------------------------------------------------------------
+// C46 — Normal unstaking is blocked until the lock expires
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_unstake_before_lock_keeps_stake_and_emergency_still_works() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (client, _admin, sac) = setup_staking_env(&env);
+
+    let staker = Address::generate(&env);
+    sac.mint(&staker, &10_000);
+    client.stake_tokens(&staker, &String::from_str(&env, "bronze"), &5_000);
+
+    // Normal unstake before the lock expires is rejected and the stake stays.
+    assert!(client.try_unstake_tokens(&staker).is_err());
+    assert!(client.get_stake_info(&staker).is_some());
+
+    // Emergency unstake is still available before the lock expires.
+    client.emergency_unstake(&staker);
+    assert!(client.get_stake_info(&staker).is_none());
 }

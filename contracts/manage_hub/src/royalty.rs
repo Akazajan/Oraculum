@@ -17,12 +17,25 @@ impl RoyaltyModule {
     /// Rejects zero-share recipients and any configuration that over-allocates
     /// beyond 100% (10,000 bps). Summation uses checked arithmetic so overflow
     /// fails deterministically instead of being masked.
+    ///
+    /// An empty recipient list is rejected so an update can never wipe out
+    /// the current distribution.
     fn validate_config(recipients: &Vec<RoyaltyRecipient>) -> Result<u32, Error> {
+        if recipients.is_empty() {
+            return Err(Error::InvalidPaymentAmount);
+        }
+
         let mut total_percentage: u32 = 0;
 
-        for recipient in recipients.iter() {
+        for (index, recipient) in recipients.iter().enumerate() {
             if recipient.percentage == 0 {
                 return Err(Error::InvalidPaymentAmount);
+            }
+
+            for previous_index in 0..index {
+                if recipients.get(previous_index).unwrap().address == recipient.address {
+                    return Err(Error::InvalidPaymentAmount);
+                }
             }
 
             total_percentage = total_percentage
@@ -47,7 +60,7 @@ impl RoyaltyModule {
         token_id: BytesN<32>,
         recipients: Vec<RoyaltyRecipient>,
     ) -> Result<(), Error> {
-        // Validation
+        // Validate the new shares before the current distribution is replaced.
         let _ = Self::validate_config(&recipients)?;
 
         let config = RoyaltyConfig {
@@ -97,6 +110,8 @@ impl RoyaltyModule {
             if !cfg.enabled || cfg.recipients.is_empty() {
                 return Ok(0);
             }
+
+            Self::validate_config(&cfg.recipients)?;
 
             // Calculate royalties with deterministic rounding (CT-16)
             // Ensure total_royalty <= sale_price

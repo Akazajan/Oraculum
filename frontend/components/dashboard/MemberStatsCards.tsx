@@ -2,14 +2,7 @@
 
 import { BookOpen, CreditCard, FileText, Clock } from "lucide-react";
 import { useGetMemberDashboard } from "@/lib/react-query/hooks/dashboard/useGetMemberDashboard";
-
-function formatNaira(kobo: number): string {
-  return new Intl.NumberFormat("en-NG", {
-    style: "currency",
-    currency: "NGN",
-    minimumFractionDigits: 0,
-  }).format(kobo / 100);
-}
+import { formatNaira } from "@/lib/utils";
 
 function formatDate(iso: string | null): string {
   if (!iso) return "—";

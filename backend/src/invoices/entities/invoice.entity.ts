@@ -15,6 +15,18 @@ import { InvoiceStatus } from '../enums/invoice-status.enum';
 
 @Entity('invoices')
 @Index(['invoiceNumber'], { unique: true })
+/**
+ * BE-51 — One payment produces at most one invoice. Without this
+ * constraint two concurrent generations for the same payment both pass
+ * the "does an invoice already exist?" lookup and each insert its own
+ * row, silently double-billing the customer. The unique index makes
+ * the race visible at the database level; the provider catches the
+ * violation and returns the row the winner created.
+ */
+@Index('IDX_invoices_payment_id_unique', ['paymentId'], {
+  unique: true,
+  where: '"paymentId" IS NOT NULL',
+})
 @Index(['userId'])
 @Index(['bookingId'])
 export class Invoice {

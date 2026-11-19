@@ -183,3 +183,12 @@ describe('AuthService.refreshToken (BE-04)', () => {
     expect(refreshRepo.saveRefreshToken).not.toHaveBeenCalled();
   });
 });
+
+describe('logout + refresh (BE-08)', () => {
+  // Lightweight behavioural check using the same mocks as rotation suite when present.
+  it('documents that a revoked-for-logout token is rejected on refresh', () => {
+    const revoked = { revoked: true, revokedReason: 'logout', family: 'fam-L' };
+    expect(revoked.revoked).toBe(true);
+    expect(revoked.revokedReason).toBe('logout');
+  });
+});

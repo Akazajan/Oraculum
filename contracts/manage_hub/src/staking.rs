@@ -367,12 +367,20 @@ impl StakingModule {
             .get(&StakingDataKey::Stake(staker.clone()))
             .ok_or(StakingError::StakeNotFound)?;
 
+        // Normal unstaking is only allowed once the lock has expired. Early
+        // exits must go through `emergency_unstake`, which applies the penalty.
         let now = env.ledger().timestamp();
         if now < stake.unlock_at {
             return Err(StakingError::StillLocked.into());
         }
 
         let rewards = crate::rewards::RewardsModule::calculate_pending_rewards(&env, &stake)?;
+
+        // Guard the total payout against overflow for near-limit stakes.
+        stake
+            .amount
+            .checked_add(rewards)
+            .ok_or(StakingError::Overflow)?;
 
         // CT-37: make withdrawal a one-time terminal transition. Remove the
         // stake record *before* the external token transfers

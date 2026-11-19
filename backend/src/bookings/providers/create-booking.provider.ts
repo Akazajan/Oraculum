@@ -6,7 +6,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, Repository } from 'typeorm';
+import { DataSource, EntityManager, Repository } from 'typeorm';
 import { Booking } from '../entities/booking.entity';
 import { CreateBookingDto } from '../dto/create-booking.dto';
 import { CreateRecurringBookingDto } from '../dto/create-recurring-booking.dto';
@@ -40,11 +40,7 @@ export class CreateBookingProvider {
     }
 
     const saved = await this.dataSource.transaction(async (manager) => {
-      const workspace = await manager
-        .createQueryBuilder(Workspace, 'w')
-        .setLock('pessimistic_write')
-        .where('w.id = :id', { id: dto.workspaceId })
-        .getOne();
+      const workspace = await this.getLockedWorkspace(manager, dto.workspaceId);
 
       if (!workspace) {
         throw new NotFoundException(`Workspace "${dto.workspaceId}" not found`);
@@ -154,11 +150,7 @@ export class CreateBookingProvider {
     );
 
     const saved = await this.dataSource.transaction(async (manager) => {
-      const workspace = await manager
-        .createQueryBuilder(Workspace, 'w')
-        .setLock('pessimistic_write')
-        .where('w.id = :id', { id: dto.workspaceId })
-        .getOne();
+      const workspace = await this.getLockedWorkspace(manager, dto.workspaceId);
 
       if (!workspace) {
         throw new NotFoundException(`Workspace "${dto.workspaceId}" not found`);
@@ -232,6 +224,18 @@ export class CreateBookingProvider {
       .catch(() => this.logger.warn('Failed to invalidate booking cache'));
 
     return saved;
+  }
+
+  private async getLockedWorkspace(
+    manager: EntityManager,
+    workspaceId: string,
+  ): Promise<Workspace | null> {
+    // Keep capacity checks for the same workspace serialized until commit.
+    return manager
+      .createQueryBuilder(Workspace, 'w')
+      .setLock('pessimistic_write')
+      .where('w.id = :id', { id: workspaceId })
+      .getOne();
   }
 }
 

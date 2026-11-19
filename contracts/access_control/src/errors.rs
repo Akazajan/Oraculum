@@ -73,7 +73,9 @@ pub enum AccessControlError {
     NotMultisigAdmin = 132,
     /// Proposal rejection threshold reached
     ProposalRejected = 133,
-    /// ADDED BY FIX #270: User is blacklisted and cannot be elevated to admin
+    /// User is blacklisted. Blacklisted accounts cannot be elevated to admin
+    /// (#270) and, per CT-28, cannot create, approve, reject or execute
+    /// governance proposals.
     UserBlacklisted = 134,
     /// C03: Batch blacklist/role operation exceeds maximum allowed size
     BatchSizeExceeded = 135,
@@ -124,7 +126,7 @@ impl AccessControlError {
             AccessControlError::NotMultisigAdmin => "Not authorized as multisig admin",
             AccessControlError::ProposalRejected => "Proposal rejection threshold reached",
             AccessControlError::UserBlacklisted => {
-                "User is blacklisted and cannot be elevated to admin"
+                "User is blacklisted and cannot perform privileged actions"
             }
             AccessControlError::BatchSizeExceeded => {
                 "Batch size exceeds the maximum allowed for access-control operations"

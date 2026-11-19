@@ -1,9 +1,9 @@
-import { Module } from '@nestjs/common';
+import { Module, OnModuleInit } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { AuthService } from './auth.service';
 import { AuthController } from './auth.controller';
 import { UserHelper } from './helper/user-helper';
-import { JwtHelper } from './helper/jwt-helper';
+import { JwtHelper, validateTokenConfiguration } from './helper/jwt-helper';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { User } from '../users/entities/user.entity';
 import { JwtModule } from '@nestjs/jwt';
@@ -57,4 +57,12 @@ import { AuditModule } from '../audit/audit.module';
     RefreshTokenRepositoryOperations,
   ],
 })
-export class AuthModule {}
+export class AuthModule implements OnModuleInit {
+  /**
+   * BE-10 — Fail fast when JWT secrets / lifetimes are missing or unsafe.
+   * Errors name the setting but never include secret values.
+   */
+  onModuleInit(): void {
+    validateTokenConfiguration(process.env);
+  }
+}

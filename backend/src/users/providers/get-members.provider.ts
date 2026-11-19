@@ -2,7 +2,12 @@ import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, SelectQueryBuilder } from 'typeorm';
 import { User } from '../entities/user.entity';
-import { MemberQueryDto } from '../dto/member-query.dto';
+import {
+  MemberQueryDto,
+  resolveMemberLimit,
+  resolveMemberPage,
+  resolveMemberSearch,
+} from '../dto/member-query.dto';
 
 export interface PaginatedMembers {
   data: Partial<User>[];
@@ -33,7 +38,16 @@ export class GetMembersProvider {
     query: MemberQueryDto,
     withDeleted = false,
   ): Promise<PaginatedMembers> {
-    const { page = 1, limit = 20, status, search } = query;
+    // BE-18 — Never trust the raw query object. The DTO validates and
+    // bounds the values that arrive over HTTP, but this provider is
+    // also called directly by the admin controller and by internal
+    // services, so the page size is capped here as well. A `limit` of
+    // 0 (or an omitted one) previously reached `take(0)` and made
+    // `totalPages` divide by zero.
+    const page = resolveMemberPage(query?.page);
+    const limit = resolveMemberLimit(query?.limit);
+    const status = query?.status;
+    const search = resolveMemberSearch(query?.search);
 
     const qb: SelectQueryBuilder<User> = this.usersRepository
       .createQueryBuilder('user')
@@ -77,8 +91,8 @@ export class GetMembersProvider {
 
     if (search) {
       qb.andWhere(
-        '(LOWER(user.firstname) LIKE :search OR LOWER(user.lastname) LIKE :search OR LOWER(user.email) LIKE :search)',
-        { search: `%${search.toLowerCase()}%` },
+        "(LOWER(user.firstname) LIKE :search ESCAPE '\\' OR LOWER(user.lastname) LIKE :search ESCAPE '\\' OR LOWER(user.email) LIKE :search ESCAPE '\\')",
+        { search: `%${search}%` },
       );
     }
 

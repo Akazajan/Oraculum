@@ -35,9 +35,29 @@ export class Payment {
   @JoinColumn({ name: 'userId' })
   user: User;
 
-  // Amount in kobo
-  @Column({ type: 'bigint' })
+  /**
+   * Captured amount in the smallest currency unit (kobo for NGN).
+   * Stored as bigint; treat as integer arithmetic only (BE-47).
+   */
+  @Column({ type: 'bigint', transformer: {
+    to: (v: number | string) => v,
+    from: (v: string | number) => (v == null ? 0 : Number(v)),
+  }})
   amount: number;
+
+  /**
+   * Cumulative amount refunded so far, same unit/currency as `amount`.
+   * Full and partial refunds must keep `refundedAmount <= amount`.
+   */
+  @Column({
+    type: 'bigint',
+    default: 0,
+    transformer: {
+      to: (v: number | string) => v ?? 0,
+      from: (v: string | number) => (v == null ? 0 : Number(v)),
+    },
+  })
+  refundedAmount: number;
 
   @Column({ type: 'varchar', length: 3, default: 'NGN' })
   currency: string;
@@ -51,6 +71,14 @@ export class Payment {
   @Column({ type: 'enum', enum: PaymentStatus, default: PaymentStatus.PENDING })
   status: PaymentStatus;
 
+  /** Last reconciled Soroban escrow outcome. */
+  @Column({ type: 'varchar', length: 20, nullable: true })
+  escrowStatus: 'pending' | 'confirmed' | 'failed' | 'timed_out' | null;
+
+  /** When the escrow state was last reconciled with the chain. */
+  @Column({ type: 'timestamptz', nullable: true })
+  escrowReconciledAt: Date | null;
+
   @Column({ type: 'timestamptz', nullable: true })
   paidAt: Date;
 
@@ -62,4 +90,11 @@ export class Payment {
 
   @UpdateDateColumn()
   updatedAt: Date;
+
+  /** Remaining refundable balance in minor units. */
+  get refundableRemaining(): number {
+    const captured = Number(this.amount) || 0;
+    const refunded = Number(this.refundedAmount) || 0;
+    return Math.max(0, captured - refunded);
+  }
 }

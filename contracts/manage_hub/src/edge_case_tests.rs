@@ -583,3 +583,66 @@ fn test_list_tokens_paginated_success_and_invalid_page() {
     );
     assert_eq!(past.len(), 0);
 }
+
+// ---------------------------------------------------------------------------
+// Batch update atomicity
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_batch_update_failure_rolls_back_earlier_items() {
+    let (env, admin, contract_id) = setup_contract();
+    let client = ContractClient::new(&env, &contract_id);
+    let valid_id = issue_test_token(&env, &client, &admin);
+    let missing_id = BytesN::<32>::random(&env);
+
+    let mut params = soroban_sdk::Vec::new(&env);
+    params.push_back(crate::types::BatchUpdateParams {
+        id: valid_id.clone(),
+        description: String::from_str(&env, "updated"),
+        attributes: soroban_sdk::Map::new(&env),
+    });
+    params.push_back(crate::types::BatchUpdateParams {
+        id: missing_id,
+        description: String::from_str(&env, "missing"),
+        attributes: soroban_sdk::Map::new(&env),
+    });
+
+    assert!(client.try_batch_update(&params).is_err());
+    // The first item must not have been persisted.
+    assert!(client.try_get_token_metadata(&valid_id).is_err());
+// C48 — Subscription expiry timestamp overflow
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_create_subscription_expiry_overflow_rejected() {
+    let (env, admin, contract_id) = setup_contract();
+    let client = ContractClient::new(&env, &contract_id);
+    env.ledger().with_mut(|li| li.timestamp = 1_000);
+
+    let user = Address::generate(&env);
+    let payment_token = Address::generate(&env);
+    client.set_usdc_contract(&admin, &payment_token);
+
+    let id = String::from_str(&env, "sub_overflow");
+    let result = client.try_create_subscription(&id, &user, &payment_token, &100_000, &u64::MAX);
+    assert_eq!(result, Err(Ok(Error::TimestampOverflow)));
+}
+
+#[test]
+fn test_renew_subscription_expiry_overflow_rejected() {
+    let (env, admin, contract_id) = setup_contract();
+    let client = ContractClient::new(&env, &contract_id);
+    env.ledger().with_mut(|li| li.timestamp = 1_000);
+
+    let user = Address::generate(&env);
+    let payment_token = Address::generate(&env);
+    client.set_usdc_contract(&admin, &payment_token);
+
+    let id = String::from_str(&env, "sub_renew_overflow");
+    client.create_subscription(&id, &user, &payment_token, &100_000, &86_400);
+    let before = client.get_subscription(&id);
+
+    let result = client.try_renew_subscription(&id, &payment_token, &100_000, &u64::MAX);
+    assert_eq!(result, Err(Ok(Error::TimestampOverflow)));
+    assert_eq!(client.get_subscription(&id).expires_at, before.expires_at);
+}

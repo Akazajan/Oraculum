@@ -23,6 +23,7 @@ import { AuditLog } from '../audit/entities/audit-log.entity';
 import { PaymentFailureQueryDto } from './dto/payment-failure-query.dto';
 import { paginatedResponse } from '../common/dto/pagination.dto';
 import { AuditAction } from '../audit/audit.service';
+import { redactSensitive } from './providers/handle-webhook.provider';
 
 @ApiTags('payments')
 @ApiBearerAuth('bearer')
@@ -65,6 +66,12 @@ export class PaymentFailureLogsController {
     const total = await qb.getCount();
     const items = await qb.skip((page - 1) * limit).take(limit).getMany();
 
-    return paginatedResponse('Payment failure logs retrieved successfully', items, total, page, limit);
+    // Defence in depth: redact secrets/PII from previously persisted rows.
+    const safeItems = items.map((item) => ({
+      ...item,
+      metadata: redactSensitive(item.metadata) as typeof item.metadata,
+    }));
+
+    return paginatedResponse('Payment failure logs retrieved successfully', safeItems, total, page, limit);
   }
 }

@@ -1354,3 +1354,328 @@ fn test_partial_seat_bookings_accumulate_and_fail_when_full() {
     );
     assert_eq!(final_result, Err(Ok(Error::CapacityExceeded)));
 }
+
+// -- CT-05: Workspace deactivation with active bookings policy ----------------
+
+/// Deactivating a workspace with no active bookings succeeds and marks it
+/// `Unavailable`.
+#[test]
+fn test_ct05_deactivate_no_active_bookings_succeeds() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = setup_contract(&env);
+    let client = WorkspaceBookingContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let token = Address::generate(&env);
+    client.initialize(&admin, &token);
+    client.register_workspace(
+        &admin,
+        &String::from_str(&env, "ws-ct05-1"),
+        &String::from_str(&env, "CT05 Desk"),
+        &WorkspaceType::HotDesk,
+        &4u32,
+        &500u128,
+    );
+    // No bookings — deactivation should succeed.
+    client.set_workspace_availability(
+        &admin,
+        &String::from_str(&env, "ws-ct05-1"),
+        &false,
+    );
+    let ws = client.get_workspace(&String::from_str(&env, "ws-ct05-1"));
+    assert_ne!(ws.availability, WorkspaceAvailability::Available);
+}
+
+/// Deactivating a workspace with an active booking is blocked with
+/// `Error::WorkspaceHasActiveBookings` (203).
+#[test]
+fn test_ct05_deactivate_with_active_booking_blocked() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = setup_contract(&env);
+    let client = WorkspaceBookingContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let member = Address::generate(&env);
+    let token_address = setup_token(&env, &admin, &member, 10_000i128);
+    client.initialize(&admin, &token_address);
+    client.register_workspace(
+        &admin,
+        &String::from_str(&env, "ws-ct05-2"),
+        &String::from_str(&env, "CT05 Room"),
+        &WorkspaceType::MeetingRoom,
+        &4u32,
+        &1_000u128,
+    );
+    let now = env.ledger().timestamp();
+    let start = now + 60;
+    let end = start + 3_600;
+    client.book_workspace(
+        &member,
+        &String::from_str(&env, "bk-ct05-1"),
+        &String::from_str(&env, "ws-ct05-2"),
+        &start,
+        &end,
+        &2u32,
+    );
+    // Active booking exists — deactivation must be blocked.
+    let result = client.try_set_workspace_availability(
+        &admin,
+        &String::from_str(&env, "ws-ct05-2"),
+        &false,
+    );
+    assert_eq!(result, Err(Ok(Error::WorkspaceHasActiveBookings)));
+    // Workspace remains Available because the call failed.
+    let ws = client.get_workspace(&String::from_str(&env, "ws-ct05-2"));
+    assert_eq!(ws.availability, WorkspaceAvailability::Available);
+    // The active booking is preserved.
+    let booking = client.get_booking(&String::from_str(&env, "bk-ct05-1"));
+    assert_eq!(booking.status, BookingStatus::Active);
+}
+
+/// Deactivating a workspace after all bookings are cancelled succeeds.
+#[test]
+fn test_ct05_deactivate_after_cancel_succeeds() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = setup_contract(&env);
+    let client = WorkspaceBookingContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let member = Address::generate(&env);
+    let token_address = setup_token(&env, &admin, &member, 10_000i128);
+    client.initialize(&admin, &token_address);
+    client.register_workspace(
+        &admin,
+        &String::from_str(&env, "ws-ct05-3"),
+        &String::from_str(&env, "CT05 Desk B"),
+        &WorkspaceType::HotDesk,
+        &1u32,
+        &500u128,
+    );
+    let now = env.ledger().timestamp();
+    let start = now + 60;
+    let end = start + 3_600;
+    client.book_workspace(
+        &member,
+        &String::from_str(&env, "bk-ct05-2"),
+        &String::from_str(&env, "ws-ct05-3"),
+        &start,
+        &end,
+        &1u32,
+    );
+    // Blocked while booking is active.
+    let blocked = client.try_set_workspace_availability(
+        &admin,
+        &String::from_str(&env, "ws-ct05-3"),
+        &false,
+    );
+    assert_eq!(blocked, Err(Ok(Error::WorkspaceHasActiveBookings)));
+    // Cancel the booking — deactivation should now succeed.
+    client.cancel_booking(&member, &String::from_str(&env, "bk-ct05-2"));
+    client.set_workspace_availability(
+        &admin,
+        &String::from_str(&env, "ws-ct05-3"),
+        &false,
+    );
+    let ws = client.get_workspace(&String::from_str(&env, "ws-ct05-3"));
+    assert_ne!(ws.availability, WorkspaceAvailability::Available);
+}
+
+/// Reactivating a workspace is always allowed, even with active bookings.
+#[test]
+fn test_ct05_reactivate_with_active_bookings_allowed() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = setup_contract(&env);
+    let client = WorkspaceBookingContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let member = Address::generate(&env);
+    let token_address = setup_token(&env, &admin, &member, 10_000i128);
+    client.initialize(&admin, &token_address);
+    client.register_workspace(
+        &admin,
+        &String::from_str(&env, "ws-ct05-4"),
+        &String::from_str(&env, "CT05 Reactivate"),
+        &WorkspaceType::DedicatedDesk,
+        &1u32,
+        &500u128,
+    );
+    // Deactivate with no bookings.
+    client.set_workspace_availability(
+        &admin,
+        &String::from_str(&env, "ws-ct05-4"),
+        &false,
+    );
+    // Create a booking while workspace is Unavailable — should fail.
+    let now = env.ledger().timestamp();
+    let start = now + 60;
+    let end = start + 3_600;
+    let book_result = client.try_book_workspace(
+        &member,
+        &String::from_str(&env, "bk-ct05-3"),
+        &String::from_str(&env, "ws-ct05-4"),
+        &start,
+        &end,
+        &1u32,
+    );
+    assert_eq!(book_result, Err(Ok(Error::WorkspaceUnavailable)));
+    // Reactivate — no active bookings so this is fine.
+    client.set_workspace_availability(
+        &admin,
+        &String::from_str(&env, "ws-ct05-4"),
+        &true,
+    );
+    // Now book successfully.
+    client.book_workspace(
+        &member,
+        &String::from_str(&env, "bk-ct05-4"),
+        &String::from_str(&env, "ws-ct05-4"),
+        &start,
+        &end,
+        &1u32,
+    );
+    // Reactivate again while there IS an active booking — should succeed.
+    client.set_workspace_availability(
+        &admin,
+        &String::from_str(&env, "ws-ct05-4"),
+        &true,
+    );
+    let ws = client.get_workspace(&String::from_str(&env, "ws-ct05-4"));
+    assert_eq!(ws.availability, WorkspaceAvailability::Available);
+}
+
+/// Deactivation blocked for a workspace with multiple active bookings.
+#[test]
+fn test_ct05_deactivate_multiple_active_bookings_blocked() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = setup_contract(&env);
+    let client = WorkspaceBookingContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let m1 = Address::generate(&env);
+    let m2 = Address::generate(&env);
+    let token_address = setup_token(&env, &admin, &m1, 100_000i128);
+    StellarAssetClient::new(&env, &token_address)
+        .mock_all_auths()
+        .mint(&m2, &100_000i128);
+    client.initialize(&admin, &token_address);
+    client.register_workspace(
+        &admin,
+        &String::from_str(&env, "ws-ct05-5"),
+        &String::from_str(&env, "CT05 Multi"),
+        &WorkspaceType::MeetingRoom,
+        &10u32,
+        &200u128,
+    );
+    let now = env.ledger().timestamp();
+    let start = now + 60;
+    let end = start + 3_600;
+    client.book_workspace(
+        &m1,
+        &String::from_str(&env, "bk-m1-ct05"),
+        &String::from_str(&env, "ws-ct05-5"),
+        &start,
+        &end,
+        &3u32,
+    );
+    // Different time slot — still active.
+    let start2 = end + 600;
+    let end2 = start2 + 3_600;
+    client.book_workspace(
+        &m2,
+        &String::from_str(&env, "bk-m2-ct05"),
+        &String::from_str(&env, "ws-ct05-5"),
+        &start2,
+        &end2,
+        &2u32,
+    );
+    let result = client.try_set_workspace_availability(
+        &admin,
+        &String::from_str(&env, "ws-ct05-5"),
+        &false,
+    );
+    assert_eq!(result, Err(Ok(Error::WorkspaceHasActiveBookings)));
+}
+
+/// Non-admin cannot deactivate a workspace (Unauthorized).
+#[test]
+fn test_ct05_deactivate_non_admin_fails() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = setup_contract(&env);
+    let client = WorkspaceBookingContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let non_admin = Address::generate(&env);
+    let token = Address::generate(&env);
+    client.initialize(&admin, &token);
+    client.register_workspace(
+        &admin,
+        &String::from_str(&env, "ws-ct05-6"),
+        &String::from_str(&env, "CT05 Non-Admin"),
+        &WorkspaceType::HotDesk,
+        &1u32,
+        &500u128,
+    );
+    let result = client.try_set_workspace_availability(
+        &non_admin,
+        &String::from_str(&env, "ws-ct05-6"),
+        &false,
+    );
+    assert_eq!(result, Err(Ok(Error::Unauthorized)));
+}
+
+/// Deactivating a non-existent workspace returns WorkspaceNotFound.
+#[test]
+fn test_ct05_deactivate_nonexistent_workspace_fails() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = setup_contract(&env);
+    let client = WorkspaceBookingContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let token = Address::generate(&env);
+    client.initialize(&admin, &token);
+    let result = client.try_set_workspace_availability(
+        &admin,
+        &String::from_str(&env, "ws-does-not-exist"),
+        &false,
+    );
+    assert_eq!(result, Err(Ok(Error::WorkspaceNotFound)));
+}
+
+/// The public query helper returns true when active bookings exist.
+#[test]
+fn test_ct05_active_bookings_query() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = setup_contract(&env);
+    let client = WorkspaceBookingContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let member = Address::generate(&env);
+    let token_address = setup_token(&env, &admin, &member, 10_000i128);
+    client.initialize(&admin, &token_address);
+    client.register_workspace(
+        &admin,
+        &String::from_str(&env, "ws-ct05-q"),
+        &String::from_str(&env, "CT05 Query"),
+        &WorkspaceType::HotDesk,
+        &1u32,
+        &500u128,
+    );
+    // No bookings — query returns false.
+    assert!(!client.workspace_has_active_bookings_query(&String::from_str(&env, "ws-ct05-q")));
+    let now = env.ledger().timestamp();
+    let start = now + 60;
+    let end = start + 3_600;
+    client.book_workspace(
+        &member,
+        &String::from_str(&env, "bk-ct05-q"),
+        &String::from_str(&env, "ws-ct05-q"),
+        &start,
+        &end,
+        &1u32,
+    );
+    // Active booking — query returns true.
+    assert!(client.workspace_has_active_bookings_query(&String::from_str(&env, "ws-ct05-q")));
+    // After cancellation — query returns false again.
+    client.cancel_booking(&member, &String::from_str(&env, "bk-ct05-q"));
+    assert!(!client.workspace_has_active_bookings_query(&String::from_str(&env, "ws-ct05-q")));
+}

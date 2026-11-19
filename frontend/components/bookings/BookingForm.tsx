@@ -19,6 +19,7 @@ import {
   validateBookingDates,
 } from "@/lib/bookingValidation";
 import { createSubmissionGate } from "@/lib/bookingSubmission";
+import { formatNaira } from "@/lib/utils";
 import {
   ArrowLeft,
   ArrowRight,
@@ -106,10 +107,7 @@ export default function BookingForm() {
     usePriceEstimate(estimateParams);
 
   const totalAmount = estimateData?.data?.totalAmount ?? 0;
-  const totalNaira = (totalAmount / 100).toLocaleString("en-NG", {
-    style: "currency",
-    currency: "NGN",
-  });
+  const totalNaira = formatNaira(totalAmount);
 
   const { mutateAsync: createBooking, isPending: creatingBooking } =
     useCreateBooking();
@@ -117,7 +115,6 @@ export default function BookingForm() {
     mutateAsync: initializePayment,
     isPending: initializingPayment,
     attempt: paymentAttempt,
-    markProviderOpened,
     markSubmitted,
     markProviderClosed,
   } = useInitializePayment();
@@ -205,7 +202,6 @@ export default function BookingForm() {
       // Use access_code to avoid needing user email again
       void accessCode;
       handler.openIframe();
-      markProviderOpened();
     } catch {
       // error toast handled in hook
     }
@@ -252,10 +248,14 @@ export default function BookingForm() {
           {/* Workspace select (only shown if no preselection) */}
           {!preselectedId && (
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1.5">
+              <label
+                htmlFor="booking-workspace"
+                className="block text-sm font-medium text-gray-700 mb-1.5"
+              >
                 Workspace <span className="text-red-500">*</span>
               </label>
               <select
+                id="booking-workspace"
                 value={workspaceId}
                 onChange={(e) => setWorkspaceId(e.target.value)}
                 className="w-full px-3.5 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-gray-200 bg-white"
@@ -279,11 +279,7 @@ export default function BookingForm() {
                   {workspace.name}
                 </p>
                 <p className="text-xs text-gray-500">
-                  {(workspace.hourlyRate / 100).toLocaleString("en-NG", {
-                    style: "currency",
-                    currency: "NGN",
-                    maximumFractionDigits: 0,
-                  })}{" "}
+                  {formatNaira(workspace.hourlyRate)}{" "}
                   / hr · {workspace.totalSeats} seats
                 </p>
               </div>

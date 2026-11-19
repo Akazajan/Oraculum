@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+﻿import { Injectable } from '@nestjs/common';
 import { CreateUserDto } from '../dto/createUser.dto';
 import { UpdateUserDto } from '../dto/updateUser.dto';
 import { User } from '../entities/user.entity';
@@ -11,7 +11,7 @@ import { UpdateUserProvider } from './updateUser.provider';
 import { DeleteUserProvider } from './deleteUser.provider';
 import { AuthResponse } from '../../auth/interface/authResponse.interface';
 import { Response } from 'express';
-import { NotFoundException } from '@nestjs/common';
+import { NotFoundException, ForbiddenException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { UploadProfilePictureProvider } from './uploadProfilePicture.provider';
@@ -32,7 +32,8 @@ import { AuditAction, AuditService } from '../../audit/audit.service';
 export class UsersService {
   async updateTwoFactor(userId: string, data: { twoFactorEnabled: boolean }) {
     const user = await this.findUserById(userId);
-    if (!user) {
+    if (
+    // BE-23 - Prevent self-demotion of the last super-admin account.!user) {
       throw new NotFoundException('User not found');
     }
     user.twoFactorEnabled = data.twoFactorEnabled;
@@ -127,6 +128,18 @@ export class UsersService {
       updateData.role !== undefined &&
       previous.role !== updated.role
     ) {
+      if (
+        previous.role === UserRole.SUPER_ADMIN &&
+        updated.role !== UserRole.SUPER_ADMIN
+      ) {
+        const superAdmins = await this.usersRepository.count({
+          where: { role: UserRole.SUPER_ADMIN },
+        });
+        if (superAdmins <= 1) {
+          throw new ForbiddenException('Cannot demote the last super-admin');
+        }
+      }
+
       await this.auditService.adminAction(
         AuditAction.ROLE_CHANGED,
         {}, // actor comes from the ALS context

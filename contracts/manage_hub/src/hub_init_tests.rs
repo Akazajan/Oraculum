@@ -204,3 +204,32 @@ fn test_multiple_operations_after_init_succeed() {
     // Hub still reports initialized.
     assert!(client.is_hub_initialized());
 }
+
+// ---------------------------------------------------------------------------
+// Migration source-version check
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_migration_rejects_unsupported_source_version() {
+    use crate::migration::MigrationModule;
+    let (env, contract_id, _admin) = setup_initialized();
+    let client = ContractClient::new(&env, &contract_id);
+    let token_id = BytesN::<32>::from_array(&env, &[7u8; 32]);
+    let user = Address::generate(&env);
+    client.issue_token(&token_id, &user, &(env.ledger().timestamp() + 1000));
+
+    env.as_contract(&contract_id, || {
+        let version = MigrationModule::load_token(&env, &token_id).unwrap().current_version;
+
+        let bad = MigrationModule::migrate_token_checked(&env, &token_id, version + 5, None);
+        assert_eq!(bad, Err(Error::InvalidMetadataVersion));
+        // Version unchanged after a failed migration.
+        assert_eq!(
+            MigrationModule::load_token(&env, &token_id).unwrap().current_version,
+            version
+        );
+
+        let ok = MigrationModule::migrate_token_checked(&env, &token_id, version, None).unwrap();
+        assert_eq!(ok.current_version, version + 1);
+    });
+}
