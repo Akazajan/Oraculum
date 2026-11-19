@@ -182,16 +182,64 @@ impl AccessControlModule {
         Ok(())
     }
 
+    /// C21: gate every role grant / revocation behind an authorized
+    /// administrator.
+    ///
+    /// In order, before any state is read for the target or written:
+    /// 1. the system must be initialized and not paused;
+    /// 2. the caller must currently hold admin rights (live storage read) and
+    ///    must have signed the invocation (`require_admin`);
+    /// 3. a blacklisted administrator may not change roles.
+    fn require_role_manager(env: &Env, caller: &Address) -> AccessControlResult<()> {
+        Self::require_initialized(env)?;
+        Self::require_not_paused(env)?;
+        Self::require_admin(env, caller)?;
+        if Self::is_blacklisted(env, caller) {
+            return Err(AccessControlError::UserBlacklisted);
+        }
+        Ok(())
+    }
+
+    /// C21: in multisig mode admin rights are governed by the signer set, so a
+    /// single signer must not be able to grant or strip admin-level roles
+    /// directly — that would bypass the quorum. Such changes have to go
+    /// through `AddAdmin` / `RemoveAdmin` / `TransferAdmin` proposals.
+    fn ensure_no_multisig_admin_bypass(
+        env: &Env,
+        user: &Address,
+        new_role: Option<&UserRole>,
+    ) -> AccessControlResult<()> {
+        if let Some(multisig_config) = Self::get_multisig_config(env) {
+            if multisig_config.admins.contains(user) {
+                return Err(AccessControlError::RoleHierarchyViolation);
+            }
+            if matches!(new_role, Some(UserRole::Admin)) {
+                return Err(AccessControlError::RoleHierarchyViolation);
+            }
+        }
+        Ok(())
+    }
+
     pub fn set_role(
         env: &Env,
         caller: Address,
         user: Address,
         role: UserRole,
     ) -> AccessControlResult<()> {
-        Self::require_initialized(env)?;
-        Self::require_not_paused(env)?;
+        // Authorize the caller first so unauthorized callers always get a
+        // permission error and learn nothing about the target.
+        Self::require_role_manager(env, &caller)?;
         Self::require_not_blacklisted(env, &user)?;
-        Self::require_admin(env, &caller)?;
+        Self::ensure_no_multisig_admin_bypass(env, &user, Some(&role))?;
+
+        // An administrator may not demote themselves (mirrors `remove_role`),
+        // which would otherwise allow locking the system out of admin access.
+        if caller == user
+            && Self::get_role(env, user.clone()) == UserRole::Admin
+            && role != UserRole::Admin
+        {
+            return Err(AccessControlError::RoleHierarchyViolation);
+        }
 
         // C23: prevent demoting the sole admin, which would leave the contract
         // without any administrator.
@@ -625,8 +673,11 @@ impl AccessControlModule {
         // single-admin and multisig branches call `require_auth`). Binding it a
         // second time here made every authorized removal fail the host's
         // "frame is already authorized" check, so authenticate exactly once,
-        // before any state is touched.
-        Self::require_admin(env, &caller)?;
+        // before any state is touched. C21: revocations go through the same
+        // gate as grants (initialized, not paused, live admin, signed, caller
+        // not blacklisted).
+        Self::require_role_manager(env, &caller)?;
+        Self::ensure_no_multisig_admin_bypass(env, &user, None)?;
 
         if let Some(admin) = Self::get_admin(env) {
             if user == admin {
@@ -638,15 +689,28 @@ impl AccessControlModule {
             return Err(AccessControlError::RoleHierarchyViolation);
         }
 
-        let old_role = Self::get_role(env, user.clone());
-        env.storage()
-            .persistent()
-            .set(&DataKey::UserRole(user.clone()), &UserRole::Guest);
+        // C22: revocation is idempotent. Authorization and hierarchy checks
+        // above always run, but once they pass, removing a role from a user
+        // who has none is a successful no-op: no storage write and no event.
+        // An actual revocation deletes the role entry outright, so the user
+        // ends up in exactly the same state as one who was never assigned a
+        // role (`get_role` falls back to `Guest`), no matter how many times
+        // the call is repeated.
+        let role_key = DataKey::UserRole(user.clone());
+        let stored_role: Option<UserRole> = env.storage().persistent().get(&role_key);
+        let old_role = match stored_role {
+            None => return Ok(()),
+            Some(role) => role,
+        };
 
-        env.events().publish(
-            (symbol_short!("role_rm"), user.clone()),
-            (caller.clone(), old_role),
-        );
+        env.storage().persistent().remove(&role_key);
+
+        if old_role != UserRole::Guest {
+            env.events().publish(
+                (symbol_short!("role_rm"), user.clone()),
+                (caller.clone(), old_role),
+            );
+        }
 
         Ok(())
     }
@@ -1522,31 +1586,6 @@ impl AccessControlModule {
         )
     }
 
-    /// Validate the raw parameters of a multisig configuration, returning the
-    /// most specific error for the violation.
-    ///
-    /// Shared by first-time initialization and reconfiguration so both paths
-    /// enforce the same `1 <= threshold <= signer_count` rule and reject
-    /// duplicate signers.
-    fn validate_multisig_input(config: &MultiSigConfig) -> AccessControlResult<()> {
-        if config.admins.is_empty() {
-            return Err(AccessControlError::InvalidAddress);
-        }
-        if config.required_signatures == 0 {
-            return Err(AccessControlError::ThresholdTooLow);
-        }
-        if config.required_signatures > config.admins.len() {
-            return Err(AccessControlError::ThresholdTooHigh);
-        }
-        if config.has_duplicate_admins() {
-            return Err(AccessControlError::DuplicateAdmin);
-        }
-        if !config.validate() {
-            return Err(AccessControlError::InvalidMultisigConfig);
-        }
-        Ok(())
-    }
-
     /// Check if emergency mode is active
     pub fn is_emergency_mode(env: &Env) -> bool {
         env.storage()
@@ -1743,3 +1782,9 @@ impl AccessControlModule {
         }
     }
 }
+
+// Role-management tests live next to this module; wire them in here so they
+// are compiled and run with the crate's test suite.
+#[cfg(test)]
+#[path = "access_control_role_tests.rs"]
+mod access_control_role_tests;

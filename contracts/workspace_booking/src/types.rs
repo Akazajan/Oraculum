@@ -1,18 +1,30 @@
-use soroban_sdk::{contracttype, Address, String};
+use soroban_sdk::{contracttype, Address, String, Vec};
+
+use crate::errors::Error;
 
 /// Maximum allowed length for workspace identifiers.
-#[allot(dead_code)]
+#[allow(dead_code)]
 pub const MAX_ID_LEN: u32 = 64;
 
 /// Maximum allowed length for workspace names.
 #[allow(dead_code)]
 pub const MAX_NAME_LEN: u32 = 128;
 
+/// Maximum hourly rate (in smallest payment-token units).
+///
+/// Rates above this value are rejected so an admin typo (e.g. off-by-one on
+/// decimal places) cannot create an un-bookable workspace.
+/// Set to 10 000 000 000 000 (10^13): enough for any real-world price while
+/// catching obviously wrong values.
+pub const MAX_HOURLY_RATE: u128 = 10_000_000_000_000;
+
 /// Maximum number of history entries a single page may contain.
+#[allow(dead_code)]
 pub const MAX_PAGE_SIZE: u32 = 100;
 
 /// Default number of history entries returned when the caller does not
 /// specify an explicit limit.
+#[allow(dead_code)]
 pub const DEFAULT_PAGE_SIZE: u32 = 20;
 
 /// Category of workspace being registered.
@@ -86,7 +98,6 @@ pub enum BookingStatus {
     Expired,
 }
 
-
 impl BookingStatus {
     /// Stable u32 discriminant used for on-wire / storage serialization.
     ///
@@ -158,6 +169,7 @@ impl BookingStatus {
     }
 
     /// Apply an allowed transition, or return `Err(())` if the edge is invalid.
+    #[allow(clippy::result_unit_err)]
     pub fn transition(&self, to: BookingStatus) -> Result<BookingStatus, ()> {
         if self.can_transition(&to) {
             Ok(to)
@@ -191,6 +203,44 @@ pub struct Workspace {
 
     /// Ledger timestamp when workspace was created
     pub created_at: u64,
+}
+
+impl Workspace {
+    /// Seats still free in a booking window, given the number of seats
+    /// already held by overlapping active bookings.
+    ///
+    /// Never underflows: if `already_booked` somehow exceeds the registered
+    /// capacity the workspace is simply treated as full.
+    pub fn remaining_capacity(&self, already_booked: u32) -> u32 {
+        self.capacity.saturating_sub(already_booked)
+    }
+
+    /// Validate a booking's requested seat count against the registered
+    /// workspace capacity.
+    ///
+    /// * `seats_requested == 0` → `Error::InvalidSeatCount`.
+    /// * `seats_requested > capacity` → `Error::CapacityExceeded`, regardless
+    ///   of other bookings.
+    /// * `seats_requested > capacity − already_booked` →
+    ///   `Error::CapacityExceeded` (not enough seats left in the window).
+    ///
+    /// Must be called before any payment is collected.
+    pub fn validate_capacity(
+        &self,
+        seats_requested: u32,
+        already_booked: u32,
+    ) -> Result<(), Error> {
+        if seats_requested == 0 {
+            return Err(Error::InvalidSeatCount);
+        }
+        if self.capacity == 0 || seats_requested > self.capacity {
+            return Err(Error::CapacityExceeded);
+        }
+        if seats_requested > self.remaining_capacity(already_booked) {
+            return Err(Error::CapacityExceeded);
+        }
+        Ok(())
+    }
 }
 
 /// A confirmed reservation for a workspace.
@@ -231,6 +281,92 @@ pub struct Booking {
     pub completed_at: Option<u64>,
 }
 
+impl Booking {
+    /// Checked length of this booking's window in seconds.
+    pub fn duration(&self) -> Result<u64, Error> {
+        checked_duration(self.start_time, self.end_time)
+    }
+}
+
+// ── Checked timestamp arithmetic ─────────────────────────────────────────────
+//
+// Every booking-window calculation goes through these helpers so that a
+// timestamp that would overflow (or underflow) `u64` is rejected with an
+// error instead of silently wrapping into a bogus window.
+
+/// Seconds in one billable hour.
+pub const SECONDS_PER_HOUR: u64 = 3_600;
+
+/// Checked `timestamp + secs`.
+///
+/// Returns `Error::InvalidTimeRange` if the result would overflow `u64`.
+pub fn checked_add_secs(timestamp: u64, secs: u64) -> Result<u64, Error> {
+    timestamp.checked_add(secs).ok_or(Error::InvalidTimeRange)
+}
+
+/// Checked length of the half-open window [`start_time`, `end_time`).
+///
+/// Returns `Error::InvalidTimeRange` when `end_time <= start_time`, i.e. the
+/// subtraction would underflow or the window would be empty.
+pub fn checked_duration(start_time: u64, end_time: u64) -> Result<u64, Error> {
+    match end_time.checked_sub(start_time) {
+        Some(duration) if duration > 0 => Ok(duration),
+        _ => Err(Error::InvalidTimeRange),
+    }
+}
+
+/// Number of billable hours for a window, rounded **up** to a full hour.
+pub fn checked_billable_hours(start_time: u64, end_time: u64) -> Result<u64, Error> {
+    Ok(checked_duration(start_time, end_time)?.div_ceil(SECONDS_PER_HOUR))
+}
+
+/// Checked booking cost: `hourly_rate × ⌈duration / 3600⌉`.
+///
+/// Returns `Error::InvalidTimeRange` for an invalid window and
+/// `Error::InvalidRate` when the cost overflows or does not fit the `i128`
+/// amount used by token transfers.
+pub fn checked_booking_cost(
+    hourly_rate: u128,
+    start_time: u64,
+    end_time: u64,
+) -> Result<u128, Error> {
+    let hours = checked_billable_hours(start_time, end_time)?;
+    hourly_rate
+        .checked_mul(hours as u128)
+        .filter(|cost| *cost <= i128::MAX as u128)
+        .ok_or(Error::InvalidRate)
+}
+
+/// Pro-rata refund for a booking cancelled at `now`.
+///
+/// * `now < start_time`  → full refund.
+/// * `now >= end_time`   → no refund.
+/// * otherwise           → `amount_paid × (end_time − now) / duration`.
+///
+/// The multiplication is checked; if it would overflow, the refund is
+/// computed as `amount_paid / duration × remaining` instead, which can only
+/// round down and therefore never refunds more than was paid.
+pub fn checked_prorated_refund(
+    amount_paid: u128,
+    start_time: u64,
+    end_time: u64,
+    now: u64,
+) -> Result<u128, Error> {
+    let duration = checked_duration(start_time, end_time)? as u128;
+    if now >= end_time {
+        return Ok(0);
+    }
+    if now < start_time {
+        return Ok(amount_paid);
+    }
+    let remaining = checked_duration(now, end_time)? as u128;
+    let refund = match amount_paid.checked_mul(remaining) {
+        Some(product) => product / duration,
+        None => (amount_paid / duration).saturating_mul(remaining),
+    };
+    Ok(refund.min(amount_paid))
+}
+
 /// Request parameters for a page of booking history.
 ///
 /// Pagination is cursor-based and stable: entries are ordered by ascending
@@ -249,14 +385,27 @@ pub struct PageRequest {
     pub cursor: Option<u64>,
 }
 
-/// A bounded page of booking history entries.
+/// A bounded page of booking IDs for a workspace, returned by
+/// `get_workspace_bookings_page`.
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
-pub struct Page<T> {
-    /// Entries in this page, in stable ascending order.
-    pub entries: Vec<T>,
+pub struct WorkspaceBookingsPage {
+    /// Booking IDs in this page, in stable insertion order.
+    pub booking_ids: Vec<String>,
 
-    /// Continuation token for the next page, or `None` when the history is
+    /// Offset to pass to fetch the next page, or `None` when the history is
     /// exhausted.
-    pub next_cursor: Option<u64>,
+    pub next_offset: Option<u32>,
+}
+
+/// A paginated slice of booking IDs for a workspace.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct WorkspaceBookingsPage {
+    /// Booking IDs for this page, in registration order.
+    pub booking_ids: Vec<String>,
+
+    /// Offset to pass as `offset` in the next call, or `None` when this page
+    /// covers the last entry.
+    pub next_offset: Option<u32>,
 }
