@@ -2184,3 +2184,141 @@ fn test_898_cancellation_of_other_bookings_does_not_drain_contract() {
     assert_eq!(token.balance(&contract_id), 500i128);
     assert_eq!(client.get_booking(&b2).status, BookingStatus::Active);
 }
+
+// -- #899: Owner / admin authorization for workspace updates -----------------
+
+fn setup_owned_workspace(
+    env: &Env,
+) -> (WorkspaceBookingContractClient<'_>, Address, Address, String) {
+    let contract_id = setup_contract(env);
+    let client = WorkspaceBookingContractClient::new(env, &contract_id);
+    let admin = Address::generate(env);
+    let owner = Address::generate(env);
+    let token = Address::generate(env);
+    env.mock_all_auths();
+    client.initialize(&admin, &token);
+    let ws_id = String::from_str(env, "ws-899");
+    client.register_workspace(
+        &admin,
+        &ws_id,
+        &String::from_str(env, "Owned Office"),
+        &WorkspaceType::PrivateOffice,
+        &2u32,
+        &1_000u128,
+    );
+    client.set_workspace_owner(&admin, &ws_id, &owner);
+    (client, admin, owner, ws_id)
+}
+
+#[test]
+fn test_899_owner_can_update_availability_and_rate() {
+    let env = Env::default();
+    let (client, _admin, owner, ws_id) = setup_owned_workspace(&env);
+    assert_eq!(client.get_workspace_owner(&ws_id), Some(owner.clone()));
+
+    client.set_workspace_availability(&owner, &ws_id, &false);
+    assert_ne!(
+        client.get_workspace(&ws_id).availability,
+        WorkspaceAvailability::Available
+    );
+    client.set_workspace_availability(&owner, &ws_id, &true);
+    assert_eq!(
+        client.get_workspace(&ws_id).availability,
+        WorkspaceAvailability::Available
+    );
+
+    client.set_workspace_rate(&owner, &ws_id, &2_500u128);
+    // The owner's signature was required for the update.
+    let auths = env.auths();
+    assert_eq!(auths.len(), 1);
+    assert_eq!(auths[0].0, owner);
+    assert_eq!(client.get_workspace(&ws_id).hourly_rate, 2_500u128);
+}
+
+#[test]
+fn test_899_admin_can_still_update() {
+    let env = Env::default();
+    let (client, admin, _owner, ws_id) = setup_owned_workspace(&env);
+    client.set_workspace_rate(&admin, &ws_id, &1_500u128);
+    let auths = env.auths();
+    assert_eq!(auths.len(), 1);
+    assert_eq!(auths[0].0, admin);
+    assert_eq!(client.get_workspace(&ws_id).hourly_rate, 1_500u128);
+}
+
+#[test]
+fn test_899_stranger_cannot_update_workspace() {
+    let env = Env::default();
+    let (client, _admin, _owner, ws_id) = setup_owned_workspace(&env);
+    let stranger = Address::generate(&env);
+    assert_eq!(
+        client.try_set_workspace_availability(&stranger, &ws_id, &false),
+        Err(Ok(Error::Unauthorized))
+    );
+    assert_eq!(
+        client.try_set_workspace_rate(&stranger, &ws_id, &1u128),
+        Err(Ok(Error::Unauthorized))
+    );
+    let ws = client.get_workspace(&ws_id);
+    assert_eq!(ws.availability, WorkspaceAvailability::Available);
+    assert_eq!(ws.hourly_rate, 1_000u128);
+}
+
+#[test]
+fn test_899_owner_of_other_workspace_is_rejected() {
+    let env = Env::default();
+    let (client, admin, owner, ws_id) = setup_owned_workspace(&env);
+    let other_id = String::from_str(&env, "ws-899-other");
+    client.register_workspace(
+        &admin,
+        &other_id,
+        &String::from_str(&env, "Other Office"),
+        &WorkspaceType::PrivateOffice,
+        &1u32,
+        &1_000u128,
+    );
+    assert_eq!(
+        client.try_set_workspace_rate(&owner, &other_id, &5u128),
+        Err(Ok(Error::Unauthorized))
+    );
+    assert_eq!(client.get_workspace(&other_id).hourly_rate, 1_000u128);
+    // Owner still controls its own workspace.
+    client.set_workspace_rate(&owner, &ws_id, &5u128);
+}
+
+#[test]
+fn test_899_only_admin_assigns_owner() {
+    let env = Env::default();
+    let (client, _admin, owner, ws_id) = setup_owned_workspace(&env);
+    let stranger = Address::generate(&env);
+    // Neither the current owner nor a stranger may (re)assign ownership.
+    assert_eq!(
+        client.try_set_workspace_owner(&owner, &ws_id, &stranger),
+        Err(Ok(Error::Unauthorized))
+    );
+    assert_eq!(
+        client.try_set_workspace_owner(&stranger, &ws_id, &stranger),
+        Err(Ok(Error::Unauthorized))
+    );
+    assert_eq!(client.get_workspace_owner(&ws_id), Some(owner));
+}
+
+#[test]
+fn test_899_set_owner_unknown_workspace_fails() {
+    let env = Env::default();
+    let (client, admin, owner, _ws_id) = setup_owned_workspace(&env);
+    assert_eq!(
+        client.try_set_workspace_owner(&admin, &String::from_str(&env, "missing"), &owner),
+        Err(Ok(Error::WorkspaceNotFound))
+    );
+}
+
+#[test]
+#[should_panic]
+fn test_899_owner_update_requires_signature() {
+    let env = Env::default();
+    let (client, _admin, owner, ws_id) = setup_owned_workspace(&env);
+    // Drop the blanket auth mock: the owner has not signed this invocation.
+    env.set_auths(&[]);
+    client.set_workspace_availability(&owner, &ws_id, &false);
+}

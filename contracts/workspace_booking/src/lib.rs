@@ -47,6 +47,9 @@ pub enum DataKey {
     ActiveWorkspaceBookings(String),
     /// Pending two-step admin transfer.
     PendingAdminTransfer,
+    /// Optional owner/operator address for a workspace, allowed to manage
+    /// that workspace's availability and booking configuration.
+    WorkspaceOwner(String),
 }
 
 #[contracttype]
@@ -75,6 +78,30 @@ impl WorkspaceBookingContract {
     fn require_admin(env: &Env, caller: &Address) -> Result<(), Error> {
         let admin = Self::get_admin(env)?;
         if caller != &admin {
+            return Err(Error::Unauthorized);
+        }
+        caller.require_auth();
+        Ok(())
+    }
+
+    /// Authorize a change to `workspace_id`'s availability or booking
+    /// configuration.
+    ///
+    /// The caller must be either the contract admin or the workspace's
+    /// registered owner, **and** must sign the invocation. Any other address
+    /// is rejected with `Error::Unauthorized` before state is read or written.
+    fn require_owner_or_admin(
+        env: &Env,
+        caller: &Address,
+        workspace_id: &String,
+    ) -> Result<(), Error> {
+        let admin = Self::get_admin(env)?;
+        let owner: Option<Address> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::WorkspaceOwner(workspace_id.clone()));
+        let is_owner = owner.as_ref() == Some(caller);
+        if caller != &admin && !is_owner {
             return Err(Error::Unauthorized);
         }
         caller.require_auth();
@@ -359,6 +386,42 @@ impl WorkspaceBookingContract {
         Ok(())
     }
 
+    /// Assign (or replace) the owner of a workspace (admin only).
+    ///
+    /// The owner may change the workspace's availability and hourly rate
+    /// alongside the admin. Ownership itself can only be changed by the admin.
+    pub fn set_workspace_owner(
+        env: Env,
+        caller: Address,
+        workspace_id: String,
+        owner: Address,
+    ) -> Result<(), Error> {
+        Self::require_admin(&env, &caller)?;
+
+        if !env
+            .storage()
+            .persistent()
+            .has(&DataKey::Workspace(workspace_id.clone()))
+        {
+            return Err(Error::WorkspaceNotFound);
+        }
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::WorkspaceOwner(workspace_id.clone()), &owner);
+
+        env.events()
+            .publish((symbol_short!("ws_owner"), workspace_id), (owner,));
+        Ok(())
+    }
+
+    /// Return the owner of a workspace, if one has been assigned.
+    pub fn get_workspace_owner(env: Env, workspace_id: String) -> Option<Address> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::WorkspaceOwner(workspace_id))
+    }
+
     /// Returns `true` if the workspace has any currently-active booking.
     ///
     /// A booking is considered active when its `status` is `Active`
@@ -394,13 +457,16 @@ impl WorkspaceBookingContract {
     ///   regardless of whether active bookings exist.
     /// - Existing bookings are never modified or removed by this function —
     ///   deactivation only prevents *new* bookings from being created.
+    ///
+    /// Only the admin or the workspace owner may call this, and the caller
+    /// must authorize the invocation.
     pub fn set_workspace_availability(
         env: Env,
         caller: Address,
         workspace_id: String,
         is_available: bool,
     ) -> Result<(), Error> {
-        Self::require_admin(&env, &caller)?;
+        Self::require_owner_or_admin(&env, &caller, &workspace_id)?;
 
         let mut workspace: Workspace = env
             .storage()
@@ -429,13 +495,16 @@ impl WorkspaceBookingContract {
     }
 
     /// Update the hourly rate for a workspace (applies to future bookings only).
+    ///
+    /// Only the admin or the workspace owner may call this, and the caller
+    /// must authorize the invocation.
     pub fn set_workspace_rate(
         env: Env,
         caller: Address,
         workspace_id: String,
         hourly_rate: u128,
     ) -> Result<(), Error> {
-        Self::require_admin(&env, &caller)?;
+        Self::require_owner_or_admin(&env, &caller, &workspace_id)?;
 
         if hourly_rate == 0 {
             return Err(Error::InvalidRate);
