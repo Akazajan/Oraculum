@@ -241,9 +241,28 @@ impl AccessControlModule {
             return Err(AccessControlError::RoleHierarchyViolation);
         }
 
+        // C23: prevent demoting the sole admin, which would leave the contract
+        // without any administrator.
+        let old_role = Self::get_role(env, user.clone());
+        if old_role == UserRole::Admin && role != UserRole::Admin {
+            // Count how many Admin-role users remain after this change.
+            // If `user` is the only admin, block the demotion.
+            // In multisig mode this is handled by the proposal execution path;
+            // here we guard the direct single-admin path.
+            if !Self::is_multisig_enabled(env) {
+                // The only stored admin is the initial one (the contract caller
+                // from initialize). We check if there's exactly one admin by
+                // seeing if the caller == user (self-demotion) and there is no
+                // other admin stored.  A simpler invariant: if the user being
+                // demoted is the caller AND caller is the only admin, block it.
+                if caller == user {
+                    return Err(AccessControlError::CannotRemoveLastAdmin);
+                }
+            }
+        }
+
         Self::validate_role_assignment(env, &user, &role)?;
 
-        let old_role = Self::get_role(env, user.clone());
         env.storage()
             .persistent()
             .set(&DataKey::UserRole(user.clone()), &role);

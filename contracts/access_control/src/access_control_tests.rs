@@ -2377,6 +2377,11 @@ fn test_c27_expired_proposal_cannot_be_approved() {
     });
 }
 
+// ── C23 — Keep the final administrator from being removed ────────────────────
+
+/// Removing the only remaining admin via a multisig proposal is rejected.
+#[test]
+fn test_c23_cannot_remove_last_admin_via_proposal() {
 // ── C25 — Validate multisig approval thresholds ──────────────────────────────
 
 /// A required_signatures of zero is rejected during multisig initialisation.
@@ -2389,6 +2394,143 @@ fn test_c25_zero_threshold_rejected() {
     let admin2 = Address::generate(&env);
 
     env.as_contract(&contract_id, || {
+        // Two admins, threshold = 1 so each admin can act alone.
+        let admins = Vec::from_array(&env, [admin1.clone(), admin2.clone()]);
+        AccessControlModule::initialize_multisig(&env, admins, 1, None).unwrap();
+
+        // Remove admin2 — succeeds because admin1 remains.
+        let remove2_id = AccessControlModule::create_proposal(
+            &env,
+            admin1.clone(),
+            ProposalAction::RemoveAdmin(admin2.clone()),
+        )
+        .unwrap();
+        // Proposer implicitly approves; threshold = 1, so it executes immediately.
+        let _ = AccessControlModule::approve_proposal(&env, admin1.clone(), remove2_id);
+
+        // Now only admin1 remains in the multisig config.
+        // Attempting to also remove admin1 must fail.
+        let remove1_id = AccessControlModule::create_proposal(
+            &env,
+            admin1.clone(),
+            ProposalAction::RemoveAdmin(admin1.clone()),
+        )
+        .unwrap();
+
+        let err =
+            AccessControlModule::approve_proposal(&env, admin1.clone(), remove1_id)
+                .unwrap_err();
+        assert_eq!(err, AccessControlError::CannotRemoveLastAdmin);
+    });
+}
+
+/// Demoting the only admin to Guest via set_role is blocked in single-admin mode.
+#[test]
+fn test_c23_cannot_demote_sole_admin_via_set_role() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(crate::AccessControl, ());
+    let admin = Address::generate(&env);
+
+    env.as_contract(&contract_id, || {
+        // Single-admin (non-multisig) initialisation.
+        AccessControlModule::initialize(&env, admin.clone(), None).unwrap();
+
+        // The contract must prevent removing the sole admin's role.
+        let err = AccessControlModule::set_role(
+            &env,
+            admin.clone(),
+            admin.clone(),
+            UserRole::Guest,
+        )
+        .unwrap_err();
+        assert_eq!(err, AccessControlError::CannotRemoveLastAdmin);
+    });
+}
+
+// ── C24 — Enforce access-control pause on mutations ──────────────────────────
+
+/// set_role is blocked while the contract is paused, and unblocked after unpause.
+#[test]
+fn test_c24_set_role_blocked_while_paused() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(crate::AccessControl, ());
+    let admin = Address::generate(&env);
+    let user = Address::generate(&env);
+
+    env.as_contract(&contract_id, || {
+        AccessControlModule::initialize(&env, admin.clone(), None).unwrap();
+        AccessControlModule::pause(&env, admin.clone()).unwrap();
+
+        // Mutation is blocked while paused.
+        let err = AccessControlModule::set_role(
+            &env,
+            admin.clone(),
+            user.clone(),
+            UserRole::Member,
+        )
+        .unwrap_err();
+        assert_eq!(err, AccessControlError::ContractPaused);
+
+        // After unpausing, the same mutation must succeed.
+        AccessControlModule::unpause(&env, admin.clone()).unwrap();
+        AccessControlModule::set_role(
+            &env,
+            admin.clone(),
+            user.clone(),
+            UserRole::Member,
+        )
+        .unwrap();
+        assert_eq!(
+            AccessControlModule::get_role(&env, user.clone()),
+            UserRole::Member
+        );
+    });
+}
+
+/// check_access is blocked while the contract is paused.
+#[test]
+fn test_c24_check_access_blocked_while_paused() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(crate::AccessControl, ());
+    let admin = Address::generate(&env);
+    let user = Address::generate(&env);
+
+    env.as_contract(&contract_id, || {
+        AccessControlModule::initialize(&env, admin.clone(), None).unwrap();
+        AccessControlModule::set_role(
+            &env,
+            admin.clone(),
+            user.clone(),
+            UserRole::Member,
+        )
+        .unwrap();
+
+        AccessControlModule::pause(&env, admin.clone()).unwrap();
+
+        let err =
+            AccessControlModule::check_access(&env, user.clone(), UserRole::Member).unwrap_err();
+        assert_eq!(err, AccessControlError::ContractPaused);
+    });
+}
+
+/// The authorised unpause operation succeeds while the contract is paused.
+#[test]
+fn test_c24_authorized_unpause_succeeds() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(crate::AccessControl, ());
+    let admin = Address::generate(&env);
+
+    env.as_contract(&contract_id, || {
+        AccessControlModule::initialize(&env, admin.clone(), None).unwrap();
+        AccessControlModule::pause(&env, admin.clone()).unwrap();
+        assert!(AccessControlModule::is_paused(&env));
+
+        AccessControlModule::unpause(&env, admin.clone()).unwrap();
+        assert!(!AccessControlModule::is_paused(&env));
         let admins = Vec::from_array(&env, [admin1.clone(), admin2.clone()]);
         // required_signatures = 0 must be rejected.
         let err =

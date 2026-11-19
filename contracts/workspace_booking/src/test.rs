@@ -55,6 +55,123 @@ fn test_initialize_twice_fails() {
     client.initialize(&admin, &token);
 }
 
+// ── C17 — Validate payment-token configuration ────────────────────────────────
+
+/// Passing the admin address as the payment token is rejected.
+#[test]
+fn test_c17_payment_token_equal_to_admin_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = setup_contract(&env);
+    let client = WorkspaceBookingContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+
+    // Using the admin address as the payment token must fail.
+    let result = client.try_initialize(&admin, &admin);
+    assert_eq!(result, Err(Ok(Error::InvalidPaymentToken)));
+}
+
+/// Initializing with a valid, distinct payment token address succeeds.
+#[test]
+fn test_c17_valid_payment_token_accepted() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = setup_contract(&env);
+    let client = WorkspaceBookingContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let token = Address::generate(&env);
+
+    client.initialize(&admin, &token);
+    assert_eq!(client.payment_token(), token);
+}
+
+// ── C18 — Enforce booking state transitions ───────────────────────────────────
+
+/// Completing a booking that is already Completed is rejected.
+#[test]
+fn test_c18_complete_already_completed_booking_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = setup_contract(&env);
+    let client = WorkspaceBookingContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let member = Address::generate(&env);
+    let token_address = setup_token(&env, &admin, &member, 10_000i128);
+
+    client.initialize(&admin, &token_address);
+    client.register_workspace(
+        &admin,
+        &String::from_str(&env, "ws-c18"),
+        &String::from_str(&env, "C18 Desk"),
+        &WorkspaceType::HotDesk,
+        &1u32,
+        &500u128,
+    );
+
+    let now = env.ledger().timestamp();
+    let start = now + 60;
+    let end = start + 3_600;
+
+    client.book_workspace(
+        &member,
+        &String::from_str(&env, "bk-c18"),
+        &String::from_str(&env, "ws-c18"),
+        &start,
+        &end,
+        &1u32,
+    );
+
+    // First completion succeeds.
+    advance_time(&env, 4_000);
+    client.complete_booking(&admin, &String::from_str(&env, "bk-c18"));
+
+    // Second completion on a Completed booking must be rejected.
+    let result = client.try_complete_booking(&admin, &String::from_str(&env, "bk-c18"));
+    assert_eq!(result, Err(Ok(Error::BookingNotActive)));
+}
+
+/// Completing a Cancelled booking is rejected.
+#[test]
+fn test_c18_complete_cancelled_booking_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = setup_contract(&env);
+    let client = WorkspaceBookingContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let member = Address::generate(&env);
+    let token_address = setup_token(&env, &admin, &member, 10_000i128);
+
+    client.initialize(&admin, &token_address);
+    client.register_workspace(
+        &admin,
+        &String::from_str(&env, "ws-c18b"),
+        &String::from_str(&env, "C18 Desk B"),
+        &WorkspaceType::HotDesk,
+        &1u32,
+        &500u128,
+    );
+
+    let now = env.ledger().timestamp();
+    let start = now + 60;
+    let end = start + 3_600;
+
+    client.book_workspace(
+        &member,
+        &String::from_str(&env, "bk-c18b"),
+        &String::from_str(&env, "ws-c18b"),
+        &start,
+        &end,
+        &1u32,
+    );
+
+    // Cancel first.
+    client.cancel_booking(&member, &String::from_str(&env, "bk-c18b"));
+
+    // Then trying to complete a Cancelled booking must fail.
+    let result = client.try_complete_booking(&admin, &String::from_str(&env, "bk-c18b"));
+    assert_eq!(result, Err(Ok(Error::BookingNotActive)));
+}
+
 #[test]
 fn test_admin_transfer_success_rotates_admin() {
     let env = Env::default();
