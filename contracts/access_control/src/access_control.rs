@@ -670,15 +670,28 @@ impl AccessControlModule {
             return Err(AccessControlError::RoleHierarchyViolation);
         }
 
-        let old_role = Self::get_role(env, user.clone());
-        env.storage()
-            .persistent()
-            .set(&DataKey::UserRole(user.clone()), &UserRole::Guest);
+        // C22: revocation is idempotent. Authorization and hierarchy checks
+        // above always run, but once they pass, removing a role from a user
+        // who has none is a successful no-op: no storage write and no event.
+        // An actual revocation deletes the role entry outright, so the user
+        // ends up in exactly the same state as one who was never assigned a
+        // role (`get_role` falls back to `Guest`), no matter how many times
+        // the call is repeated.
+        let role_key = DataKey::UserRole(user.clone());
+        let stored_role: Option<UserRole> = env.storage().persistent().get(&role_key);
+        let old_role = match stored_role {
+            None => return Ok(()),
+            Some(role) => role,
+        };
 
-        env.events().publish(
-            (symbol_short!("role_rm"), user.clone()),
-            (caller.clone(), old_role),
-        );
+        env.storage().persistent().remove(&role_key);
+
+        if old_role != UserRole::Guest {
+            env.events().publish(
+                (symbol_short!("role_rm"), user.clone()),
+                (caller.clone(), old_role),
+            );
+        }
 
         Ok(())
     }

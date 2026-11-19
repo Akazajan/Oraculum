@@ -4,8 +4,9 @@ mod role_access_control_tests {
     use crate::errors::AccessControlError;
     use crate::types::{AccessControlConfig, UserRole};
     use soroban_sdk::{
-        testutils::{Address as _, MockAuth, MockAuthInvoke},
-        Address, Env, IntoVal, Vec,
+        symbol_short,
+        testutils::{Address as _, Events, MockAuth, MockAuthInvoke},
+        Address, Env, IntoVal, Symbol, TryFromVal, Vec,
     };
 
     fn setup_initialized_env() -> (Env, Address, Address, Address, Address) {
@@ -650,5 +651,125 @@ mod role_access_control_tests {
                 .unwrap()
         });
         assert_eq!(role_of(&env, &id, &user), UserRole::Member);
+    }
+
+    // ── #906 / C22: idempotent role revocation ───────────────────────────────
+
+    fn role_rm_events(env: &Env) -> u32 {
+        let target = symbol_short!("role_rm");
+        let mut count = 0;
+        for (_, topics, _) in env.events().all().iter() {
+            if let Some(first) = topics.get(0) {
+                if Symbol::try_from_val(env, &first).ok() == Some(target.clone()) {
+                    count += 1;
+                }
+            }
+        }
+        count
+    }
+
+    fn has_role_entry(env: &Env, contract_id: &Address, user: &Address) -> bool {
+        ac(env, contract_id, || {
+            env.storage()
+                .persistent()
+                .has(&DataKey::UserRole(user.clone()))
+        })
+    }
+
+    /// Removing the same role repeatedly always succeeds, leaves the user as
+    /// Guest with no stored role entry, and only the first call emits an event.
+    #[test]
+    fn test_c22_repeated_revocation_is_stable() {
+        let (env, id, admin, user, _) = setup_initialized_env();
+        let client = crate::AccessControlClient::new(&env, &id);
+
+        client.set_role(&admin, &user, &UserRole::Member);
+        assert!(has_role_entry(&env, &id, &user));
+
+        client.remove_role(&admin, &user);
+        assert_eq!(role_rm_events(&env), 1);
+        assert_eq!(client.get_role(&user), UserRole::Guest);
+        assert!(!has_role_entry(&env, &id, &user));
+
+        for _ in 0..3 {
+            client.remove_role(&admin, &user);
+            assert_eq!(role_rm_events(&env), 0, "repeat removal must be a no-op");
+            assert_eq!(client.get_role(&user), UserRole::Guest);
+            assert!(!has_role_entry(&env, &id, &user));
+        }
+
+        // The user can be re-granted a role afterwards as normal.
+        client.set_role(&admin, &user, &UserRole::Member);
+        assert_eq!(client.get_role(&user), UserRole::Member);
+    }
+
+    /// Revoking a role from a user that never had one is a no-op that does
+    /// not create a storage entry.
+    #[test]
+    fn test_c22_revoking_unassigned_user_writes_nothing() {
+        let (env, id, admin, user, _) = setup_initialized_env();
+        let client = crate::AccessControlClient::new(&env, &id);
+
+        client.remove_role(&admin, &user);
+        assert_eq!(role_rm_events(&env), 0);
+        assert!(!has_role_entry(&env, &id, &user));
+        assert_eq!(client.get_role(&user), UserRole::Guest);
+    }
+
+    /// An explicit Guest entry is cleaned up, but since the effective role
+    /// does not change no revocation event is emitted.
+    #[test]
+    fn test_c22_explicit_guest_entry_is_cleared_silently() {
+        let (env, id, admin, user, _) = setup_initialized_env();
+        let client = crate::AccessControlClient::new(&env, &id);
+
+        client.set_role(&admin, &user, &UserRole::Guest);
+        assert!(has_role_entry(&env, &id, &user));
+
+        client.remove_role(&admin, &user);
+        assert_eq!(role_rm_events(&env), 0);
+        assert!(!has_role_entry(&env, &id, &user));
+        assert_eq!(client.get_role(&user), UserRole::Guest);
+    }
+
+    /// Idempotence never weakens authorization: a repeated (no-op) removal
+    /// by a non-admin, or of the primary admin, is still rejected.
+    #[test]
+    fn test_c22_noop_revocation_still_requires_authorization() {
+        let (env, id, admin, user, stranger) = setup_initialized_env();
+
+        ac(&env, &id, || {
+            assert_eq!(
+                AccessControlModule::remove_role(&env, stranger.clone(), user.clone()).unwrap_err(),
+                AccessControlError::AdminRequired
+            );
+        });
+        for _ in 0..2 {
+            let result = ac(&env, &id, || {
+                AccessControlModule::remove_role(&env, admin.clone(), admin.clone())
+            });
+            assert_eq!(
+                result.unwrap_err(),
+                AccessControlError::RoleHierarchyViolation
+            );
+        }
+        assert_eq!(role_of(&env, &id, &admin), UserRole::Admin);
+    }
+
+    /// Revoking one user's role repeatedly does not disturb anyone else's.
+    #[test]
+    fn test_c22_repeated_revocation_does_not_touch_other_roles() {
+        let (env, id, admin, user1, user2) = setup_initialized_env();
+        let client = crate::AccessControlClient::new(&env, &id);
+
+        client.set_role(&admin, &user1, &UserRole::Member);
+        client.set_role(&admin, &user2, &UserRole::Admin);
+
+        client.remove_role(&admin, &user1);
+        client.remove_role(&admin, &user1);
+
+        assert_eq!(client.get_role(&user1), UserRole::Guest);
+        assert_eq!(client.get_role(&user2), UserRole::Admin);
+        assert_eq!(client.get_role(&admin), UserRole::Admin);
     }
 }
