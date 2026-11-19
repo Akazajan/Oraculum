@@ -2317,4 +2317,432 @@ fn test_896_whole_workspace_reservation_cannot_overlap() {
         ),
         Err(Ok(Error::CapacityExceeded))
     );
+// -- #897: Validate workspace capacity before booking -------------------------
+
+fn sample_workspace(env: &Env, capacity: u32) -> Workspace {
+    Workspace {
+        id: String::from_str(env, "ws-cap-unit"),
+        name: String::from_str(env, "Capacity Unit"),
+        workspace_type: WorkspaceType::MeetingRoom,
+        capacity,
+        hourly_rate: 100,
+        availability: WorkspaceAvailability::Available,
+        created_at: 0,
+    }
+}
+
+#[test]
+fn test_897_validate_capacity_rules() {
+    let env = Env::default();
+    let ws = sample_workspace(&env, 4);
+    // Zero seats is never a valid request.
+    assert_eq!(ws.validate_capacity(0, 0), Err(Error::InvalidSeatCount));
+    // Within and exactly at the registered capacity.
+    assert_eq!(ws.validate_capacity(1, 0), Ok(()));
+    assert_eq!(ws.validate_capacity(4, 0), Ok(()));
+    // Above the registered capacity, regardless of other bookings.
+    assert_eq!(ws.validate_capacity(5, 0), Err(Error::CapacityExceeded));
+    assert_eq!(
+        ws.validate_capacity(u32::MAX, 0),
+        Err(Error::CapacityExceeded)
+    );
+    // Remaining-capacity boundary.
+    assert_eq!(ws.validate_capacity(1, 3), Ok(()));
+    assert_eq!(ws.validate_capacity(2, 3), Err(Error::CapacityExceeded));
+    assert_eq!(ws.validate_capacity(1, 4), Err(Error::CapacityExceeded));
+    // Inconsistent over-booked state is treated as full, never underflows.
+    assert_eq!(ws.remaining_capacity(10), 0);
+    assert_eq!(ws.validate_capacity(1, 10), Err(Error::CapacityExceeded));
+    // A zero-capacity record can never accept a booking.
+    let empty = sample_workspace(&env, 0);
+    assert_eq!(empty.validate_capacity(1, 0), Err(Error::CapacityExceeded));
+}
+
+#[test]
+fn test_897_over_capacity_booking_rejected_before_payment() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = setup_contract(&env);
+    let client = WorkspaceBookingContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let member = Address::generate(&env);
+    let token_address = setup_token(&env, &admin, &member, 50_000i128);
+    client.initialize(&admin, &token_address);
+    let ws_id = String::from_str(&env, "ws-897");
+    client.register_workspace(
+        &admin,
+        &ws_id,
+        &String::from_str(&env, "Cap 2"),
+        &WorkspaceType::MeetingRoom,
+        &2u32,
+        &100u128,
+    );
+    let token = TokenClient::new(&env, &token_address);
+    let start = env.ledger().timestamp() + 60;
+    let end = start + 3_600;
+    let result = client.try_book_workspace(
+        &member,
+        &String::from_str(&env, "bk-897-a"),
+        &ws_id,
+        &start,
+        &end,
+        &3u32,
+    );
+    assert_eq!(result, Err(Ok(Error::CapacityExceeded)));
+    assert_eq!(token.balance(&member), 50_000i128);
+    assert_eq!(client.get_workspace_bookings(&ws_id).len(), 0);
+
+    // Exactly the registered capacity is accepted.
+    client.book_workspace(
+        &member,
+        &String::from_str(&env, "bk-897-b"),
+        &ws_id,
+        &start,
+        &end,
+        &2u32,
+    );
+    assert_eq!(token.balance(&member), 50_000i128 - 100);
+}
+
+// -- #898: One-time booking cancellation --------------------------------------
+
+#[test]
+fn test_898_repeat_cancellation_never_refunds_twice() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = setup_contract(&env);
+    let client = WorkspaceBookingContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let member = Address::generate(&env);
+    let token_address = setup_token(&env, &admin, &member, 10_000i128);
+    client.initialize(&admin, &token_address);
+    let ws_id = String::from_str(&env, "ws-898");
+    client.register_workspace(
+        &admin,
+        &ws_id,
+        &String::from_str(&env, "Once Room"),
+        &WorkspaceType::MeetingRoom,
+        &1u32,
+        &1_000u128,
+    );
+    let token = TokenClient::new(&env, &token_address);
+    let booking_id = String::from_str(&env, "bk-898");
+    let start = env.ledger().timestamp() + 60;
+    let end = start + 3_600;
+    client.book_workspace(&member, &booking_id, &ws_id, &start, &end, &1u32);
+    assert_eq!(token.balance(&member), 9_000i128);
+    assert_eq!(token.balance(&contract_id), 1_000i128);
+
+    client.cancel_booking(&member, &booking_id);
+    assert_eq!(token.balance(&member), 10_000i128);
+    assert_eq!(token.balance(&contract_id), 0i128);
+    let cancelled = client.get_booking(&booking_id);
+    assert_eq!(cancelled.status, BookingStatus::Cancelled);
+    let cancelled_at = cancelled.cancelled_at;
+    assert!(cancelled_at.is_some());
+
+    // Repeated attempts by the member and by the admin all fail and move no funds.
+    advance_time(&env, 10);
+    assert_eq!(
+        client.try_cancel_booking(&member, &booking_id),
+        Err(Ok(Error::BookingAlreadyCancelled))
+    );
+    assert_eq!(
+        client.try_cancel_booking(&admin, &booking_id),
+        Err(Ok(Error::BookingAlreadyCancelled))
+    );
+    assert_eq!(token.balance(&member), 10_000i128);
+    assert_eq!(token.balance(&contract_id), 0i128);
+    // The original cancellation record is left untouched.
+    let after = client.get_booking(&booking_id);
+    assert_eq!(after.status, BookingStatus::Cancelled);
+    assert_eq!(after.cancelled_at, cancelled_at);
+}
+
+#[test]
+fn test_898_cancellation_of_other_bookings_does_not_drain_contract() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = setup_contract(&env);
+    let client = WorkspaceBookingContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let m1 = Address::generate(&env);
+    let m2 = Address::generate(&env);
+    let token_address = setup_token(&env, &admin, &m1, 10_000i128);
+    StellarAssetClient::new(&env, &token_address)
+        .mock_all_auths()
+        .mint(&m2, &10_000i128);
+    client.initialize(&admin, &token_address);
+    let ws_id = String::from_str(&env, "ws-898-b");
+    client.register_workspace(
+        &admin,
+        &ws_id,
+        &String::from_str(&env, "Shared Room"),
+        &WorkspaceType::MeetingRoom,
+        &2u32,
+        &500u128,
+    );
+    let token = TokenClient::new(&env, &token_address);
+    let start = env.ledger().timestamp() + 60;
+    let end = start + 3_600;
+    let b1 = String::from_str(&env, "bk-898-1");
+    let b2 = String::from_str(&env, "bk-898-2");
+    client.book_workspace(&m1, &b1, &ws_id, &start, &end, &1u32);
+    client.book_workspace(&m2, &b2, &ws_id, &start, &end, &1u32);
+    assert_eq!(token.balance(&contract_id), 1_000i128);
+
+    client.cancel_booking(&m1, &b1);
+    // A second cancel of b1 must not be paid out of m2's escrowed funds.
+    assert_eq!(
+        client.try_cancel_booking(&m1, &b1),
+        Err(Ok(Error::BookingAlreadyCancelled))
+    );
+    assert_eq!(token.balance(&m1), 10_000i128);
+    assert_eq!(token.balance(&contract_id), 500i128);
+    assert_eq!(client.get_booking(&b2).status, BookingStatus::Active);
+}
+
+// -- #899: Owner / admin authorization for workspace updates -----------------
+
+fn setup_owned_workspace(
+    env: &Env,
+) -> (WorkspaceBookingContractClient<'_>, Address, Address, String) {
+    let contract_id = setup_contract(env);
+    let client = WorkspaceBookingContractClient::new(env, &contract_id);
+    let admin = Address::generate(env);
+    let owner = Address::generate(env);
+    let token = Address::generate(env);
+    env.mock_all_auths();
+    client.initialize(&admin, &token);
+    let ws_id = String::from_str(env, "ws-899");
+    client.register_workspace(
+        &admin,
+        &ws_id,
+        &String::from_str(env, "Owned Office"),
+        &WorkspaceType::PrivateOffice,
+        &2u32,
+        &1_000u128,
+    );
+    client.set_workspace_owner(&admin, &ws_id, &owner);
+    (client, admin, owner, ws_id)
+}
+
+#[test]
+fn test_899_owner_can_update_availability_and_rate() {
+    let env = Env::default();
+    let (client, _admin, owner, ws_id) = setup_owned_workspace(&env);
+    assert_eq!(client.get_workspace_owner(&ws_id), Some(owner.clone()));
+
+    client.set_workspace_availability(&owner, &ws_id, &false);
+    assert_ne!(
+        client.get_workspace(&ws_id).availability,
+        WorkspaceAvailability::Available
+    );
+    client.set_workspace_availability(&owner, &ws_id, &true);
+    assert_eq!(
+        client.get_workspace(&ws_id).availability,
+        WorkspaceAvailability::Available
+    );
+
+    client.set_workspace_rate(&owner, &ws_id, &2_500u128);
+    // The owner's signature was required for the update.
+    let auths = env.auths();
+    assert_eq!(auths.len(), 1);
+    assert_eq!(auths[0].0, owner);
+    assert_eq!(client.get_workspace(&ws_id).hourly_rate, 2_500u128);
+}
+
+#[test]
+fn test_899_admin_can_still_update() {
+    let env = Env::default();
+    let (client, admin, _owner, ws_id) = setup_owned_workspace(&env);
+    client.set_workspace_rate(&admin, &ws_id, &1_500u128);
+    let auths = env.auths();
+    assert_eq!(auths.len(), 1);
+    assert_eq!(auths[0].0, admin);
+    assert_eq!(client.get_workspace(&ws_id).hourly_rate, 1_500u128);
+}
+
+#[test]
+fn test_899_stranger_cannot_update_workspace() {
+    let env = Env::default();
+    let (client, _admin, _owner, ws_id) = setup_owned_workspace(&env);
+    let stranger = Address::generate(&env);
+    assert_eq!(
+        client.try_set_workspace_availability(&stranger, &ws_id, &false),
+        Err(Ok(Error::Unauthorized))
+    );
+    assert_eq!(
+        client.try_set_workspace_rate(&stranger, &ws_id, &1u128),
+        Err(Ok(Error::Unauthorized))
+    );
+    let ws = client.get_workspace(&ws_id);
+    assert_eq!(ws.availability, WorkspaceAvailability::Available);
+    assert_eq!(ws.hourly_rate, 1_000u128);
+}
+
+#[test]
+fn test_899_owner_of_other_workspace_is_rejected() {
+    let env = Env::default();
+    let (client, admin, owner, ws_id) = setup_owned_workspace(&env);
+    let other_id = String::from_str(&env, "ws-899-other");
+    client.register_workspace(
+        &admin,
+        &other_id,
+        &String::from_str(&env, "Other Office"),
+        &WorkspaceType::PrivateOffice,
+        &1u32,
+        &1_000u128,
+    );
+    assert_eq!(
+        client.try_set_workspace_rate(&owner, &other_id, &5u128),
+        Err(Ok(Error::Unauthorized))
+    );
+    assert_eq!(client.get_workspace(&other_id).hourly_rate, 1_000u128);
+    // Owner still controls its own workspace.
+    client.set_workspace_rate(&owner, &ws_id, &5u128);
+}
+
+#[test]
+fn test_899_only_admin_assigns_owner() {
+    let env = Env::default();
+    let (client, _admin, owner, ws_id) = setup_owned_workspace(&env);
+    let stranger = Address::generate(&env);
+    // Neither the current owner nor a stranger may (re)assign ownership.
+    assert_eq!(
+        client.try_set_workspace_owner(&owner, &ws_id, &stranger),
+        Err(Ok(Error::Unauthorized))
+    );
+    assert_eq!(
+        client.try_set_workspace_owner(&stranger, &ws_id, &stranger),
+        Err(Ok(Error::Unauthorized))
+    );
+    assert_eq!(client.get_workspace_owner(&ws_id), Some(owner));
+}
+
+#[test]
+fn test_899_set_owner_unknown_workspace_fails() {
+    let env = Env::default();
+    let (client, admin, owner, _ws_id) = setup_owned_workspace(&env);
+    assert_eq!(
+        client.try_set_workspace_owner(&admin, &String::from_str(&env, "missing"), &owner),
+        Err(Ok(Error::WorkspaceNotFound))
+    );
+}
+
+#[test]
+#[should_panic]
+fn test_899_owner_update_requires_signature() {
+    let env = Env::default();
+    let (client, _admin, owner, ws_id) = setup_owned_workspace(&env);
+    // Drop the blanket auth mock: the owner has not signed this invocation.
+    env.set_auths(&[]);
+    client.set_workspace_availability(&owner, &ws_id, &false);
+}
+
+// -- #900: Checked booking timestamp arithmetic ------------------------------
+
+#[test]
+fn test_900_checked_timestamp_helpers() {
+    use types::{
+        checked_add_secs, checked_billable_hours, checked_booking_cost, checked_duration,
+        checked_prorated_refund,
+    };
+    assert_eq!(checked_add_secs(u64::MAX - 1, 1), Ok(u64::MAX));
+    assert_eq!(checked_add_secs(u64::MAX, 1), Err(Error::InvalidTimeRange));
+    assert_eq!(checked_duration(10, 20), Ok(10));
+    assert_eq!(checked_duration(20, 20), Err(Error::InvalidTimeRange));
+    assert_eq!(checked_duration(u64::MAX, 0), Err(Error::InvalidTimeRange));
+    assert_eq!(checked_billable_hours(0, 3_601), Ok(2));
+    assert_eq!(
+        checked_billable_hours(0, u64::MAX),
+        Ok(u64::MAX.div_ceil(3_600))
+    );
+    assert_eq!(checked_booking_cost(1_000, 0, 7_200), Ok(2_000));
+    assert_eq!(
+        checked_booking_cost(u128::MAX, 0, 7_200),
+        Err(Error::InvalidRate)
+    );
+    assert_eq!(
+        checked_booking_cost(i128::MAX as u128, 0, 3_600),
+        Ok(i128::MAX as u128)
+    );
+    assert_eq!(
+        checked_booking_cost(i128::MAX as u128, 0, 3_601),
+        Err(Error::InvalidRate)
+    );
+    assert_eq!(checked_prorated_refund(1_000, 100, 200, 50), Ok(1_000));
+    assert_eq!(checked_prorated_refund(1_000, 100, 200, 150), Ok(500));
+    assert_eq!(checked_prorated_refund(1_000, 100, 200, 200), Ok(0));
+    // Product overflow falls back to a rounded-down, never-larger refund.
+    let big = i128::MAX as u128;
+    let refund = checked_prorated_refund(big, 0, u64::MAX, 1).unwrap();
+    assert!(refund <= big);
+    assert!(refund > 0);
+}
+
+#[test]
+fn test_900_booking_near_u64_max_is_rejected_not_wrapped() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = setup_contract(&env);
+    let client = WorkspaceBookingContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let member = Address::generate(&env);
+    let token_address = setup_token(&env, &admin, &member, 10_000i128);
+    client.initialize(&admin, &token_address);
+    let ws_id = String::from_str(&env, "ws-900");
+    client.register_workspace(
+        &admin,
+        &ws_id,
+        &String::from_str(&env, "Overflow Room"),
+        &WorkspaceType::MeetingRoom,
+        &1u32,
+        &u128::MAX,
+    );
+    // end < start would underflow the duration calculation.
+    assert_eq!(
+        client.try_book_workspace(
+            &member,
+            &String::from_str(&env, "bk-900-a"),
+            &ws_id,
+            &u64::MAX,
+            &1u64,
+            &1u32,
+        ),
+        Err(Ok(Error::InvalidTimeRange))
+    );
+    // A huge rate × window overflows the cost and is rejected before payment.
+    assert_eq!(
+        client.try_book_workspace(
+            &member,
+            &String::from_str(&env, "bk-900-b"),
+            &ws_id,
+            &60u64,
+            &(u64::MAX),
+            &1u32,
+        ),
+        Err(Ok(Error::InvalidRate))
+    );
+    assert_eq!(
+        TokenClient::new(&env, &token_address).balance(&member),
+        10_000i128
+    );
+}
+
+#[test]
+fn test_900_admin_transfer_expiry_overflow_rejected() {
+    let env = Env::default();
+    let contract_id = setup_contract(&env);
+    let client = WorkspaceBookingContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let new_admin = Address::generate(&env);
+    env.mock_all_auths();
+    client.initialize(&admin, &Address::generate(&env));
+    env.ledger().with_mut(|l| l.timestamp = u64::MAX - 1);
+    assert_eq!(
+        client.try_propose_admin_transfer(&admin, &new_admin),
+        Err(Ok(Error::InvalidAdminTransfer))
+    );
+    assert!(client.get_pending_admin_transfer().is_none());
 }

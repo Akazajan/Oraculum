@@ -47,6 +47,9 @@ pub enum DataKey {
     ActiveWorkspaceBookings(String),
     /// Pending two-step admin transfer.
     PendingAdminTransfer,
+    /// Optional owner/operator address for a workspace, allowed to manage
+    /// that workspace's availability and booking configuration.
+    WorkspaceOwner(String),
 }
 
 #[contracttype]
@@ -90,6 +93,28 @@ impl WorkspaceBookingContract {
             Some(duration) if duration > 0 => Ok(duration),
             _ => Err(Error::InvalidTimeRange),
         }
+    /// Authorize a change to `workspace_id`'s availability or booking
+    /// configuration.
+    ///
+    /// The caller must be either the contract admin or the workspace's
+    /// registered owner, **and** must sign the invocation. Any other address
+    /// is rejected with `Error::Unauthorized` before state is read or written.
+    fn require_owner_or_admin(
+        env: &Env,
+        caller: &Address,
+        workspace_id: &String,
+    ) -> Result<(), Error> {
+        let admin = Self::get_admin(env)?;
+        let owner: Option<Address> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::WorkspaceOwner(workspace_id.clone()));
+        let is_owner = owner.as_ref() == Some(caller);
+        if caller != &admin && !is_owner {
+            return Err(Error::Unauthorized);
+        }
+        caller.require_auth();
+        Ok(())
     }
 
     fn get_payment_token(env: &Env) -> Result<Address, Error> {
@@ -231,7 +256,8 @@ impl WorkspaceBookingContract {
         let pending_transfer = PendingAdminTransfer {
             proposed_admin: new_admin.clone(),
             proposer: current_admin.clone(),
-            expiry: env.ledger().timestamp() + ADMIN_TRANSFER_TTL,
+            expiry: types::checked_add_secs(env.ledger().timestamp(), ADMIN_TRANSFER_TTL)
+                .map_err(|_| Error::InvalidAdminTransfer)?,
         };
 
         env.storage()
@@ -370,6 +396,42 @@ impl WorkspaceBookingContract {
         Ok(())
     }
 
+    /// Assign (or replace) the owner of a workspace (admin only).
+    ///
+    /// The owner may change the workspace's availability and hourly rate
+    /// alongside the admin. Ownership itself can only be changed by the admin.
+    pub fn set_workspace_owner(
+        env: Env,
+        caller: Address,
+        workspace_id: String,
+        owner: Address,
+    ) -> Result<(), Error> {
+        Self::require_admin(&env, &caller)?;
+
+        if !env
+            .storage()
+            .persistent()
+            .has(&DataKey::Workspace(workspace_id.clone()))
+        {
+            return Err(Error::WorkspaceNotFound);
+        }
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::WorkspaceOwner(workspace_id.clone()), &owner);
+
+        env.events()
+            .publish((symbol_short!("ws_owner"), workspace_id), (owner,));
+        Ok(())
+    }
+
+    /// Return the owner of a workspace, if one has been assigned.
+    pub fn get_workspace_owner(env: Env, workspace_id: String) -> Option<Address> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::WorkspaceOwner(workspace_id))
+    }
+
     /// Returns `true` if the workspace has any currently-active booking.
     ///
     /// A booking is considered active when its `status` is `Active`
@@ -405,13 +467,16 @@ impl WorkspaceBookingContract {
     ///   regardless of whether active bookings exist.
     /// - Existing bookings are never modified or removed by this function —
     ///   deactivation only prevents *new* bookings from being created.
+    ///
+    /// Only the admin or the workspace owner may call this, and the caller
+    /// must authorize the invocation.
     pub fn set_workspace_availability(
         env: Env,
         caller: Address,
         workspace_id: String,
         is_available: bool,
     ) -> Result<(), Error> {
-        Self::require_admin(&env, &caller)?;
+        Self::require_owner_or_admin(&env, &caller, &workspace_id)?;
 
         let mut workspace: Workspace = env
             .storage()
@@ -440,13 +505,16 @@ impl WorkspaceBookingContract {
     }
 
     /// Update the hourly rate for a workspace (applies to future bookings only).
+    ///
+    /// Only the admin or the workspace owner may call this, and the caller
+    /// must authorize the invocation.
     pub fn set_workspace_rate(
         env: Env,
         caller: Address,
         workspace_id: String,
         hourly_rate: u128,
     ) -> Result<(), Error> {
-        Self::require_admin(&env, &caller)?;
+        Self::require_owner_or_admin(&env, &caller, &workspace_id)?;
 
         if hourly_rate == 0 {
             return Err(Error::InvalidRate);
@@ -522,6 +590,8 @@ impl WorkspaceBookingContract {
         // C11 — the window must have a strictly positive duration
         // (end_time > start_time) and must not already be over.
         let duration_secs = Self::validate_time_window(start_time, end_time)?;
+        // Checked window length: rejects end <= start without underflowing.
+        types::checked_duration(start_time, end_time)?;
         if end_time <= now {
             return Err(Error::InvalidTimeRange);
         }
@@ -533,10 +603,8 @@ impl WorkspaceBookingContract {
             .get(&DataKey::Workspace(workspace_id.clone()))
             .ok_or(Error::WorkspaceNotFound)?;
 
-        // seats_requested must not exceed the workspace's total capacity.
-        if seats_requested > workspace.capacity {
-            return Err(Error::CapacityExceeded);
-        }
+        // The request on its own must fit the registered workspace capacity.
+        workspace.validate_capacity(seats_requested, 0)?;
 
         if workspace.availability != WorkspaceAvailability::Available {
             return Err(Error::WorkspaceUnavailable);
@@ -569,6 +637,25 @@ impl WorkspaceBookingContract {
         // Cost = hourly_rate × ⌈duration_seconds / 3600⌉
         let duration_hours = duration_secs.div_ceil(3600);
         let amount: u128 = workspace.hourly_rate * duration_hours as u128;
+        // Count seats already held by active bookings that overlap the
+        // requested half-open window [start_time, end_time).
+        let already_booked =
+            Self::booked_seats_in_window(&env, &workspace_id, start_time, end_time);
+
+        // A request for the whole workspace is an exclusive reservation and
+        // cannot share its window with any other active booking.
+        if already_booked > 0 && seats_requested == workspace.capacity {
+            return Err(Error::BookingConflict);
+        }
+
+        // Otherwise the request must fit in the seats left in the window.
+        workspace.validate_capacity(seats_requested, already_booked)?;
+
+        // ── 4. Calculate payment ──────────────────────────────────────────────
+        // Cost = hourly_rate × ⌈duration_seconds / 3600⌉, with checked
+        // arithmetic so an oversized rate/window is rejected, not wrapped.
+        let amount: u128 =
+            types::checked_booking_cost(workspace.hourly_rate, start_time, end_time)?;
 
         // ── 5. Collect payment (only after all validations pass) ──────────────
         let payment_token = Self::get_payment_token(&env)?;
@@ -647,6 +734,13 @@ impl WorkspaceBookingContract {
     /// - **After the booking ends**: no refund.
     ///
     /// Only the booking member or the admin may cancel.
+    ///
+    /// Cancellation is strictly one-time: once a booking has been cancelled
+    /// (or has reached any other terminal state) every further attempt fails
+    /// with `BookingAlreadyCancelled` / `BookingNotActive` and moves no funds.
+    /// The booking is marked `Cancelled` and persisted **before** the refund
+    /// transfer is made, so a re-entrant or repeated call can never observe
+    /// the booking as still active and refund it a second time.
     pub fn cancel_booking(env: Env, caller: Address, booking_id: String) -> Result<(), Error> {
         caller.require_auth();
 
@@ -660,7 +754,7 @@ impl WorkspaceBookingContract {
         if caller != booking.member && caller != admin {
             return Err(Error::Unauthorized);
         }
-        if booking.status == BookingStatus::Cancelled {
+        if booking.status == BookingStatus::Cancelled || booking.cancelled_at.is_some() {
             return Err(Error::BookingAlreadyCancelled);
         }
         if !booking.status.is_active() {
@@ -669,20 +763,28 @@ impl WorkspaceBookingContract {
 
         let now = env.ledger().timestamp();
 
-        let duration = booking.end_time - booking.start_time;
+        // Full refund before start, pro-rata refund mid-booking, nothing
+        // after the window has elapsed — all with checked arithmetic.
+        let refund: u128 = types::checked_prorated_refund(
+            booking.amount_paid,
+            booking.start_time,
+            booking.end_time,
+            now,
+        )?;
 
-        let refund: u128 = if now >= booking.end_time {
-            // Booking period has fully elapsed — no refund.
-            0
-        } else if now >= booking.start_time {
-            // Cancelled mid-booking: refund only the unused portion.
-            let remaining = (booking.end_time - now) as u128;
-            booking.amount_paid * remaining / duration as u128
-        } else {
-            // Cancelled before the booking starts — full refund.
-            booking.amount_paid
-        };
+        // Effects first: record the terminal state before any funds move so
+        // the refund can only ever be paid out once.
+        booking.status = booking
+            .status
+            .transition(BookingStatus::Cancelled)
+            .map_err(|_| Error::BookingNotActive)?;
+        booking.cancelled_at = Some(now);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Booking(booking_id.clone()), &booking);
+        Self::remove_active_booking(&env, &booking.workspace_id, &booking_id);
 
+        // Interaction last.
         if refund > 0 {
             let payment_token = Self::get_payment_token(&env)?;
             token::Client::new(&env, &payment_token).transfer(
