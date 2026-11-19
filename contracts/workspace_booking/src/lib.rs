@@ -543,32 +543,26 @@ impl WorkspaceBookingContract {
         }
 
         // ── 3. Check time-slot conflict and remaining seat capacity ───────────
-        // Count seats already booked by active bookings that overlap the
-        // requested window. Uses saturating arithmetic to guard against overflow.
+        // C12 — Prevent overlapping reservations. Only *active* bookings for
+        // this workspace whose half-open window [start, end) intersects the
+        // requested one are considered; adjacent windows that merely touch
+        // at a boundary do not overlap.
         let already_booked =
             Self::booked_seats_in_window(&env, &workspace_id, start_time, end_time);
 
-        // Remaining capacity = workspace.capacity − already_booked.
-        // Because already_booked is derived from stored active bookings and each
-        // was validated against workspace.capacity at booking time, the subtraction
-        // cannot underflow, but we use saturating_sub defensively.
-        let remaining = workspace.capacity.saturating_sub(already_booked);
-
-        if seats_requested > remaining {
-            return Err(Error::CapacityExceeded);
+        // A request for the whole workspace is an exclusive reservation: it
+        // must not overlap any other active booking. This is what makes a
+        // single-occupancy workspace (capacity 1) impossible to double-book.
+        if already_booked > 0 && seats_requested >= workspace.capacity {
+            return Err(Error::BookingConflict);
         }
 
-        // If the new booking would consume ALL remaining seats we also need
-        // to ensure there is no direct time-slot conflict (i.e. the slot is
-        // still physically usable).  When the workspace has capacity > 1 the
-        // seat check above is the binding constraint; when capacity == 1 a
-        // full-seat booking (seats_requested == 1 == capacity) means remaining
-        // would be 0 only if already_booked == 1, which is caught above.
-        // The is_slot_available check below catches the case where
-        // `already_booked == 0` but a single-seat workspace had a prior
-        // full booking (no remaining but no double-count).
-        if !Self::is_slot_available(&env, &workspace_id, start_time, end_time) {
-            return Err(Error::BookingConflict);
+        // Otherwise overlapping reservations may share the workspace only
+        // while seats remain. Each stored booking was validated against the
+        // capacity, so the subtraction cannot underflow; saturate defensively.
+        let remaining = workspace.capacity.saturating_sub(already_booked);
+        if seats_requested > remaining {
+            return Err(Error::CapacityExceeded);
         }
 
         // ── 4. Calculate payment ──────────────────────────────────────────────
