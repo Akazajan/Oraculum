@@ -1,5 +1,7 @@
 use soroban_sdk::{contracttype, Address, String, Vec};
 
+use crate::errors::Error;
+
 /// Maximum allowed length for workspace identifiers.
 #[allow(dead_code)]
 pub const MAX_ID_LEN: u32 = 64;
@@ -193,6 +195,44 @@ pub struct Workspace {
 
     /// Ledger timestamp when workspace was created
     pub created_at: u64,
+}
+
+impl Workspace {
+    /// Seats still free in a booking window, given the number of seats
+    /// already held by overlapping active bookings.
+    ///
+    /// Never underflows: if `already_booked` somehow exceeds the registered
+    /// capacity the workspace is simply treated as full.
+    pub fn remaining_capacity(&self, already_booked: u32) -> u32 {
+        self.capacity.saturating_sub(already_booked)
+    }
+
+    /// Validate a booking's requested seat count against the registered
+    /// workspace capacity.
+    ///
+    /// * `seats_requested == 0` → `Error::InvalidSeatCount`.
+    /// * `seats_requested > capacity` → `Error::CapacityExceeded`, regardless
+    ///   of other bookings.
+    /// * `seats_requested > capacity − already_booked` →
+    ///   `Error::CapacityExceeded` (not enough seats left in the window).
+    ///
+    /// Must be called before any payment is collected.
+    pub fn validate_capacity(
+        &self,
+        seats_requested: u32,
+        already_booked: u32,
+    ) -> Result<(), Error> {
+        if seats_requested == 0 {
+            return Err(Error::InvalidSeatCount);
+        }
+        if self.capacity == 0 || seats_requested > self.capacity {
+            return Err(Error::CapacityExceeded);
+        }
+        if seats_requested > self.remaining_capacity(already_booked) {
+            return Err(Error::CapacityExceeded);
+        }
+        Ok(())
+    }
 }
 
 /// A confirmed reservation for a workspace.

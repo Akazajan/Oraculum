@@ -948,7 +948,7 @@ fn test_c13_overlapping_intervals_fail() {
         &1_000u128,
     );
     let now = env.ledger().timestamp();
-    let start = now + 60;
+    let start = now + 3_600;
     let end = start + 3_600;
     client.book_workspace(
         &member1,
@@ -1048,7 +1048,14 @@ fn test_c13_adjacent_intervals_allowed() {
             .len(),
         3u32
     );
-    assert!(client.check_availability(&String::from_str(&env, "ws-adj"), &a_end, &(a_end + 1),));
+    // [a_end, a_end + 3_600) is held by adj-b, but the slot that starts
+    // exactly when adj-b ends is adjacent and therefore free.
+    assert!(!client.check_availability(&String::from_str(&env, "ws-adj"), &a_end, &(a_end + 1),));
+    assert!(client.check_availability(
+        &String::from_str(&env, "ws-adj"),
+        &(a_end + 3_600),
+        &(a_end + 3_601),
+    ));
 }
 
 #[test]
@@ -1991,4 +1998,91 @@ fn test_ct05_active_bookings_query() {
     // After cancellation — query returns false again.
     client.cancel_booking(&member, &String::from_str(&env, "bk-ct05-q"));
     assert!(!client.has_active_bookings(&String::from_str(&env, "ws-ct05-q")));
+}
+
+// -- #897: Validate workspace capacity before booking -------------------------
+
+fn sample_workspace(env: &Env, capacity: u32) -> Workspace {
+    Workspace {
+        id: String::from_str(env, "ws-cap-unit"),
+        name: String::from_str(env, "Capacity Unit"),
+        workspace_type: WorkspaceType::MeetingRoom,
+        capacity,
+        hourly_rate: 100,
+        availability: WorkspaceAvailability::Available,
+        created_at: 0,
+    }
+}
+
+#[test]
+fn test_897_validate_capacity_rules() {
+    let env = Env::default();
+    let ws = sample_workspace(&env, 4);
+    // Zero seats is never a valid request.
+    assert_eq!(ws.validate_capacity(0, 0), Err(Error::InvalidSeatCount));
+    // Within and exactly at the registered capacity.
+    assert_eq!(ws.validate_capacity(1, 0), Ok(()));
+    assert_eq!(ws.validate_capacity(4, 0), Ok(()));
+    // Above the registered capacity, regardless of other bookings.
+    assert_eq!(ws.validate_capacity(5, 0), Err(Error::CapacityExceeded));
+    assert_eq!(
+        ws.validate_capacity(u32::MAX, 0),
+        Err(Error::CapacityExceeded)
+    );
+    // Remaining-capacity boundary.
+    assert_eq!(ws.validate_capacity(1, 3), Ok(()));
+    assert_eq!(ws.validate_capacity(2, 3), Err(Error::CapacityExceeded));
+    assert_eq!(ws.validate_capacity(1, 4), Err(Error::CapacityExceeded));
+    // Inconsistent over-booked state is treated as full, never underflows.
+    assert_eq!(ws.remaining_capacity(10), 0);
+    assert_eq!(ws.validate_capacity(1, 10), Err(Error::CapacityExceeded));
+    // A zero-capacity record can never accept a booking.
+    let empty = sample_workspace(&env, 0);
+    assert_eq!(empty.validate_capacity(1, 0), Err(Error::CapacityExceeded));
+}
+
+#[test]
+fn test_897_over_capacity_booking_rejected_before_payment() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = setup_contract(&env);
+    let client = WorkspaceBookingContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let member = Address::generate(&env);
+    let token_address = setup_token(&env, &admin, &member, 50_000i128);
+    client.initialize(&admin, &token_address);
+    let ws_id = String::from_str(&env, "ws-897");
+    client.register_workspace(
+        &admin,
+        &ws_id,
+        &String::from_str(&env, "Cap 2"),
+        &WorkspaceType::MeetingRoom,
+        &2u32,
+        &100u128,
+    );
+    let token = TokenClient::new(&env, &token_address);
+    let start = env.ledger().timestamp() + 60;
+    let end = start + 3_600;
+    let result = client.try_book_workspace(
+        &member,
+        &String::from_str(&env, "bk-897-a"),
+        &ws_id,
+        &start,
+        &end,
+        &3u32,
+    );
+    assert_eq!(result, Err(Ok(Error::CapacityExceeded)));
+    assert_eq!(token.balance(&member), 50_000i128);
+    assert_eq!(client.get_workspace_bookings(&ws_id).len(), 0);
+
+    // Exactly the registered capacity is accepted.
+    client.book_workspace(
+        &member,
+        &String::from_str(&env, "bk-897-b"),
+        &ws_id,
+        &start,
+        &end,
+        &2u32,
+    );
+    assert_eq!(token.balance(&member), 50_000i128 - 100);
 }
