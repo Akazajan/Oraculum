@@ -2086,3 +2086,101 @@ fn test_897_over_capacity_booking_rejected_before_payment() {
     );
     assert_eq!(token.balance(&member), 50_000i128 - 100);
 }
+
+// -- #898: One-time booking cancellation --------------------------------------
+
+#[test]
+fn test_898_repeat_cancellation_never_refunds_twice() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = setup_contract(&env);
+    let client = WorkspaceBookingContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let member = Address::generate(&env);
+    let token_address = setup_token(&env, &admin, &member, 10_000i128);
+    client.initialize(&admin, &token_address);
+    let ws_id = String::from_str(&env, "ws-898");
+    client.register_workspace(
+        &admin,
+        &ws_id,
+        &String::from_str(&env, "Once Room"),
+        &WorkspaceType::MeetingRoom,
+        &1u32,
+        &1_000u128,
+    );
+    let token = TokenClient::new(&env, &token_address);
+    let booking_id = String::from_str(&env, "bk-898");
+    let start = env.ledger().timestamp() + 60;
+    let end = start + 3_600;
+    client.book_workspace(&member, &booking_id, &ws_id, &start, &end, &1u32);
+    assert_eq!(token.balance(&member), 9_000i128);
+    assert_eq!(token.balance(&contract_id), 1_000i128);
+
+    client.cancel_booking(&member, &booking_id);
+    assert_eq!(token.balance(&member), 10_000i128);
+    assert_eq!(token.balance(&contract_id), 0i128);
+    let cancelled = client.get_booking(&booking_id);
+    assert_eq!(cancelled.status, BookingStatus::Cancelled);
+    let cancelled_at = cancelled.cancelled_at;
+    assert!(cancelled_at.is_some());
+
+    // Repeated attempts by the member and by the admin all fail and move no funds.
+    advance_time(&env, 10);
+    assert_eq!(
+        client.try_cancel_booking(&member, &booking_id),
+        Err(Ok(Error::BookingAlreadyCancelled))
+    );
+    assert_eq!(
+        client.try_cancel_booking(&admin, &booking_id),
+        Err(Ok(Error::BookingAlreadyCancelled))
+    );
+    assert_eq!(token.balance(&member), 10_000i128);
+    assert_eq!(token.balance(&contract_id), 0i128);
+    // The original cancellation record is left untouched.
+    let after = client.get_booking(&booking_id);
+    assert_eq!(after.status, BookingStatus::Cancelled);
+    assert_eq!(after.cancelled_at, cancelled_at);
+}
+
+#[test]
+fn test_898_cancellation_of_other_bookings_does_not_drain_contract() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = setup_contract(&env);
+    let client = WorkspaceBookingContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let m1 = Address::generate(&env);
+    let m2 = Address::generate(&env);
+    let token_address = setup_token(&env, &admin, &m1, 10_000i128);
+    StellarAssetClient::new(&env, &token_address)
+        .mock_all_auths()
+        .mint(&m2, &10_000i128);
+    client.initialize(&admin, &token_address);
+    let ws_id = String::from_str(&env, "ws-898-b");
+    client.register_workspace(
+        &admin,
+        &ws_id,
+        &String::from_str(&env, "Shared Room"),
+        &WorkspaceType::MeetingRoom,
+        &2u32,
+        &500u128,
+    );
+    let token = TokenClient::new(&env, &token_address);
+    let start = env.ledger().timestamp() + 60;
+    let end = start + 3_600;
+    let b1 = String::from_str(&env, "bk-898-1");
+    let b2 = String::from_str(&env, "bk-898-2");
+    client.book_workspace(&m1, &b1, &ws_id, &start, &end, &1u32);
+    client.book_workspace(&m2, &b2, &ws_id, &start, &end, &1u32);
+    assert_eq!(token.balance(&contract_id), 1_000i128);
+
+    client.cancel_booking(&m1, &b1);
+    // A second cancel of b1 must not be paid out of m2's escrowed funds.
+    assert_eq!(
+        client.try_cancel_booking(&m1, &b1),
+        Err(Ok(Error::BookingAlreadyCancelled))
+    );
+    assert_eq!(token.balance(&m1), 10_000i128);
+    assert_eq!(token.balance(&contract_id), 500i128);
+    assert_eq!(client.get_booking(&b2).status, BookingStatus::Active);
+}

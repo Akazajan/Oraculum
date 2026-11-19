@@ -624,6 +624,13 @@ impl WorkspaceBookingContract {
     /// - **After the booking ends**: no refund.
     ///
     /// Only the booking member or the admin may cancel.
+    ///
+    /// Cancellation is strictly one-time: once a booking has been cancelled
+    /// (or has reached any other terminal state) every further attempt fails
+    /// with `BookingAlreadyCancelled` / `BookingNotActive` and moves no funds.
+    /// The booking is marked `Cancelled` and persisted **before** the refund
+    /// transfer is made, so a re-entrant or repeated call can never observe
+    /// the booking as still active and refund it a second time.
     pub fn cancel_booking(env: Env, caller: Address, booking_id: String) -> Result<(), Error> {
         caller.require_auth();
 
@@ -637,7 +644,7 @@ impl WorkspaceBookingContract {
         if caller != booking.member && caller != admin {
             return Err(Error::Unauthorized);
         }
-        if booking.status == BookingStatus::Cancelled {
+        if booking.status == BookingStatus::Cancelled || booking.cancelled_at.is_some() {
             return Err(Error::BookingAlreadyCancelled);
         }
         if !booking.status.is_active() {
@@ -660,15 +667,8 @@ impl WorkspaceBookingContract {
             booking.amount_paid
         };
 
-        if refund > 0 {
-            let payment_token = Self::get_payment_token(&env)?;
-            token::Client::new(&env, &payment_token).transfer(
-                &env.current_contract_address(),
-                &booking.member,
-                &(refund as i128),
-            );
-        }
-
+        // Effects first: record the terminal state before any funds move so
+        // the refund can only ever be paid out once.
         booking.status = booking
             .status
             .transition(BookingStatus::Cancelled)
@@ -678,6 +678,16 @@ impl WorkspaceBookingContract {
             .persistent()
             .set(&DataKey::Booking(booking_id.clone()), &booking);
         Self::remove_active_booking(&env, &booking.workspace_id, &booking_id);
+
+        // Interaction last.
+        if refund > 0 {
+            let payment_token = Self::get_payment_token(&env)?;
+            token::Client::new(&env, &payment_token).transfer(
+                &env.current_contract_address(),
+                &booking.member,
+                &(refund as i128),
+            );
+        }
 
         env.events()
             .publish((symbol_short!("cancel"), booking_id), (caller, refund));
