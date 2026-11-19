@@ -84,6 +84,15 @@ impl WorkspaceBookingContract {
         Ok(())
     }
 
+    /// C11 — a booking window must have a strictly positive duration.
+    ///
+    /// Returns the window length in seconds, or `Error::InvalidTimeRange`
+    /// when `end_time <= start_time` (a zero-length or inverted window).
+    fn validate_time_window(start_time: u64, end_time: u64) -> Result<u64, Error> {
+        match end_time.checked_sub(start_time) {
+            Some(duration) if duration > 0 => Ok(duration),
+            _ => Err(Error::InvalidTimeRange),
+        }
     /// Authorize a change to `workspace_id`'s availability or booking
     /// configuration.
     ///
@@ -578,6 +587,9 @@ impl WorkspaceBookingContract {
 
         let now = env.ledger().timestamp();
 
+        // C11 — the window must have a strictly positive duration
+        // (end_time > start_time) and must not already be over.
+        let duration_secs = Self::validate_time_window(start_time, end_time)?;
         // Checked window length: rejects end <= start without underflowing.
         types::checked_duration(start_time, end_time)?;
         if end_time <= now {
@@ -599,6 +611,32 @@ impl WorkspaceBookingContract {
         }
 
         // ── 3. Check time-slot conflict and remaining seat capacity ───────────
+        // C12 — Prevent overlapping reservations. Only *active* bookings for
+        // this workspace whose half-open window [start, end) intersects the
+        // requested one are considered; adjacent windows that merely touch
+        // at a boundary do not overlap.
+        let already_booked =
+            Self::booked_seats_in_window(&env, &workspace_id, start_time, end_time);
+
+        // A request for the whole workspace is an exclusive reservation: it
+        // must not overlap any other active booking. This is what makes a
+        // single-occupancy workspace (capacity 1) impossible to double-book.
+        if already_booked > 0 && seats_requested >= workspace.capacity {
+            return Err(Error::BookingConflict);
+        }
+
+        // Otherwise overlapping reservations may share the workspace only
+        // while seats remain. Each stored booking was validated against the
+        // capacity, so the subtraction cannot underflow; saturate defensively.
+        let remaining = workspace.capacity.saturating_sub(already_booked);
+        if seats_requested > remaining {
+            return Err(Error::CapacityExceeded);
+        }
+
+        // ── 4. Calculate payment ──────────────────────────────────────────────
+        // Cost = hourly_rate × ⌈duration_seconds / 3600⌉
+        let duration_hours = duration_secs.div_ceil(3600);
+        let amount: u128 = workspace.hourly_rate * duration_hours as u128;
         // Count seats already held by active bookings that overlap the
         // requested half-open window [start_time, end_time).
         let already_booked =
@@ -755,6 +793,16 @@ impl WorkspaceBookingContract {
                 &(refund as i128),
             );
         }
+
+        booking.status = booking
+            .status
+            .transition(BookingStatus::Cancelled)
+            .map_err(|_| Error::BookingNotActive)?;
+        booking.cancelled_at = Some(now);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Booking(booking_id.clone()), &booking);
+        Self::remove_active_booking(&env, &booking.workspace_id, &booking_id);
 
         env.events()
             .publish((symbol_short!("cancel"), booking_id), (caller, refund));
@@ -979,13 +1027,18 @@ impl WorkspaceBookingContract {
 
     /// Check whether a workspace has no conflicting active booking in the
     /// requested slot. Returns `false` if the workspace does not exist or is
-    /// marked unavailable.
+    /// marked unavailable, or if the window has zero or negative duration
+    /// (such a window can never be booked).
     pub fn check_availability(
         env: Env,
         workspace_id: String,
         start_time: u64,
         end_time: u64,
     ) -> bool {
+        if Self::validate_time_window(start_time, end_time).is_err() {
+            return false;
+        }
+
         let workspace: Workspace = match env
             .storage()
             .persistent()

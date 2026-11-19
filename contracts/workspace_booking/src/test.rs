@@ -2000,6 +2000,323 @@ fn test_ct05_active_bookings_query() {
     assert!(!client.has_active_bookings(&String::from_str(&env, "ws-ct05-q")));
 }
 
+// -- #895: Reject bookings with zero duration ---------------------------------
+
+fn setup_booking_env(
+    env: &Env,
+    capacity: u32,
+) -> (WorkspaceBookingContractClient<'_>, Address, Address, String) {
+    env.mock_all_auths();
+    let contract_id = setup_contract(env);
+    let client = WorkspaceBookingContractClient::new(env, &contract_id);
+    let admin = Address::generate(env);
+    let member = Address::generate(env);
+    let token_address = setup_token(env, &admin, &member, 100_000i128);
+    client.initialize(&admin, &token_address);
+    let ws_id = String::from_str(env, "ws-window");
+    client.register_workspace(
+        &admin,
+        &ws_id,
+        &String::from_str(env, "Window Room"),
+        &WorkspaceType::MeetingRoom,
+        &capacity,
+        &1_000u128,
+    );
+    (client, member, token_address, ws_id)
+}
+
+#[test]
+fn test_895_zero_duration_booking_rejected_without_payment() {
+    let env = Env::default();
+    let (client, member, token_address, ws_id) = setup_booking_env(&env, 1);
+    let token = TokenClient::new(&env, &token_address);
+    let start = env.ledger().timestamp() + 3_600;
+
+    let result = client.try_book_workspace(
+        &member,
+        &String::from_str(&env, "bk-zero"),
+        &ws_id,
+        &start,
+        &start,
+        &1u32,
+    );
+    assert_eq!(result, Err(Ok(Error::InvalidTimeRange)));
+    assert_eq!(token.balance(&member), 100_000i128);
+    assert_eq!(token.balance(&client.address), 0i128);
+    assert_eq!(
+        client.try_get_booking(&String::from_str(&env, "bk-zero")),
+        Err(Ok(Error::BookingNotFound))
+    );
+    assert_eq!(client.get_workspace_bookings(&ws_id).len(), 0);
+}
+
+#[test]
+fn test_895_end_before_start_rejected() {
+    let env = Env::default();
+    let (client, member, _token, ws_id) = setup_booking_env(&env, 1);
+    let start = env.ledger().timestamp() + 7_200;
+
+    let result = client.try_book_workspace(
+        &member,
+        &String::from_str(&env, "bk-inverted"),
+        &ws_id,
+        &start,
+        &(start - 1),
+        &1u32,
+    );
+    assert_eq!(result, Err(Ok(Error::InvalidTimeRange)));
+
+    // Extreme inverted window must not wrap into a huge duration.
+    let result = client.try_book_workspace(
+        &member,
+        &String::from_str(&env, "bk-inverted-max"),
+        &ws_id,
+        &u64::MAX,
+        &(start),
+        &1u32,
+    );
+    assert_eq!(result, Err(Ok(Error::InvalidTimeRange)));
+    assert_eq!(client.get_workspace_bookings(&ws_id).len(), 0);
+}
+
+#[test]
+fn test_895_shortest_positive_window_is_accepted() {
+    let env = Env::default();
+    let (client, member, token_address, ws_id) = setup_booking_env(&env, 1);
+    let start = env.ledger().timestamp() + 60;
+    let booking_id = String::from_str(&env, "bk-one-second");
+
+    client.book_workspace(&member, &booking_id, &ws_id, &start, &(start + 1), &1u32);
+    let booking = client.get_booking(&booking_id);
+    assert_eq!(booking.end_time - booking.start_time, 1);
+    // Billing rounds up to a full hour.
+    assert_eq!(booking.amount_paid, 1_000u128);
+    assert_eq!(
+        TokenClient::new(&env, &token_address).balance(&member),
+        99_000i128
+    );
+}
+
+#[test]
+fn test_895_zero_duration_window_is_never_available() {
+    let env = Env::default();
+    let (client, _member, _token, ws_id) = setup_booking_env(&env, 1);
+    let start = env.ledger().timestamp() + 60;
+
+    assert!(client.check_availability(&ws_id, &start, &(start + 1)));
+    assert!(!client.check_availability(&ws_id, &start, &start));
+    assert!(!client.check_availability(&ws_id, &(start + 1), &start));
+}
+
+// -- #896: Prevent overlapping workspace reservations ------------------------
+
+fn fund(env: &Env, token_address: &Address, who: &Address) {
+    StellarAssetClient::new(env, token_address)
+        .mock_all_auths()
+        .mint(who, &100_000i128);
+}
+
+/// Every way two windows can overlap on a single-occupancy workspace is
+/// rejected with BookingConflict, and no funds move.
+#[test]
+fn test_896_all_overlap_shapes_conflict() {
+    let env = Env::default();
+    let (client, member, token_address, ws_id) = setup_booking_env(&env, 1);
+    let other = Address::generate(&env);
+    fund(&env, &token_address, &other);
+    let token = TokenClient::new(&env, &token_address);
+
+    let start = env.ledger().timestamp() + 10_000;
+    let end = start + 3_600;
+    client.book_workspace(
+        &member,
+        &String::from_str(&env, "bk-896-base"),
+        &ws_id,
+        &start,
+        &end,
+        &1u32,
+    );
+
+    let windows = [
+        (start, end),               // identical
+        (start - 600, start + 600), // overlaps the start
+        (end - 600, end + 600),     // overlaps the end
+        (start + 600, end - 600),   // fully inside
+        (start - 600, end + 600),   // fully covering
+        (start, start + 1),         // one second at the start
+        (end - 1, end),             // one second at the end
+    ];
+    let ids = ["ov-0", "ov-1", "ov-2", "ov-3", "ov-4", "ov-5", "ov-6"];
+    for (i, (s, e)) in windows.iter().enumerate() {
+        let result =
+            client.try_book_workspace(&other, &String::from_str(&env, ids[i]), &ws_id, s, e, &1u32);
+        assert_eq!(result, Err(Ok(Error::BookingConflict)), "window {}", i);
+    }
+    assert_eq!(token.balance(&other), 100_000i128);
+    assert_eq!(client.get_workspace_bookings(&ws_id).len(), 1);
+}
+
+/// Windows that only touch the existing booking at a boundary are allowed.
+#[test]
+fn test_896_adjacent_windows_do_not_overlap() {
+    let env = Env::default();
+    let (client, member, _token, ws_id) = setup_booking_env(&env, 1);
+    let start = env.ledger().timestamp() + 10_000;
+    let end = start + 3_600;
+    client.book_workspace(
+        &member,
+        &String::from_str(&env, "bk-896-mid"),
+        &ws_id,
+        &start,
+        &end,
+        &1u32,
+    );
+    client.book_workspace(
+        &member,
+        &String::from_str(&env, "bk-896-before"),
+        &ws_id,
+        &(start - 3_600),
+        &start,
+        &1u32,
+    );
+    client.book_workspace(
+        &member,
+        &String::from_str(&env, "bk-896-after"),
+        &ws_id,
+        &end,
+        &(end + 3_600),
+        &1u32,
+    );
+    assert_eq!(client.get_workspace_bookings(&ws_id).len(), 3);
+}
+
+/// Only *active* bookings block a window: once the overlapping booking is
+/// cancelled, completed, marked no-show or expired the slot can be reused.
+#[test]
+fn test_896_terminal_bookings_do_not_block() {
+    let env = Env::default();
+    let (client, member, _token, ws_id) = setup_booking_env(&env, 1);
+    let admin = client.admin();
+    let start = env.ledger().timestamp() + 10_000;
+    let end = start + 3_600;
+
+    let first = String::from_str(&env, "bk-896-t1");
+    client.book_workspace(&member, &first, &ws_id, &start, &end, &1u32);
+    assert_eq!(
+        client.try_book_workspace(
+            &member,
+            &String::from_str(&env, "bk-896-t2"),
+            &ws_id,
+            &start,
+            &end,
+            &1u32
+        ),
+        Err(Ok(Error::BookingConflict))
+    );
+
+    client.cancel_booking(&member, &first);
+    let second = String::from_str(&env, "bk-896-t3");
+    client.book_workspace(&member, &second, &ws_id, &start, &end, &1u32);
+
+    // Complete it and the window frees up again.
+    client.complete_booking(&admin, &second);
+    client.book_workspace(
+        &member,
+        &String::from_str(&env, "bk-896-t4"),
+        &ws_id,
+        &start,
+        &end,
+        &1u32,
+    );
+}
+
+/// Overlap is tracked per workspace: the same window on another workspace
+/// is unaffected.
+#[test]
+fn test_896_overlap_is_per_workspace() {
+    let env = Env::default();
+    let (client, member, _token, ws_id) = setup_booking_env(&env, 1);
+    let admin = client.admin();
+    let other_ws = String::from_str(&env, "ws-window-2");
+    client.register_workspace(
+        &admin,
+        &other_ws,
+        &String::from_str(&env, "Second Room"),
+        &WorkspaceType::MeetingRoom,
+        &1u32,
+        &1_000u128,
+    );
+    let start = env.ledger().timestamp() + 10_000;
+    let end = start + 3_600;
+    client.book_workspace(
+        &member,
+        &String::from_str(&env, "bk-896-w1"),
+        &ws_id,
+        &start,
+        &end,
+        &1u32,
+    );
+    client.book_workspace(
+        &member,
+        &String::from_str(&env, "bk-896-w2"),
+        &other_ws,
+        &start,
+        &end,
+        &1u32,
+    );
+}
+
+/// On a multi-seat workspace, a whole-workspace reservation cannot overlap
+/// an existing booking, while partial-seat reservations may share the window
+/// until the seats run out.
+#[test]
+fn test_896_whole_workspace_reservation_cannot_overlap() {
+    let env = Env::default();
+    let (client, member, token_address, ws_id) = setup_booking_env(&env, 4);
+    let other = Address::generate(&env);
+    fund(&env, &token_address, &other);
+    let start = env.ledger().timestamp() + 10_000;
+    let end = start + 3_600;
+
+    client.book_workspace(
+        &member,
+        &String::from_str(&env, "bk-896-s1"),
+        &ws_id,
+        &start,
+        &end,
+        &1u32,
+    );
+    assert_eq!(
+        client.try_book_workspace(
+            &other,
+            &String::from_str(&env, "bk-896-s2"),
+            &ws_id,
+            &(start + 1_800),
+            &(end + 1_800),
+            &4u32
+        ),
+        Err(Ok(Error::BookingConflict))
+    );
+    // Sharing the window for the remaining seats is still allowed.
+    client.book_workspace(
+        &other,
+        &String::from_str(&env, "bk-896-s3"),
+        &ws_id,
+        &(start + 1_800),
+        &(end + 1_800),
+        &3u32,
+    );
+    assert_eq!(
+        client.try_book_workspace(
+            &other,
+            &String::from_str(&env, "bk-896-s4"),
+            &ws_id,
+            &start,
+            &end,
+            &1u32
+        ),
+        Err(Ok(Error::CapacityExceeded))
+    );
 // -- #897: Validate workspace capacity before booking -------------------------
 
 fn sample_workspace(env: &Env, capacity: u32) -> Workspace {
