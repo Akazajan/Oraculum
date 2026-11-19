@@ -30,3 +30,26 @@ export function queryPanelState({
 export function canRetryPanel(state: QueryPanelState): boolean {
   return state === "error";
 }
+
+// ── F17 — Sanitize query panel input before submit ───────────────────────────
+//
+// Raw user input may contain leading/trailing whitespace or be entirely blank.
+// `sanitizeQuery` trims the string and signals rejection when the result would
+// be empty, preventing a wasted round-trip to the API.
+
+export interface SanitizeQueryResult {
+  /** The trimmed, submission-ready value. Only present when `valid` is true. */
+  query: string;
+  /** True when the input is non-empty after trimming. */
+  valid: boolean;
+}
+
+/**
+ * Trims surrounding whitespace from `raw` and returns whether the result is
+ * non-empty.  Call this before wiring a form submission to the API; skip the
+ * request entirely when `valid` is `false`.
+ */
+export function sanitizeQuery(raw: string): SanitizeQueryResult {
+  const query = raw.trim();
+  return { query, valid: query.length > 0 };
+}
