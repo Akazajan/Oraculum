@@ -81,6 +81,17 @@ impl WorkspaceBookingContract {
         Ok(())
     }
 
+    /// C11 — a booking window must have a strictly positive duration.
+    ///
+    /// Returns the window length in seconds, or `Error::InvalidTimeRange`
+    /// when `end_time <= start_time` (a zero-length or inverted window).
+    fn validate_time_window(start_time: u64, end_time: u64) -> Result<u64, Error> {
+        match end_time.checked_sub(start_time) {
+            Some(duration) if duration > 0 => Ok(duration),
+            _ => Err(Error::InvalidTimeRange),
+        }
+    }
+
     fn get_payment_token(env: &Env) -> Result<Address, Error> {
         env.storage()
             .instance()
@@ -508,7 +519,10 @@ impl WorkspaceBookingContract {
 
         let now = env.ledger().timestamp();
 
-        if start_time >= end_time || end_time <= now {
+        // C11 — the window must have a strictly positive duration
+        // (end_time > start_time) and must not already be over.
+        let duration_secs = Self::validate_time_window(start_time, end_time)?;
+        if end_time <= now {
             return Err(Error::InvalidTimeRange);
         }
 
@@ -559,7 +573,6 @@ impl WorkspaceBookingContract {
 
         // ── 4. Calculate payment ──────────────────────────────────────────────
         // Cost = hourly_rate × ⌈duration_seconds / 3600⌉
-        let duration_secs = end_time - start_time;
         let duration_hours = duration_secs.div_ceil(3600);
         let amount: u128 = workspace.hourly_rate * duration_hours as u128;
 
@@ -918,13 +931,18 @@ impl WorkspaceBookingContract {
 
     /// Check whether a workspace has no conflicting active booking in the
     /// requested slot. Returns `false` if the workspace does not exist or is
-    /// marked unavailable.
+    /// marked unavailable, or if the window has zero or negative duration
+    /// (such a window can never be booked).
     pub fn check_availability(
         env: Env,
         workspace_id: String,
         start_time: u64,
         end_time: u64,
     ) -> bool {
+        if Self::validate_time_window(start_time, end_time).is_err() {
+            return false;
+        }
+
         let workspace: Workspace = match env
             .storage()
             .persistent()

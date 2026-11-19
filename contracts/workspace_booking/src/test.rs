@@ -1992,3 +1992,111 @@ fn test_ct05_active_bookings_query() {
     client.cancel_booking(&member, &String::from_str(&env, "bk-ct05-q"));
     assert!(!client.has_active_bookings(&String::from_str(&env, "ws-ct05-q")));
 }
+
+// -- #895: Reject bookings with zero duration ---------------------------------
+
+fn setup_booking_env(
+    env: &Env,
+    capacity: u32,
+) -> (WorkspaceBookingContractClient<'_>, Address, Address, String) {
+    env.mock_all_auths();
+    let contract_id = setup_contract(env);
+    let client = WorkspaceBookingContractClient::new(env, &contract_id);
+    let admin = Address::generate(env);
+    let member = Address::generate(env);
+    let token_address = setup_token(env, &admin, &member, 100_000i128);
+    client.initialize(&admin, &token_address);
+    let ws_id = String::from_str(env, "ws-window");
+    client.register_workspace(
+        &admin,
+        &ws_id,
+        &String::from_str(env, "Window Room"),
+        &WorkspaceType::MeetingRoom,
+        &capacity,
+        &1_000u128,
+    );
+    (client, member, token_address, ws_id)
+}
+
+#[test]
+fn test_895_zero_duration_booking_rejected_without_payment() {
+    let env = Env::default();
+    let (client, member, token_address, ws_id) = setup_booking_env(&env, 1);
+    let token = TokenClient::new(&env, &token_address);
+    let start = env.ledger().timestamp() + 3_600;
+
+    let result = client.try_book_workspace(
+        &member,
+        &String::from_str(&env, "bk-zero"),
+        &ws_id,
+        &start,
+        &start,
+        &1u32,
+    );
+    assert_eq!(result, Err(Ok(Error::InvalidTimeRange)));
+    assert_eq!(token.balance(&member), 100_000i128);
+    assert_eq!(token.balance(&client.address), 0i128);
+    assert_eq!(
+        client.try_get_booking(&String::from_str(&env, "bk-zero")),
+        Err(Ok(Error::BookingNotFound))
+    );
+    assert_eq!(client.get_workspace_bookings(&ws_id).len(), 0);
+}
+
+#[test]
+fn test_895_end_before_start_rejected() {
+    let env = Env::default();
+    let (client, member, _token, ws_id) = setup_booking_env(&env, 1);
+    let start = env.ledger().timestamp() + 7_200;
+
+    let result = client.try_book_workspace(
+        &member,
+        &String::from_str(&env, "bk-inverted"),
+        &ws_id,
+        &start,
+        &(start - 1),
+        &1u32,
+    );
+    assert_eq!(result, Err(Ok(Error::InvalidTimeRange)));
+
+    // Extreme inverted window must not wrap into a huge duration.
+    let result = client.try_book_workspace(
+        &member,
+        &String::from_str(&env, "bk-inverted-max"),
+        &ws_id,
+        &u64::MAX,
+        &(start),
+        &1u32,
+    );
+    assert_eq!(result, Err(Ok(Error::InvalidTimeRange)));
+    assert_eq!(client.get_workspace_bookings(&ws_id).len(), 0);
+}
+
+#[test]
+fn test_895_shortest_positive_window_is_accepted() {
+    let env = Env::default();
+    let (client, member, token_address, ws_id) = setup_booking_env(&env, 1);
+    let start = env.ledger().timestamp() + 60;
+    let booking_id = String::from_str(&env, "bk-one-second");
+
+    client.book_workspace(&member, &booking_id, &ws_id, &start, &(start + 1), &1u32);
+    let booking = client.get_booking(&booking_id);
+    assert_eq!(booking.end_time - booking.start_time, 1);
+    // Billing rounds up to a full hour.
+    assert_eq!(booking.amount_paid, 1_000u128);
+    assert_eq!(
+        TokenClient::new(&env, &token_address).balance(&member),
+        99_000i128
+    );
+}
+
+#[test]
+fn test_895_zero_duration_window_is_never_available() {
+    let env = Env::default();
+    let (client, _member, _token, ws_id) = setup_booking_env(&env, 1);
+    let start = env.ledger().timestamp() + 60;
+
+    assert!(client.check_availability(&ws_id, &start, &(start + 1)));
+    assert!(!client.check_availability(&ws_id, &start, &start));
+    assert!(!client.check_availability(&ws_id, &(start + 1), &start));
+}
