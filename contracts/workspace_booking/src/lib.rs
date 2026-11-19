@@ -11,11 +11,11 @@ mod types;
 mod test;
 
 pub use errors::Error;
-pub use types::{
-    Booking, BookingStatus, MAX_ID_LEN, UnavailabilityReason, Workspace, WorkspaceAvailability,
-    WorkspaceType,
-};
 pub use types::WorkspaceBookingsPage;
+pub use types::{
+    Booking, BookingStatus, UnavailabilityReason, Workspace, WorkspaceAvailability, WorkspaceType,
+    MAX_ID_LEN,
+};
 
 use soroban_sdk::{
     contract, contractimpl, contracttype, symbol_short, token, Address, Env, String, Vec,
@@ -39,7 +39,7 @@ pub enum DataKey {
     Booking(String),
     /// List of booking IDs associated with a member.
     MemberBookings(Address),
-       /// List of booking IDs associated with a workspace (full history, never pruned).
+    /// List of booking IDs associated with a workspace (full history, never pruned).
     WorkspaceBookings(String),
     /// List of currently-active booking IDs for a workspace, kept in sync on
     /// every status transition so `is_slot_available` never has to scan
@@ -170,7 +170,11 @@ impl WorkspaceBookingContract {
     /// must keep returning every booking ever made.
     fn remove_active_booking(env: &Env, workspace_id: &String, booking_id: &String) {
         let key = DataKey::ActiveWorkspaceBookings(workspace_id.clone());
-        let active: Vec<String> = env.storage().persistent().get(&key).unwrap_or(Vec::new(env));
+        let active: Vec<String> = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or(Vec::new(env));
         let mut updated = Vec::new(env);
         for i in 0..active.len() {
             let id = active.get(i).unwrap();
@@ -344,7 +348,9 @@ impl WorkspaceBookingContract {
             .get(&DataKey::WorkspaceList)
             .unwrap_or(Vec::new(&env));
         list.push_back(id.clone());
-        env.storage().persistent().set(&DataKey::WorkspaceList, &list);
+        env.storage()
+            .persistent()
+            .set(&DataKey::WorkspaceList, &list);
 
         env.events().publish(
             (symbol_short!("ws_reg"), id),
@@ -643,7 +649,7 @@ impl WorkspaceBookingContract {
             .get(&DataKey::Booking(booking_id.clone()))
             .ok_or(Error::BookingNotFound)?;
 
-                let admin = Self::get_admin(&env)?;
+        let admin = Self::get_admin(&env)?;
         if caller != booking.member && caller != admin {
             return Err(Error::Unauthorized);
         }
@@ -679,7 +685,7 @@ impl WorkspaceBookingContract {
             );
         }
 
-           booking.status = booking
+        booking.status = booking
             .status
             .transition(BookingStatus::Cancelled)
             .map_err(|_| Error::BookingNotActive)?;
@@ -689,10 +695,8 @@ impl WorkspaceBookingContract {
             .set(&DataKey::Booking(booking_id.clone()), &booking);
         Self::remove_active_booking(&env, &booking.workspace_id, &booking_id);
 
-        env.events().publish(
-            (symbol_short!("cancel"), booking_id),
-            (caller, refund),
-        );
+        env.events()
+            .publish((symbol_short!("cancel"), booking_id), (caller, refund));
         Ok(())
     }
 
@@ -712,7 +716,7 @@ impl WorkspaceBookingContract {
             return Err(Error::BookingNotActive);
         }
 
-           booking.status = booking
+        booking.status = booking
             .status
             .transition(BookingStatus::Completed)
             .map_err(|_| Error::BookingNotActive)?;
@@ -753,7 +757,7 @@ impl WorkspaceBookingContract {
             return Err(Error::BookingConflict); // Too early to mark no-show
         }
 
-          booking.status = booking
+        booking.status = booking
             .status
             .transition(BookingStatus::NoShow)
             .map_err(|_| Error::BookingNotActive)?;
@@ -807,8 +811,6 @@ impl WorkspaceBookingContract {
             (booking.workspace_id, booking.member),
         );
         Ok(())
-    }
-    
     }
 
     // ── Queries ───────────────────────────────────────────────────────────────
@@ -905,10 +907,7 @@ impl WorkspaceBookingContract {
     ///
     /// Returns `true` if at least one booking with status `Active` exists
     /// for `workspace_id`.  This query is read-only and never modifies state.
-    pub fn workspace_has_active_bookings_query(
-        env: Env,
-        workspace_id: String,
-    ) -> Result<bool, Error> {
+    pub fn has_active_bookings(env: Env, workspace_id: String) -> Result<bool, Error> {
         let _workspace: Workspace = env
             .storage()
             .persistent()

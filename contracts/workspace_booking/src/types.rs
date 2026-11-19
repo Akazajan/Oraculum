@@ -1,7 +1,7 @@
-use soroban_sdk::{contracttype, Address, String};
+use soroban_sdk::{contracttype, Address, String, Vec};
 
 /// Maximum allowed length for workspace identifiers.
-#[allot(dead_code)]
+#[allow(dead_code)]
 pub const MAX_ID_LEN: u32 = 64;
 
 /// Maximum allowed length for workspace names.
@@ -9,10 +9,12 @@ pub const MAX_ID_LEN: u32 = 64;
 pub const MAX_NAME_LEN: u32 = 128;
 
 /// Maximum number of history entries a single page may contain.
+#[allow(dead_code)]
 pub const MAX_PAGE_SIZE: u32 = 100;
 
 /// Default number of history entries returned when the caller does not
 /// specify an explicit limit.
+#[allow(dead_code)]
 pub const DEFAULT_PAGE_SIZE: u32 = 20;
 
 /// Category of workspace being registered.
@@ -86,7 +88,6 @@ pub enum BookingStatus {
     Expired,
 }
 
-
 impl BookingStatus {
     /// Stable u32 discriminant used for on-wire / storage serialization.
     ///
@@ -158,6 +159,7 @@ impl BookingStatus {
     }
 
     /// Apply an allowed transition, or return `Err(())` if the edge is invalid.
+    #[allow(clippy::result_unit_err)]
     pub fn transition(&self, to: BookingStatus) -> Result<BookingStatus, ()> {
         if self.can_transition(&to) {
             Ok(to)
@@ -249,14 +251,15 @@ pub struct PageRequest {
     pub cursor: Option<u64>,
 }
 
-/// A bounded page of booking history entries.
+/// A bounded page of booking IDs for a workspace, returned by
+/// `get_workspace_bookings_page`.
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
-pub struct Page<T> {
-    /// Entries in this page, in stable ascending order.
-    pub entries: Vec<T>,
+pub struct WorkspaceBookingsPage {
+    /// Booking IDs in this page, in stable insertion order.
+    pub booking_ids: Vec<String>,
 
-    /// Continuation token for the next page, or `None` when the history is
+    /// Offset to pass to fetch the next page, or `None` when the history is
     /// exhausted.
-    pub next_cursor: Option<u64>,
+    pub next_offset: Option<u32>,
 }

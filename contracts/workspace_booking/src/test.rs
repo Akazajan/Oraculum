@@ -1,5 +1,4 @@
 // contracts/workspace_booking/src/test.rs
-#![cfg(test)]
 
 use super::*;
 use soroban_sdk::{
@@ -195,12 +194,20 @@ fn test_register_workspace_duplicate_id_fails() {
     env.mock_all_auths();
     client.initialize(&admin, &token);
     client.register_workspace(
-        &admin, &String::from_str(&env, "ws-001"),
-        &String::from_str(&env, "Hot Desk A"), &WorkspaceType::HotDesk, &1u32, &500u128,
+        &admin,
+        &String::from_str(&env, "ws-001"),
+        &String::from_str(&env, "Hot Desk A"),
+        &WorkspaceType::HotDesk,
+        &1u32,
+        &500u128,
     );
     client.register_workspace(
-        &admin, &String::from_str(&env, "ws-001"),
-        &String::from_str(&env, "Hot Desk B"), &WorkspaceType::HotDesk, &1u32, &500u128,
+        &admin,
+        &String::from_str(&env, "ws-001"),
+        &String::from_str(&env, "Hot Desk B"),
+        &WorkspaceType::HotDesk,
+        &1u32,
+        &500u128,
     );
 }
 
@@ -216,8 +223,12 @@ fn test_register_workspace_non_admin_fails() {
     env.mock_all_auths();
     client.initialize(&admin, &token);
     client.register_workspace(
-        &non_admin, &String::from_str(&env, "ws-001"),
-        &String::from_str(&env, "Hot Desk A"), &WorkspaceType::HotDesk, &1u32, &500u128,
+        &non_admin,
+        &String::from_str(&env, "ws-001"),
+        &String::from_str(&env, "Hot Desk A"),
+        &WorkspaceType::HotDesk,
+        &1u32,
+        &500u128,
     );
 }
 
@@ -232,16 +243,23 @@ fn test_book_workspace_success() {
     let token_address = setup_token(&env, &admin, &member, 10_000i128);
     client.initialize(&admin, &token_address);
     client.register_workspace(
-        &admin, &String::from_str(&env, "ws-001"),
+        &admin,
+        &String::from_str(&env, "ws-001"),
         &String::from_str(&env, "Meeting Room Alpha"),
-        &WorkspaceType::MeetingRoom, &10u32, &1_000u128,
+        &WorkspaceType::MeetingRoom,
+        &10u32,
+        &1_000u128,
     );
     let now = env.ledger().timestamp();
     let start = now + 60;
     let end = start + 7_200;
     client.book_workspace(
-        &member, &String::from_str(&env, "booking-001"),
-        &String::from_str(&env, "ws-001"), &start, &end, &3u32,
+        &member,
+        &String::from_str(&env, "booking-001"),
+        &String::from_str(&env, "ws-001"),
+        &start,
+        &end,
+        &3u32,
     );
     let booking = client.get_booking(&String::from_str(&env, "booking-001"));
     assert_eq!(booking.workspace_id, String::from_str(&env, "ws-001"));
@@ -265,19 +283,31 @@ fn test_book_workspace_conflict_fails() {
     let token_address = setup_token(&env, &admin, &member, 50_000i128);
     client.initialize(&admin, &token_address);
     client.register_workspace(
-        &admin, &String::from_str(&env, "ws-001"),
-        &String::from_str(&env, "Desk A"), &WorkspaceType::HotDesk, &1u32, &500u128,
+        &admin,
+        &String::from_str(&env, "ws-001"),
+        &String::from_str(&env, "Desk A"),
+        &WorkspaceType::HotDesk,
+        &1u32,
+        &500u128,
     );
     let now = env.ledger().timestamp();
     let start = now + 60;
     let end = start + 3_600;
     client.book_workspace(
-        &member, &String::from_str(&env, "booking-001"),
-        &String::from_str(&env, "ws-001"), &start, &end, &1u32,
+        &member,
+        &String::from_str(&env, "booking-001"),
+        &String::from_str(&env, "ws-001"),
+        &start,
+        &end,
+        &1u32,
     );
     client.book_workspace(
-        &member, &String::from_str(&env, "booking-002"),
-        &String::from_str(&env, "ws-001"), &(start + 1_800), &(end + 1_800), &1u32,
+        &member,
+        &String::from_str(&env, "booking-002"),
+        &String::from_str(&env, "ws-001"),
+        &(start + 1_800),
+        &(end + 1_800),
+        &1u32,
     );
 }
 
@@ -292,16 +322,23 @@ fn test_cancel_booking_refunds_member() {
     let token_address = setup_token(&env, &admin, &member, 10_000i128);
     client.initialize(&admin, &token_address);
     client.register_workspace(
-        &admin, &String::from_str(&env, "ws-001"),
+        &admin,
+        &String::from_str(&env, "ws-001"),
         &String::from_str(&env, "Private Office"),
-        &WorkspaceType::PrivateOffice, &4u32, &2_000u128,
+        &WorkspaceType::PrivateOffice,
+        &4u32,
+        &2_000u128,
     );
     let now = env.ledger().timestamp();
     let start = now + 60;
     let end = start + 3_600;
     client.book_workspace(
-        &member, &String::from_str(&env, "booking-001"),
-        &String::from_str(&env, "ws-001"), &start, &end, &1u32,
+        &member,
+        &String::from_str(&env, "booking-001"),
+        &String::from_str(&env, "ws-001"),
+        &start,
+        &end,
+        &1u32,
     );
     let balance_after_booking = TokenClient::new(&env, &token_address).balance(&member);
     assert_eq!(balance_after_booking, 8_000i128);
@@ -323,15 +360,23 @@ fn test_cancel_booking_during_booking_partial_refund() {
     let token_address = setup_token(&env, &admin, &member, 10_000i128);
     client.initialize(&admin, &token_address);
     client.register_workspace(
-        &admin, &String::from_str(&env, "ws-001"),
-        &String::from_str(&env, "Hot Desk"), &WorkspaceType::HotDesk, &1u32, &2_000u128,
+        &admin,
+        &String::from_str(&env, "ws-001"),
+        &String::from_str(&env, "Hot Desk"),
+        &WorkspaceType::HotDesk,
+        &1u32,
+        &2_000u128,
     );
     let now = env.ledger().timestamp();
     let start = now + 60;
     let end = start + 3_600;
     client.book_workspace(
-        &member, &String::from_str(&env, "booking-001"),
-        &String::from_str(&env, "ws-001"), &start, &end, &1u32,
+        &member,
+        &String::from_str(&env, "booking-001"),
+        &String::from_str(&env, "ws-001"),
+        &start,
+        &end,
+        &1u32,
     );
     let balance_after_booking = TokenClient::new(&env, &token_address).balance(&member);
     assert_eq!(balance_after_booking, 8_000i128);
@@ -354,15 +399,23 @@ fn test_cancel_booking_after_end_no_refund() {
     let token_address = setup_token(&env, &admin, &member, 10_000i128);
     client.initialize(&admin, &token_address);
     client.register_workspace(
-        &admin, &String::from_str(&env, "ws-001"),
-        &String::from_str(&env, "Hot Desk"), &WorkspaceType::HotDesk, &1u32, &2_000u128,
+        &admin,
+        &String::from_str(&env, "ws-001"),
+        &String::from_str(&env, "Hot Desk"),
+        &WorkspaceType::HotDesk,
+        &1u32,
+        &2_000u128,
     );
     let now = env.ledger().timestamp();
     let start = now + 60;
     let end = start + 3_600;
     client.book_workspace(
-        &member, &String::from_str(&env, "booking-001"),
-        &String::from_str(&env, "ws-001"), &start, &end, &1u32,
+        &member,
+        &String::from_str(&env, "booking-001"),
+        &String::from_str(&env, "ws-001"),
+        &start,
+        &end,
+        &1u32,
     );
     let balance_after_booking = TokenClient::new(&env, &token_address).balance(&member);
     assert_eq!(balance_after_booking, 8_000i128);
@@ -393,7 +446,12 @@ fn test_book_workspace_rejects_overlong_ids() {
         "b_very_long_booking_id_exceeding_the_max_allowed_length_of_sixty_four_characters",
     );
     client.book_workspace(
-        &member, &long_id, &String::from_str(&env, "ws-001"), &start, &end, &1u32,
+        &member,
+        &long_id,
+        &String::from_str(&env, "ws-001"),
+        &start,
+        &end,
+        &1u32,
     );
 }
 
@@ -408,16 +466,23 @@ fn test_complete_booking_by_admin() {
     let token_address = setup_token(&env, &admin, &member, 10_000i128);
     client.initialize(&admin, &token_address);
     client.register_workspace(
-        &admin, &String::from_str(&env, "ws-001"),
+        &admin,
+        &String::from_str(&env, "ws-001"),
         &String::from_str(&env, "Dedicated Desk"),
-        &WorkspaceType::DedicatedDesk, &1u32, &300u128,
+        &WorkspaceType::DedicatedDesk,
+        &1u32,
+        &300u128,
     );
     let now = env.ledger().timestamp();
     let start = now + 60;
     let end = start + 3_600;
     client.book_workspace(
-        &member, &String::from_str(&env, "booking-001"),
-        &String::from_str(&env, "ws-001"), &start, &end, &1u32,
+        &member,
+        &String::from_str(&env, "booking-001"),
+        &String::from_str(&env, "ws-001"),
+        &start,
+        &end,
+        &1u32,
     );
     advance_time(&env, 4_000);
     client.complete_booking(&admin, &String::from_str(&env, "booking-001"));
@@ -437,15 +502,23 @@ fn test_cancel_already_cancelled_fails() {
     let token_address = setup_token(&env, &admin, &member, 10_000i128);
     client.initialize(&admin, &token_address);
     client.register_workspace(
-        &admin, &String::from_str(&env, "ws-001"),
-        &String::from_str(&env, "Hot Desk"), &WorkspaceType::HotDesk, &1u32, &500u128,
+        &admin,
+        &String::from_str(&env, "ws-001"),
+        &String::from_str(&env, "Hot Desk"),
+        &WorkspaceType::HotDesk,
+        &1u32,
+        &500u128,
     );
     let now = env.ledger().timestamp();
     let start = now + 60;
     let end = start + 3_600;
     client.book_workspace(
-        &member, &String::from_str(&env, "booking-001"),
-        &String::from_str(&env, "ws-001"), &start, &end, &1u32,
+        &member,
+        &String::from_str(&env, "booking-001"),
+        &String::from_str(&env, "ws-001"),
+        &start,
+        &end,
+        &1u32,
     );
     client.cancel_booking(&member, &String::from_str(&env, "booking-001"));
     client.cancel_booking(&member, &String::from_str(&env, "booking-001"));
@@ -464,15 +537,23 @@ fn test_cancel_booking_unauthorized_caller_fails() {
     let token_address = setup_token(&env, &admin, &member, 10_000i128);
     client.initialize(&admin, &token_address);
     client.register_workspace(
-        &admin, &String::from_str(&env, "ws-001"),
-        &String::from_str(&env, "Hot Desk"), &WorkspaceType::HotDesk, &1u32, &500u128,
+        &admin,
+        &String::from_str(&env, "ws-001"),
+        &String::from_str(&env, "Hot Desk"),
+        &WorkspaceType::HotDesk,
+        &1u32,
+        &500u128,
     );
     let now = env.ledger().timestamp();
     let start = now + 60;
     let end = start + 3_600;
     client.book_workspace(
-        &member, &String::from_str(&env, "booking-001"),
-        &String::from_str(&env, "ws-001"), &start, &end, &1u32,
+        &member,
+        &String::from_str(&env, "booking-001"),
+        &String::from_str(&env, "ws-001"),
+        &start,
+        &end,
+        &1u32,
     );
     client.cancel_booking(&stranger, &String::from_str(&env, "booking-001"));
 }
@@ -488,16 +569,24 @@ fn test_check_availability_no_conflict() {
     let token_address = setup_token(&env, &admin, &member, 10_000i128);
     client.initialize(&admin, &token_address);
     client.register_workspace(
-        &admin, &String::from_str(&env, "ws-001"),
-        &String::from_str(&env, "Room B"), &WorkspaceType::MeetingRoom, &8u32, &1_500u128,
+        &admin,
+        &String::from_str(&env, "ws-001"),
+        &String::from_str(&env, "Room B"),
+        &WorkspaceType::MeetingRoom,
+        &8u32,
+        &1_500u128,
     );
     let now = env.ledger().timestamp();
     let start = now + 3_600;
     let end = start + 3_600;
     assert!(client.check_availability(&String::from_str(&env, "ws-001"), &start, &end));
     client.book_workspace(
-        &member, &String::from_str(&env, "booking-001"),
-        &String::from_str(&env, "ws-001"), &start, &end, &8u32,
+        &member,
+        &String::from_str(&env, "booking-001"),
+        &String::from_str(&env, "ws-001"),
+        &start,
+        &end,
+        &8u32,
     );
     assert!(!client.check_availability(&String::from_str(&env, "ws-001"), &start, &end));
     assert!(client.check_availability(&String::from_str(&env, "ws-001"), &end, &(end + 3_600)));
@@ -514,8 +603,12 @@ fn test_set_workspace_availability_blocks_new_bookings() {
     let token_address = setup_token(&env, &admin, &member, 10_000i128);
     client.initialize(&admin, &token_address);
     client.register_workspace(
-        &admin, &String::from_str(&env, "ws-001"),
-        &String::from_str(&env, "Desk C"), &WorkspaceType::HotDesk, &1u32, &400u128,
+        &admin,
+        &String::from_str(&env, "ws-001"),
+        &String::from_str(&env, "Desk C"),
+        &WorkspaceType::HotDesk,
+        &1u32,
+        &400u128,
     );
     client.set_workspace_availability(&admin, &String::from_str(&env, "ws-001"), &false);
     assert!(!client.check_availability(
@@ -542,8 +635,12 @@ fn test_multiple_workspaces_independent_availability() {
             _ => String::from_str(&env, "ws-003"),
         };
         client.register_workspace(
-            &admin, &id, &String::from_str(&env, "Workspace"),
-            &WorkspaceType::HotDesk, &1u32, &500u128,
+            &admin,
+            &id,
+            &String::from_str(&env, "Workspace"),
+            &WorkspaceType::HotDesk,
+            &1u32,
+            &500u128,
         );
     }
     assert_eq!(client.get_all_workspaces().len(), 3u32);
@@ -551,8 +648,12 @@ fn test_multiple_workspaces_independent_availability() {
     let start = now + 60;
     let end = start + 3_600;
     client.book_workspace(
-        &member, &String::from_str(&env, "booking-001"),
-        &String::from_str(&env, "ws-001"), &start, &end, &1u32,
+        &member,
+        &String::from_str(&env, "booking-001"),
+        &String::from_str(&env, "ws-001"),
+        &start,
+        &end,
+        &1u32,
     );
     assert!(client.check_availability(&String::from_str(&env, "ws-002"), &start, &end));
     assert!(client.check_availability(&String::from_str(&env, "ws-003"), &start, &end));
@@ -570,8 +671,12 @@ fn test_member_and_workspace_booking_indexes() {
     let token_address = setup_token(&env, &admin, &member, 50_000i128);
     client.initialize(&admin, &token_address);
     client.register_workspace(
-        &admin, &String::from_str(&env, "ws-001"),
-        &String::from_str(&env, "Desk A"), &WorkspaceType::DedicatedDesk, &1u32, &300u128,
+        &admin,
+        &String::from_str(&env, "ws-001"),
+        &String::from_str(&env, "Desk A"),
+        &WorkspaceType::DedicatedDesk,
+        &1u32,
+        &300u128,
     );
     let now = env.ledger().timestamp();
     let s1 = now + 100;
@@ -579,16 +684,26 @@ fn test_member_and_workspace_booking_indexes() {
     let s2 = e1 + 600;
     let e2 = s2 + 3_600;
     client.book_workspace(
-        &member, &String::from_str(&env, "bk-1"),
-        &String::from_str(&env, "ws-001"), &s1, &e1, &1u32,
+        &member,
+        &String::from_str(&env, "bk-1"),
+        &String::from_str(&env, "ws-001"),
+        &s1,
+        &e1,
+        &1u32,
     );
     client.book_workspace(
-        &member, &String::from_str(&env, "bk-2"),
-        &String::from_str(&env, "ws-001"), &s2, &e2, &1u32,
+        &member,
+        &String::from_str(&env, "bk-2"),
+        &String::from_str(&env, "ws-001"),
+        &s2,
+        &e2,
+        &1u32,
     );
     assert_eq!(client.get_member_bookings(&member).len(), 2u32);
     assert_eq!(
-        client.get_workspace_bookings(&String::from_str(&env, "ws-001")).len(),
+        client
+            .get_workspace_bookings(&String::from_str(&env, "ws-001"))
+            .len(),
         2u32
     );
 }
@@ -604,8 +719,12 @@ fn test_hourly_rate_update_applies_to_future_bookings() {
     let token_address = setup_token(&env, &admin, &member, 50_000i128);
     client.initialize(&admin, &token_address);
     client.register_workspace(
-        &admin, &String::from_str(&env, "ws-001"),
-        &String::from_str(&env, "Office"), &WorkspaceType::PrivateOffice, &1u32, &1_000u128,
+        &admin,
+        &String::from_str(&env, "ws-001"),
+        &String::from_str(&env, "Office"),
+        &WorkspaceType::PrivateOffice,
+        &1u32,
+        &1_000u128,
     );
     client.set_workspace_rate(&admin, &String::from_str(&env, "ws-001"), &2_000u128);
     let ws = client.get_workspace(&String::from_str(&env, "ws-001"));
@@ -614,8 +733,12 @@ fn test_hourly_rate_update_applies_to_future_bookings() {
     let start = now + 60;
     let end = start + 3_600;
     client.book_workspace(
-        &member, &String::from_str(&env, "bk-001"),
-        &String::from_str(&env, "ws-001"), &start, &end, &1u32,
+        &member,
+        &String::from_str(&env, "bk-001"),
+        &String::from_str(&env, "ws-001"),
+        &start,
+        &end,
+        &1u32,
     );
     let booking = client.get_booking(&String::from_str(&env, "bk-001"));
     assert_eq!(booking.amount_paid, 2_000u128);
@@ -636,19 +759,31 @@ fn test_concurrent_booking_conflict_same_slot() {
         .mint(&member2, &100_000i128);
     client.initialize(&admin, &token_address);
     client.register_workspace(
-        &admin, &String::from_str(&env, "ws-001"),
-        &String::from_str(&env, "Meeting Room"), &WorkspaceType::MeetingRoom, &1u32, &1_000u128,
+        &admin,
+        &String::from_str(&env, "ws-001"),
+        &String::from_str(&env, "Meeting Room"),
+        &WorkspaceType::MeetingRoom,
+        &1u32,
+        &1_000u128,
     );
     let now = env.ledger().timestamp();
     let start = now + 60;
     let end = start + 3_600;
     client.book_workspace(
-        &member1, &String::from_str(&env, "bk-001"),
-        &String::from_str(&env, "ws-001"), &start, &end, &1u32,
+        &member1,
+        &String::from_str(&env, "bk-001"),
+        &String::from_str(&env, "ws-001"),
+        &start,
+        &end,
+        &1u32,
     );
     let result = client.try_book_workspace(
-        &member2, &String::from_str(&env, "bk-002"),
-        &String::from_str(&env, "ws-001"), &start, &end, &1u32,
+        &member2,
+        &String::from_str(&env, "bk-002"),
+        &String::from_str(&env, "ws-001"),
+        &start,
+        &end,
+        &1u32,
     );
     assert_eq!(result, Err(Ok(Error::BookingConflict)));
 }
@@ -667,9 +802,12 @@ fn test_get_all_workspaces_persistent_storage() {
     let ws_ids = ["ws-001", "ws-002", "ws-003", "ws-004", "ws-005"];
     for ws_id in ws_ids.iter() {
         client.register_workspace(
-            &admin, &String::from_str(&env, ws_id),
+            &admin,
+            &String::from_str(&env, ws_id),
             &String::from_str(&env, "Workspace Name"),
-            &WorkspaceType::DedicatedDesk, &4u32, &250u128,
+            &WorkspaceType::DedicatedDesk,
+            &4u32,
+            &250u128,
         );
     }
     let all_workspaces = client.get_all_workspaces();
@@ -717,13 +855,18 @@ fn test_c16_allowed_transitions_explicit() {
     assert!(active.can_transition(&BookingStatus::Expired));
     assert!(!active.can_transition(&BookingStatus::Active));
     for terminal in [
-        BookingStatus::Completed, BookingStatus::Cancelled,
-        BookingStatus::NoShow, BookingStatus::Expired,
+        BookingStatus::Completed,
+        BookingStatus::Cancelled,
+        BookingStatus::NoShow,
+        BookingStatus::Expired,
     ] {
         assert!(terminal.is_terminal());
         for to in [
-            BookingStatus::Active, BookingStatus::Completed,
-            BookingStatus::Cancelled, BookingStatus::NoShow, BookingStatus::Expired,
+            BookingStatus::Active,
+            BookingStatus::Completed,
+            BookingStatus::Cancelled,
+            BookingStatus::NoShow,
+            BookingStatus::Expired,
         ] {
             assert!(!terminal.can_transition(&to));
             assert!(terminal.transition(to).is_err());
@@ -746,15 +889,23 @@ fn test_c16_contract_rejects_transition_from_terminal() {
     let token_address = setup_token(&env, &admin, &member, 10_000i128);
     client.initialize(&admin, &token_address);
     client.register_workspace(
-        &admin, &String::from_str(&env, "ws-c16"),
-        &String::from_str(&env, "State Room"), &WorkspaceType::MeetingRoom, &4u32, &1_000u128,
+        &admin,
+        &String::from_str(&env, "ws-c16"),
+        &String::from_str(&env, "State Room"),
+        &WorkspaceType::MeetingRoom,
+        &4u32,
+        &1_000u128,
     );
     let now = env.ledger().timestamp();
     let start = now + 60;
     let end = start + 3_600;
     client.book_workspace(
-        &member, &String::from_str(&env, "c16-bk-1"),
-        &String::from_str(&env, "ws-c16"), &start, &end, &1u32,
+        &member,
+        &String::from_str(&env, "c16-bk-1"),
+        &String::from_str(&env, "ws-c16"),
+        &start,
+        &end,
+        &1u32,
     );
     let booking = client.get_booking(&String::from_str(&env, "c16-bk-1"));
     assert_eq!(booking.status, BookingStatus::Active);
@@ -789,29 +940,49 @@ fn test_c13_overlapping_intervals_fail() {
         .mint(&member2, &50_000i128);
     client.initialize(&admin, &token_address);
     client.register_workspace(
-        &admin, &String::from_str(&env, "ws-c13"),
-        &String::from_str(&env, "Conflict Room"), &WorkspaceType::MeetingRoom, &1u32, &1_000u128,
+        &admin,
+        &String::from_str(&env, "ws-c13"),
+        &String::from_str(&env, "Conflict Room"),
+        &WorkspaceType::MeetingRoom,
+        &1u32,
+        &1_000u128,
     );
     let now = env.ledger().timestamp();
     let start = now + 60;
     let end = start + 3_600;
     client.book_workspace(
-        &member1, &String::from_str(&env, "c13-bk-1"),
-        &String::from_str(&env, "ws-c13"), &start, &end, &1u32,
+        &member1,
+        &String::from_str(&env, "c13-bk-1"),
+        &String::from_str(&env, "ws-c13"),
+        &start,
+        &end,
+        &1u32,
     );
     let mid_overlap = client.try_book_workspace(
-        &member2, &String::from_str(&env, "c13-bk-2"),
-        &String::from_str(&env, "ws-c13"), &(start + 1_800), &(end + 1_800), &1u32,
+        &member2,
+        &String::from_str(&env, "c13-bk-2"),
+        &String::from_str(&env, "ws-c13"),
+        &(start + 1_800),
+        &(end + 1_800),
+        &1u32,
     );
     assert_eq!(mid_overlap, Err(Ok(Error::BookingConflict)));
     let contained = client.try_book_workspace(
-        &member2, &String::from_str(&env, "c13-bk-3"),
-        &String::from_str(&env, "ws-c13"), &(start + 600), &(end - 600), &1u32,
+        &member2,
+        &String::from_str(&env, "c13-bk-3"),
+        &String::from_str(&env, "ws-c13"),
+        &(start + 600),
+        &(end - 600),
+        &1u32,
     );
     assert_eq!(contained, Err(Ok(Error::BookingConflict)));
     let covering = client.try_book_workspace(
-        &member2, &String::from_str(&env, "c13-bk-4"),
-        &String::from_str(&env, "ws-c13"), &(start - 600), &(end + 600), &1u32,
+        &member2,
+        &String::from_str(&env, "c13-bk-4"),
+        &String::from_str(&env, "ws-c13"),
+        &(start - 600),
+        &(end + 600),
+        &1u32,
     );
     assert_eq!(covering, Err(Ok(Error::BookingConflict)));
 }
@@ -831,19 +1002,31 @@ fn test_c13_adjacent_intervals_allowed() {
         .mint(&member2, &50_000i128);
     client.initialize(&admin, &token_address);
     client.register_workspace(
-        &admin, &String::from_str(&env, "ws-adj"),
-        &String::from_str(&env, "Adjacent Desk"), &WorkspaceType::HotDesk, &1u32, &500u128,
+        &admin,
+        &String::from_str(&env, "ws-adj"),
+        &String::from_str(&env, "Adjacent Desk"),
+        &WorkspaceType::HotDesk,
+        &1u32,
+        &500u128,
     );
     let now = env.ledger().timestamp();
     let a_start = now + 7_200;
     let a_end = a_start + 3_600;
     client.book_workspace(
-        &member1, &String::from_str(&env, "adj-a"),
-        &String::from_str(&env, "ws-adj"), &a_start, &a_end, &1u32,
+        &member1,
+        &String::from_str(&env, "adj-a"),
+        &String::from_str(&env, "ws-adj"),
+        &a_start,
+        &a_end,
+        &1u32,
     );
     client.book_workspace(
-        &member2, &String::from_str(&env, "adj-b"),
-        &String::from_str(&env, "ws-adj"), &a_end, &(a_end + 3_600), &1u32,
+        &member2,
+        &String::from_str(&env, "adj-b"),
+        &String::from_str(&env, "ws-adj"),
+        &a_end,
+        &(a_end + 3_600),
+        &1u32,
     );
     let member3 = Address::generate(&env);
     StellarAssetClient::new(&env, &token_address)
@@ -852,16 +1035,20 @@ fn test_c13_adjacent_intervals_allowed() {
     let before_start = a_start - 3_600;
     assert!(before_start > now);
     client.book_workspace(
-        &member3, &String::from_str(&env, "adj-c"),
-        &String::from_str(&env, "ws-adj"), &before_start, &a_start, &1u32,
+        &member3,
+        &String::from_str(&env, "adj-c"),
+        &String::from_str(&env, "ws-adj"),
+        &before_start,
+        &a_start,
+        &1u32,
     );
     assert_eq!(
-        client.get_workspace_bookings(&String::from_str(&env, "ws-adj")).len(),
+        client
+            .get_workspace_bookings(&String::from_str(&env, "ws-adj"))
+            .len(),
         3u32
     );
-    assert!(client.check_availability(
-        &String::from_str(&env, "ws-adj"), &a_end, &(a_end + 1),
-    ));
+    assert!(client.check_availability(&String::from_str(&env, "ws-adj"), &a_end, &(a_end + 1),));
 }
 
 #[test]
@@ -879,29 +1066,43 @@ fn test_c13_failed_booking_does_not_transfer_funds() {
         .mint(&member2, &20_000i128);
     client.initialize(&admin, &token_address);
     client.register_workspace(
-        &admin, &String::from_str(&env, "ws-pay"),
-        &String::from_str(&env, "Paid Room"), &WorkspaceType::MeetingRoom, &1u32, &1_000u128,
+        &admin,
+        &String::from_str(&env, "ws-pay"),
+        &String::from_str(&env, "Paid Room"),
+        &WorkspaceType::MeetingRoom,
+        &1u32,
+        &1_000u128,
     );
     let token = TokenClient::new(&env, &token_address);
     let now = env.ledger().timestamp();
     let start = now + 60;
     let end = start + 3_600;
     client.book_workspace(
-        &member1, &String::from_str(&env, "pay-1"),
-        &String::from_str(&env, "ws-pay"), &start, &end, &1u32,
+        &member1,
+        &String::from_str(&env, "pay-1"),
+        &String::from_str(&env, "ws-pay"),
+        &start,
+        &end,
+        &1u32,
     );
     assert_eq!(token.balance(&member1), 19_000i128);
     let balance_before = token.balance(&member2);
     let contract_before = token.balance(&contract_id);
     let result = client.try_book_workspace(
-        &member2, &String::from_str(&env, "pay-2"),
-        &String::from_str(&env, "ws-pay"), &(start + 900), &(end + 900), &1u32,
+        &member2,
+        &String::from_str(&env, "pay-2"),
+        &String::from_str(&env, "ws-pay"),
+        &(start + 900),
+        &(end + 900),
+        &1u32,
     );
     assert_eq!(result, Err(Ok(Error::BookingConflict)));
     assert_eq!(token.balance(&member2), balance_before);
     assert_eq!(token.balance(&contract_id), contract_before);
     assert_eq!(
-        client.get_workspace_bookings(&String::from_str(&env, "ws-pay")).len(),
+        client
+            .get_workspace_bookings(&String::from_str(&env, "ws-pay"))
+            .len(),
         1u32
     );
 }
@@ -921,20 +1122,32 @@ fn test_c13_cancelled_booking_frees_slot_for_rebook() {
         .mint(&member2, &20_000i128);
     client.initialize(&admin, &token_address);
     client.register_workspace(
-        &admin, &String::from_str(&env, "ws-free"),
-        &String::from_str(&env, "Rebook Room"), &WorkspaceType::PrivateOffice, &1u32, &2_000u128,
+        &admin,
+        &String::from_str(&env, "ws-free"),
+        &String::from_str(&env, "Rebook Room"),
+        &WorkspaceType::PrivateOffice,
+        &1u32,
+        &2_000u128,
     );
     let now = env.ledger().timestamp();
     let start = now + 60;
     let end = start + 3_600;
     client.book_workspace(
-        &member1, &String::from_str(&env, "free-1"),
-        &String::from_str(&env, "ws-free"), &start, &end, &1u32,
+        &member1,
+        &String::from_str(&env, "free-1"),
+        &String::from_str(&env, "ws-free"),
+        &start,
+        &end,
+        &1u32,
     );
     client.cancel_booking(&member1, &String::from_str(&env, "free-1"));
     client.book_workspace(
-        &member2, &String::from_str(&env, "free-2"),
-        &String::from_str(&env, "ws-free"), &start, &end, &1u32,
+        &member2,
+        &String::from_str(&env, "free-2"),
+        &String::from_str(&env, "ws-free"),
+        &start,
+        &end,
+        &1u32,
     );
     let rebooked = client.get_booking(&String::from_str(&env, "free-2"));
     assert_eq!(rebooked.status, BookingStatus::Active);
@@ -951,8 +1164,12 @@ fn test_active_index_shrinks_after_cancel_and_slot_reopens() {
     let token_address = setup_token(&env, &admin, &member, 100_000i128);
     client.initialize(&admin, &token_address);
     client.register_workspace(
-        &admin, &String::from_str(&env, "ws-idx"),
-        &String::from_str(&env, "Index Room"), &WorkspaceType::HotDesk, &1u32, &100u128,
+        &admin,
+        &String::from_str(&env, "ws-idx"),
+        &String::from_str(&env, "Index Room"),
+        &WorkspaceType::HotDesk,
+        &1u32,
+        &100u128,
     );
     let workspace_id = String::from_str(&env, "ws-idx");
     let now = env.ledger().timestamp();
@@ -965,9 +1182,9 @@ fn test_active_index_shrinks_after_cancel_and_slot_reopens() {
     let active = env.as_contract(&client.address, || {
         env.storage()
             .persistent()
-            .get::<_, soroban_sdk::Vec<String>>(
-                &DataKey::ActiveWorkspaceBookings(workspace_id.clone()),
-            )
+            .get::<_, soroban_sdk::Vec<String>>(&DataKey::ActiveWorkspaceBookings(
+                workspace_id.clone(),
+            ))
             .unwrap_or(soroban_sdk::Vec::new(&env))
     });
     assert_eq!(active.len(), 0);
@@ -987,13 +1204,18 @@ fn test_is_slot_available_ignores_terminal_bookings_after_many_cycles() {
     let token_address = setup_token(&env, &admin, &member, 500_000i128);
     client.initialize(&admin, &token_address);
     client.register_workspace(
-        &admin, &String::from_str(&env, "ws-cycle"),
-        &String::from_str(&env, "Cycle Room"), &WorkspaceType::HotDesk, &1u32, &100u128,
+        &admin,
+        &String::from_str(&env, "ws-cycle"),
+        &String::from_str(&env, "Cycle Room"),
+        &WorkspaceType::HotDesk,
+        &1u32,
+        &100u128,
     );
     let workspace_id = String::from_str(&env, "ws-cycle");
     let now = env.ledger().timestamp();
-    for i in 0..5u32 {
-        let id = String::from_str(&env, &soroban_sdk::format!(env, "hist-{}", i));
+    let hist_ids = ["hist-0", "hist-1", "hist-2", "hist-3", "hist-4"];
+    for (i, hist_id) in hist_ids.iter().enumerate() {
+        let id = String::from_str(&env, hist_id);
         let start = now + 1_000 + (i as u64) * 500;
         let end = start + 100;
         client.book_workspace(&member, &id, &workspace_id, &start, &end, &1u32);
@@ -1002,12 +1224,16 @@ fn test_is_slot_available_ignores_terminal_bookings_after_many_cycles() {
     let active = env.as_contract(&client.address, || {
         env.storage()
             .persistent()
-            .get::<_, soroban_sdk::Vec<String>>(
-                &DataKey::ActiveWorkspaceBookings(workspace_id.clone()),
-            )
+            .get::<_, soroban_sdk::Vec<String>>(&DataKey::ActiveWorkspaceBookings(
+                workspace_id.clone(),
+            ))
             .unwrap_or(soroban_sdk::Vec::new(&env))
     });
-    assert_eq!(active.len(), 0, "active index must not accumulate terminal bookings");
+    assert_eq!(
+        active.len(),
+        0,
+        "active index must not accumulate terminal bookings"
+    );
     let new_start = now + 1_000;
     let new_end = new_start + 100;
     let new_id = String::from_str(&env, "fresh");
@@ -1015,9 +1241,9 @@ fn test_is_slot_available_ignores_terminal_bookings_after_many_cycles() {
     let active_after = env.as_contract(&client.address, || {
         env.storage()
             .persistent()
-            .get::<_, soroban_sdk::Vec<String>>(
-                &DataKey::ActiveWorkspaceBookings(workspace_id.clone()),
-            )
+            .get::<_, soroban_sdk::Vec<String>>(&DataKey::ActiveWorkspaceBookings(
+                workspace_id.clone(),
+            ))
             .unwrap_or(soroban_sdk::Vec::new(&env))
     });
     assert_eq!(active_after.len(), 1);
@@ -1036,8 +1262,12 @@ fn test_register_workspace_zero_capacity_fails() {
     let token = Address::generate(&env);
     client.initialize(&admin, &token);
     let result = client.try_register_workspace(
-        &admin, &String::from_str(&env, "ws-zero-cap"),
-        &String::from_str(&env, "Zero Cap Desk"), &WorkspaceType::HotDesk, &0u32, &500u128,
+        &admin,
+        &String::from_str(&env, "ws-zero-cap"),
+        &String::from_str(&env, "Zero Cap Desk"),
+        &WorkspaceType::HotDesk,
+        &0u32,
+        &500u128,
     );
     assert_eq!(result, Err(Ok(Error::InvalidCapacity)));
     let fetch = client.try_get_workspace(&String::from_str(&env, "ws-zero-cap"));
@@ -1056,15 +1286,23 @@ fn test_book_workspace_zero_seats_fails() {
     let token_address = setup_token(&env, &admin, &member, 50_000i128);
     client.initialize(&admin, &token_address);
     client.register_workspace(
-        &admin, &String::from_str(&env, "ws-cap"),
-        &String::from_str(&env, "Cap Room"), &WorkspaceType::MeetingRoom, &10u32, &1_000u128,
+        &admin,
+        &String::from_str(&env, "ws-cap"),
+        &String::from_str(&env, "Cap Room"),
+        &WorkspaceType::MeetingRoom,
+        &10u32,
+        &1_000u128,
     );
     let now = env.ledger().timestamp();
     let start = now + 60;
     let end = start + 3_600;
     let result = client.try_book_workspace(
-        &member, &String::from_str(&env, "bk-zero-seats"),
-        &String::from_str(&env, "ws-cap"), &start, &end, &0u32,
+        &member,
+        &String::from_str(&env, "bk-zero-seats"),
+        &String::from_str(&env, "ws-cap"),
+        &start,
+        &end,
+        &0u32,
     );
     assert_eq!(result, Err(Ok(Error::InvalidSeatCount)));
 }
@@ -1081,15 +1319,23 @@ fn test_book_workspace_exceeds_total_capacity_fails() {
     let token_address = setup_token(&env, &admin, &member, 50_000i128);
     client.initialize(&admin, &token_address);
     client.register_workspace(
-        &admin, &String::from_str(&env, "ws-small"),
-        &String::from_str(&env, "Small Room"), &WorkspaceType::MeetingRoom, &5u32, &500u128,
+        &admin,
+        &String::from_str(&env, "ws-small"),
+        &String::from_str(&env, "Small Room"),
+        &WorkspaceType::MeetingRoom,
+        &5u32,
+        &500u128,
     );
     let now = env.ledger().timestamp();
     let start = now + 60;
     let end = start + 3_600;
     let result = client.try_book_workspace(
-        &member, &String::from_str(&env, "bk-over-cap"),
-        &String::from_str(&env, "ws-small"), &start, &end, &6u32,
+        &member,
+        &String::from_str(&env, "bk-over-cap"),
+        &String::from_str(&env, "ws-small"),
+        &start,
+        &end,
+        &6u32,
     );
     assert_eq!(result, Err(Ok(Error::CapacityExceeded)));
 }
@@ -1106,15 +1352,23 @@ fn test_book_workspace_exact_capacity_succeeds() {
     let token_address = setup_token(&env, &admin, &member, 100_000i128);
     client.initialize(&admin, &token_address);
     client.register_workspace(
-        &admin, &String::from_str(&env, "ws-exact"),
-        &String::from_str(&env, "Exact Room"), &WorkspaceType::MeetingRoom, &8u32, &200u128,
+        &admin,
+        &String::from_str(&env, "ws-exact"),
+        &String::from_str(&env, "Exact Room"),
+        &WorkspaceType::MeetingRoom,
+        &8u32,
+        &200u128,
     );
     let now = env.ledger().timestamp();
     let start = now + 60;
     let end = start + 3_600;
     client.book_workspace(
-        &member, &String::from_str(&env, "bk-exact"),
-        &String::from_str(&env, "ws-exact"), &start, &end, &8u32,
+        &member,
+        &String::from_str(&env, "bk-exact"),
+        &String::from_str(&env, "ws-exact"),
+        &start,
+        &end,
+        &8u32,
     );
     let booking = client.get_booking(&String::from_str(&env, "bk-exact"));
     assert_eq!(booking.seats_requested, 8u32);
@@ -1137,19 +1391,31 @@ fn test_book_workspace_exact_remaining_capacity_succeeds() {
         .mint(&member2, &100_000i128);
     client.initialize(&admin, &token_address);
     client.register_workspace(
-        &admin, &String::from_str(&env, "ws-remain"),
-        &String::from_str(&env, "Remain Room"), &WorkspaceType::MeetingRoom, &10u32, &100u128,
+        &admin,
+        &String::from_str(&env, "ws-remain"),
+        &String::from_str(&env, "Remain Room"),
+        &WorkspaceType::MeetingRoom,
+        &10u32,
+        &100u128,
     );
     let now = env.ledger().timestamp();
     let start = now + 60;
     let end = start + 3_600;
     client.book_workspace(
-        &member1, &String::from_str(&env, "bk-rem-1"),
-        &String::from_str(&env, "ws-remain"), &start, &end, &7u32,
+        &member1,
+        &String::from_str(&env, "bk-rem-1"),
+        &String::from_str(&env, "ws-remain"),
+        &start,
+        &end,
+        &7u32,
     );
     client.book_workspace(
-        &member2, &String::from_str(&env, "bk-rem-2"),
-        &String::from_str(&env, "ws-remain"), &start, &end, &3u32,
+        &member2,
+        &String::from_str(&env, "bk-rem-2"),
+        &String::from_str(&env, "ws-remain"),
+        &start,
+        &end,
+        &3u32,
     );
     let b2 = client.get_booking(&String::from_str(&env, "bk-rem-2"));
     assert_eq!(b2.seats_requested, 3u32);
@@ -1172,19 +1438,31 @@ fn test_book_workspace_one_over_remaining_capacity_fails() {
         .mint(&member2, &100_000i128);
     client.initialize(&admin, &token_address);
     client.register_workspace(
-        &admin, &String::from_str(&env, "ws-over"),
-        &String::from_str(&env, "Over Room"), &WorkspaceType::MeetingRoom, &4u32, &100u128,
+        &admin,
+        &String::from_str(&env, "ws-over"),
+        &String::from_str(&env, "Over Room"),
+        &WorkspaceType::MeetingRoom,
+        &4u32,
+        &100u128,
     );
     let now = env.ledger().timestamp();
     let start = now + 60;
     let end = start + 3_600;
     client.book_workspace(
-        &member1, &String::from_str(&env, "bk-over-1"),
-        &String::from_str(&env, "ws-over"), &start, &end, &3u32,
+        &member1,
+        &String::from_str(&env, "bk-over-1"),
+        &String::from_str(&env, "ws-over"),
+        &start,
+        &end,
+        &3u32,
     );
     let result = client.try_book_workspace(
-        &member2, &String::from_str(&env, "bk-over-2"),
-        &String::from_str(&env, "ws-over"), &start, &end, &2u32,
+        &member2,
+        &String::from_str(&env, "bk-over-2"),
+        &String::from_str(&env, "ws-over"),
+        &start,
+        &end,
+        &2u32,
     );
     assert_eq!(result, Err(Ok(Error::CapacityExceeded)));
 }
@@ -1205,19 +1483,31 @@ fn test_book_workspace_capacity_exhausted_fails() {
         .mint(&member2, &100_000i128);
     client.initialize(&admin, &token_address);
     client.register_workspace(
-        &admin, &String::from_str(&env, "ws-full"),
-        &String::from_str(&env, "Full Room"), &WorkspaceType::MeetingRoom, &3u32, &100u128,
+        &admin,
+        &String::from_str(&env, "ws-full"),
+        &String::from_str(&env, "Full Room"),
+        &WorkspaceType::MeetingRoom,
+        &3u32,
+        &100u128,
     );
     let now = env.ledger().timestamp();
     let start = now + 60;
     let end = start + 3_600;
     client.book_workspace(
-        &member1, &String::from_str(&env, "bk-full-1"),
-        &String::from_str(&env, "ws-full"), &start, &end, &3u32,
+        &member1,
+        &String::from_str(&env, "bk-full-1"),
+        &String::from_str(&env, "ws-full"),
+        &start,
+        &end,
+        &3u32,
     );
     let result = client.try_book_workspace(
-        &member2, &String::from_str(&env, "bk-full-2"),
-        &String::from_str(&env, "ws-full"), &start, &end, &1u32,
+        &member2,
+        &String::from_str(&env, "bk-full-2"),
+        &String::from_str(&env, "ws-full"),
+        &start,
+        &end,
+        &1u32,
     );
     assert_eq!(result, Err(Ok(Error::CapacityExceeded)));
 }
@@ -1234,8 +1524,12 @@ fn test_invalid_seat_count_does_not_transfer_funds() {
     let token_address = setup_token(&env, &admin, &member, 50_000i128);
     client.initialize(&admin, &token_address);
     client.register_workspace(
-        &admin, &String::from_str(&env, "ws-pay-safe"),
-        &String::from_str(&env, "Pay Safe Room"), &WorkspaceType::MeetingRoom, &5u32, &1_000u128,
+        &admin,
+        &String::from_str(&env, "ws-pay-safe"),
+        &String::from_str(&env, "Pay Safe Room"),
+        &WorkspaceType::MeetingRoom,
+        &5u32,
+        &1_000u128,
     );
     let token = TokenClient::new(&env, &token_address);
     let now = env.ledger().timestamp();
@@ -1244,8 +1538,12 @@ fn test_invalid_seat_count_does_not_transfer_funds() {
     let member_balance_before = token.balance(&member);
     let contract_balance_before = token.balance(&contract_id);
     let result = client.try_book_workspace(
-        &member, &String::from_str(&env, "bk-pay-safe-0"),
-        &String::from_str(&env, "ws-pay-safe"), &start, &end, &0u32,
+        &member,
+        &String::from_str(&env, "bk-pay-safe-0"),
+        &String::from_str(&env, "ws-pay-safe"),
+        &start,
+        &end,
+        &0u32,
     );
     assert_eq!(result, Err(Ok(Error::InvalidSeatCount)));
     assert_eq!(token.balance(&member), member_balance_before);
@@ -1264,8 +1562,12 @@ fn test_over_capacity_request_does_not_transfer_funds() {
     let token_address = setup_token(&env, &admin, &member, 50_000i128);
     client.initialize(&admin, &token_address);
     client.register_workspace(
-        &admin, &String::from_str(&env, "ws-cap-safe"),
-        &String::from_str(&env, "Cap Safe Room"), &WorkspaceType::MeetingRoom, &3u32, &500u128,
+        &admin,
+        &String::from_str(&env, "ws-cap-safe"),
+        &String::from_str(&env, "Cap Safe Room"),
+        &WorkspaceType::MeetingRoom,
+        &3u32,
+        &500u128,
     );
     let token = TokenClient::new(&env, &token_address);
     let now = env.ledger().timestamp();
@@ -1274,8 +1576,12 @@ fn test_over_capacity_request_does_not_transfer_funds() {
     let member_balance_before = token.balance(&member);
     let contract_balance_before = token.balance(&contract_id);
     let result = client.try_book_workspace(
-        &member, &String::from_str(&env, "bk-cap-safe"),
-        &String::from_str(&env, "ws-cap-safe"), &start, &end, &4u32,
+        &member,
+        &String::from_str(&env, "bk-cap-safe"),
+        &String::from_str(&env, "ws-cap-safe"),
+        &start,
+        &end,
+        &4u32,
     );
     assert_eq!(result, Err(Ok(Error::CapacityExceeded)));
     assert_eq!(token.balance(&member), member_balance_before);
@@ -1294,15 +1600,23 @@ fn test_book_workspace_minimum_valid_seats() {
     let token_address = setup_token(&env, &admin, &member, 10_000i128);
     client.initialize(&admin, &token_address);
     client.register_workspace(
-        &admin, &String::from_str(&env, "ws-min"),
-        &String::from_str(&env, "Min Desk"), &WorkspaceType::HotDesk, &1u32, &500u128,
+        &admin,
+        &String::from_str(&env, "ws-min"),
+        &String::from_str(&env, "Min Desk"),
+        &WorkspaceType::HotDesk,
+        &1u32,
+        &500u128,
     );
     let now = env.ledger().timestamp();
     let start = now + 60;
     let end = start + 3_600;
     client.book_workspace(
-        &member, &String::from_str(&env, "bk-min"),
-        &String::from_str(&env, "ws-min"), &start, &end, &1u32,
+        &member,
+        &String::from_str(&env, "bk-min"),
+        &String::from_str(&env, "ws-min"),
+        &start,
+        &end,
+        &1u32,
     );
     let booking = client.get_booking(&String::from_str(&env, "bk-min"));
     assert_eq!(booking.seats_requested, 1u32);
@@ -1321,36 +1635,64 @@ fn test_partial_seat_bookings_accumulate_and_fail_when_full() {
     let m2 = Address::generate(&env);
     let m3 = Address::generate(&env);
     let token_address = setup_token(&env, &admin, &m1, 100_000i128);
-    StellarAssetClient::new(&env, &token_address).mock_all_auths().mint(&m2, &100_000i128);
-    StellarAssetClient::new(&env, &token_address).mock_all_auths().mint(&m3, &100_000i128);
+    StellarAssetClient::new(&env, &token_address)
+        .mock_all_auths()
+        .mint(&m2, &100_000i128);
+    StellarAssetClient::new(&env, &token_address)
+        .mock_all_auths()
+        .mint(&m3, &100_000i128);
     client.initialize(&admin, &token_address);
     client.register_workspace(
-        &admin, &String::from_str(&env, "ws-multi"),
-        &String::from_str(&env, "Multi Room"), &WorkspaceType::MeetingRoom, &6u32, &100u128,
+        &admin,
+        &String::from_str(&env, "ws-multi"),
+        &String::from_str(&env, "Multi Room"),
+        &WorkspaceType::MeetingRoom,
+        &6u32,
+        &100u128,
     );
     let now = env.ledger().timestamp();
     let start = now + 60;
     let end = start + 3_600;
     client.book_workspace(
-        &m1, &String::from_str(&env, "bk-m1"),
-        &String::from_str(&env, "ws-multi"), &start, &end, &3u32,
+        &m1,
+        &String::from_str(&env, "bk-m1"),
+        &String::from_str(&env, "ws-multi"),
+        &start,
+        &end,
+        &3u32,
     );
     client.book_workspace(
-        &m2, &String::from_str(&env, "bk-m2"),
-        &String::from_str(&env, "ws-multi"), &start, &end, &2u32,
+        &m2,
+        &String::from_str(&env, "bk-m2"),
+        &String::from_str(&env, "ws-multi"),
+        &start,
+        &end,
+        &2u32,
     );
     let result = client.try_book_workspace(
-        &m3, &String::from_str(&env, "bk-m3"),
-        &String::from_str(&env, "ws-multi"), &start, &end, &2u32,
+        &m3,
+        &String::from_str(&env, "bk-m3"),
+        &String::from_str(&env, "ws-multi"),
+        &start,
+        &end,
+        &2u32,
     );
     assert_eq!(result, Err(Ok(Error::CapacityExceeded)));
     client.book_workspace(
-        &m3, &String::from_str(&env, "bk-m3-ok"),
-        &String::from_str(&env, "ws-multi"), &start, &end, &1u32,
+        &m3,
+        &String::from_str(&env, "bk-m3-ok"),
+        &String::from_str(&env, "ws-multi"),
+        &start,
+        &end,
+        &1u32,
     );
     let final_result = client.try_book_workspace(
-        &m1, &String::from_str(&env, "bk-m1-extra"),
-        &String::from_str(&env, "ws-multi"), &start, &end, &1u32,
+        &m1,
+        &String::from_str(&env, "bk-m1-extra"),
+        &String::from_str(&env, "ws-multi"),
+        &start,
+        &end,
+        &1u32,
     );
     assert_eq!(final_result, Err(Ok(Error::CapacityExceeded)));
 }
@@ -1377,11 +1719,7 @@ fn test_ct05_deactivate_no_active_bookings_succeeds() {
         &500u128,
     );
     // No bookings — deactivation should succeed.
-    client.set_workspace_availability(
-        &admin,
-        &String::from_str(&env, "ws-ct05-1"),
-        &false,
-    );
+    client.set_workspace_availability(&admin, &String::from_str(&env, "ws-ct05-1"), &false);
     let ws = client.get_workspace(&String::from_str(&env, "ws-ct05-1"));
     assert_ne!(ws.availability, WorkspaceAvailability::Available);
 }
@@ -1418,11 +1756,8 @@ fn test_ct05_deactivate_with_active_booking_blocked() {
         &2u32,
     );
     // Active booking exists — deactivation must be blocked.
-    let result = client.try_set_workspace_availability(
-        &admin,
-        &String::from_str(&env, "ws-ct05-2"),
-        &false,
-    );
+    let result =
+        client.try_set_workspace_availability(&admin, &String::from_str(&env, "ws-ct05-2"), &false);
     assert_eq!(result, Err(Ok(Error::WorkspaceHasActiveBookings)));
     // Workspace remains Available because the call failed.
     let ws = client.get_workspace(&String::from_str(&env, "ws-ct05-2"));
@@ -1463,19 +1798,12 @@ fn test_ct05_deactivate_after_cancel_succeeds() {
         &1u32,
     );
     // Blocked while booking is active.
-    let blocked = client.try_set_workspace_availability(
-        &admin,
-        &String::from_str(&env, "ws-ct05-3"),
-        &false,
-    );
+    let blocked =
+        client.try_set_workspace_availability(&admin, &String::from_str(&env, "ws-ct05-3"), &false);
     assert_eq!(blocked, Err(Ok(Error::WorkspaceHasActiveBookings)));
     // Cancel the booking — deactivation should now succeed.
     client.cancel_booking(&member, &String::from_str(&env, "bk-ct05-2"));
-    client.set_workspace_availability(
-        &admin,
-        &String::from_str(&env, "ws-ct05-3"),
-        &false,
-    );
+    client.set_workspace_availability(&admin, &String::from_str(&env, "ws-ct05-3"), &false);
     let ws = client.get_workspace(&String::from_str(&env, "ws-ct05-3"));
     assert_ne!(ws.availability, WorkspaceAvailability::Available);
 }
@@ -1500,11 +1828,7 @@ fn test_ct05_reactivate_with_active_bookings_allowed() {
         &500u128,
     );
     // Deactivate with no bookings.
-    client.set_workspace_availability(
-        &admin,
-        &String::from_str(&env, "ws-ct05-4"),
-        &false,
-    );
+    client.set_workspace_availability(&admin, &String::from_str(&env, "ws-ct05-4"), &false);
     // Create a booking while workspace is Unavailable — should fail.
     let now = env.ledger().timestamp();
     let start = now + 60;
@@ -1519,11 +1843,7 @@ fn test_ct05_reactivate_with_active_bookings_allowed() {
     );
     assert_eq!(book_result, Err(Ok(Error::WorkspaceUnavailable)));
     // Reactivate — no active bookings so this is fine.
-    client.set_workspace_availability(
-        &admin,
-        &String::from_str(&env, "ws-ct05-4"),
-        &true,
-    );
+    client.set_workspace_availability(&admin, &String::from_str(&env, "ws-ct05-4"), &true);
     // Now book successfully.
     client.book_workspace(
         &member,
@@ -1534,11 +1854,7 @@ fn test_ct05_reactivate_with_active_bookings_allowed() {
         &1u32,
     );
     // Reactivate again while there IS an active booking — should succeed.
-    client.set_workspace_availability(
-        &admin,
-        &String::from_str(&env, "ws-ct05-4"),
-        &true,
-    );
+    client.set_workspace_availability(&admin, &String::from_str(&env, "ws-ct05-4"), &true);
     let ws = client.get_workspace(&String::from_str(&env, "ws-ct05-4"));
     assert_eq!(ws.availability, WorkspaceAvailability::Available);
 }
@@ -1588,11 +1904,8 @@ fn test_ct05_deactivate_multiple_active_bookings_blocked() {
         &end2,
         &2u32,
     );
-    let result = client.try_set_workspace_availability(
-        &admin,
-        &String::from_str(&env, "ws-ct05-5"),
-        &false,
-    );
+    let result =
+        client.try_set_workspace_availability(&admin, &String::from_str(&env, "ws-ct05-5"), &false);
     assert_eq!(result, Err(Ok(Error::WorkspaceHasActiveBookings)));
 }
 
@@ -1661,7 +1974,7 @@ fn test_ct05_active_bookings_query() {
         &500u128,
     );
     // No bookings — query returns false.
-    assert!(!client.workspace_has_active_bookings_query(&String::from_str(&env, "ws-ct05-q")));
+    assert!(!client.has_active_bookings(&String::from_str(&env, "ws-ct05-q")));
     let now = env.ledger().timestamp();
     let start = now + 60;
     let end = start + 3_600;
@@ -1674,8 +1987,8 @@ fn test_ct05_active_bookings_query() {
         &1u32,
     );
     // Active booking — query returns true.
-    assert!(client.workspace_has_active_bookings_query(&String::from_str(&env, "ws-ct05-q")));
+    assert!(client.has_active_bookings(&String::from_str(&env, "ws-ct05-q")));
     // After cancellation — query returns false again.
     client.cancel_booking(&member, &String::from_str(&env, "bk-ct05-q"));
-    assert!(!client.workspace_has_active_bookings_query(&String::from_str(&env, "ws-ct05-q")));
+    assert!(!client.has_active_bookings(&String::from_str(&env, "ws-ct05-q")));
 }
