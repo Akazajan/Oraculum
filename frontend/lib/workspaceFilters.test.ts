@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   areFiltersEqual,
   filtersFromSearchParams,
+  isWorkspaceType,
   searchParamsFromFilters,
   toWorkspaceQuery,
 } from "./workspaceFilters";
@@ -104,5 +105,58 @@ describe("areFiltersEqual", () => {
     expect(
       areFiltersEqual({ search: "hub", type: "" }, { search: "hub", type: "HOT_DESK" })
     ).toBe(false);
+  });
+});
+
+// F20 — Reject workspace filter values outside available options ───────────────
+//
+// When the available workspace set changes (e.g. a workspace type is removed
+// from the backend catalogue), any existing filter that referenced it must be
+// cleared rather than forwarded as a stale, unrecognised value.
+
+describe("F20 — stale filter rejection on available-set change", () => {
+  it("isWorkspaceType returns false for a value not in the allowed set", () => {
+    expect(isWorkspaceType("WAREHOUSE", ALLOWED)).toBe(false);
+    expect(isWorkspaceType("HOT_DESK", ALLOWED)).toBe(true);
+  });
+
+  it("filtersFromSearchParams clears a type that is no longer available", () => {
+    // Previously the user had "VIRTUAL" selected. Now VIRTUAL is removed from
+    // the available set.
+    const limited: readonly WorkspaceType[] = [
+      "COWORKING",
+      "PRIVATE_OFFICE",
+      "MEETING_ROOM",
+    ];
+
+    const filters = filtersFromSearchParams(
+      new URLSearchParams("type=HOT_DESK&search=annex"),
+      limited
+    );
+
+    // HOT_DESK is not in `limited`, so it should be cleared.
+    expect(filters.type).toBe("");
+    // The search term is unaffected.
+    expect(filters.search).toBe("annex");
+  });
+
+  it("filtersFromSearchParams keeps a type that remains available", () => {
+    const filters = filtersFromSearchParams(
+      new URLSearchParams("type=COWORKING"),
+      ALLOWED
+    );
+    expect(filters.type).toBe("COWORKING");
+  });
+
+  it("toWorkspaceQuery omits a stale (empty) type filter", () => {
+    // After filtersFromSearchParams clears the stale type, the resulting
+    // empty string is not forwarded to the API.
+    const query = toWorkspaceQuery({ search: "", type: "" }, 1, 10);
+    expect("type" in query).toBe(false);
+  });
+
+  it("isWorkspaceType rejects null and undefined without throwing", () => {
+    expect(isWorkspaceType(null, ALLOWED)).toBe(false);
+    expect(isWorkspaceType(undefined, ALLOWED)).toBe(false);
   });
 });
