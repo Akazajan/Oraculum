@@ -2746,3 +2746,184 @@ fn test_900_admin_transfer_expiry_overflow_rejected() {
     );
     assert!(client.get_pending_admin_transfer().is_none());
 }
+
+// ── C19 — Avoid duplicate workspace registration IDs ─────────────────────────
+
+/// Registering the same workspace ID twice returns WorkspaceAlreadyExists.
+#[test]
+fn test_c19_duplicate_workspace_id_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = setup_contract(&env);
+    let client = WorkspaceBookingContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let token = Address::generate(&env);
+    client.initialize(&admin, &token);
+
+    client.register_workspace(
+        &admin,
+        &String::from_str(&env, "ws-dup"),
+        &String::from_str(&env, "Original"),
+        &WorkspaceType::HotDesk,
+        &1u32,
+        &500u128,
+    );
+
+    // Second registration with the same ID must fail.
+    let result = client.try_register_workspace(
+        &admin,
+        &String::from_str(&env, "ws-dup"),
+        &String::from_str(&env, "Copy"),
+        &WorkspaceType::HotDesk,
+        &1u32,
+        &600u128,
+    );
+    assert_eq!(result, Err(Ok(Error::WorkspaceAlreadyExists)));
+}
+
+/// Registering two workspaces with different IDs succeeds for both.
+#[test]
+fn test_c19_distinct_workspace_ids_allowed() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = setup_contract(&env);
+    let client = WorkspaceBookingContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let token = Address::generate(&env);
+    client.initialize(&admin, &token);
+
+    client.register_workspace(
+        &admin,
+        &String::from_str(&env, "ws-a"),
+        &String::from_str(&env, "Workspace A"),
+        &WorkspaceType::HotDesk,
+        &1u32,
+        &500u128,
+    );
+    client.register_workspace(
+        &admin,
+        &String::from_str(&env, "ws-b"),
+        &String::from_str(&env, "Workspace B"),
+        &WorkspaceType::HotDesk,
+        &1u32,
+        &500u128,
+    );
+
+    assert_eq!(client.get_all_workspaces().len(), 2u32);
+}
+
+// ── C20 — Bound workspace hourly rates ───────────────────────────────────────
+
+/// A zero hourly rate is rejected at registration.
+#[test]
+fn test_c20_zero_rate_rejected_at_registration() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = setup_contract(&env);
+    let client = WorkspaceBookingContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let token = Address::generate(&env);
+    client.initialize(&admin, &token);
+
+    let result = client.try_register_workspace(
+        &admin,
+        &String::from_str(&env, "ws-z"),
+        &String::from_str(&env, "Zero Rate"),
+        &WorkspaceType::HotDesk,
+        &1u32,
+        &0u128,
+    );
+    assert_eq!(result, Err(Ok(Error::InvalidRate)));
+}
+
+/// A rate exceeding MAX_HOURLY_RATE is rejected at registration.
+#[test]
+fn test_c20_rate_above_maximum_rejected_at_registration() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = setup_contract(&env);
+    let client = WorkspaceBookingContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let token = Address::generate(&env);
+    client.initialize(&admin, &token);
+
+    // MAX_HOURLY_RATE + 1 must be rejected.
+    let result = client.try_register_workspace(
+        &admin,
+        &String::from_str(&env, "ws-hi"),
+        &String::from_str(&env, "High Rate"),
+        &WorkspaceType::PrivateOffice,
+        &1u32,
+        &10_000_000_000_001u128,
+    );
+    assert_eq!(result, Err(Ok(Error::InvalidRate)));
+}
+
+/// A rate exactly at MAX_HOURLY_RATE is accepted.
+#[test]
+fn test_c20_rate_at_maximum_boundary_accepted() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = setup_contract(&env);
+    let client = WorkspaceBookingContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let token = Address::generate(&env);
+    client.initialize(&admin, &token);
+
+    client.register_workspace(
+        &admin,
+        &String::from_str(&env, "ws-max"),
+        &String::from_str(&env, "Max Rate"),
+        &WorkspaceType::PrivateOffice,
+        &1u32,
+        &10_000_000_000_000u128, // exactly MAX_HOURLY_RATE
+    );
+
+    let ws = client.get_workspace(&String::from_str(&env, "ws-max"));
+    assert_eq!(ws.hourly_rate, 10_000_000_000_000u128);
+}
+
+/// A zero or over-maximum rate is also rejected when updating an existing workspace.
+#[test]
+fn test_c20_rate_update_rejects_out_of_bounds() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = setup_contract(&env);
+    let client = WorkspaceBookingContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let token = Address::generate(&env);
+    client.initialize(&admin, &token);
+
+    client.register_workspace(
+        &admin,
+        &String::from_str(&env, "ws-upd"),
+        &String::from_str(&env, "Update Rate"),
+        &WorkspaceType::HotDesk,
+        &1u32,
+        &1_000u128,
+    );
+
+    // Zero rate rejected.
+    assert_eq!(
+        client.try_set_workspace_rate(&admin, &String::from_str(&env, "ws-upd"), &0u128),
+        Err(Ok(Error::InvalidRate))
+    );
+
+    // Over-maximum rate rejected.
+    assert_eq!(
+        client.try_set_workspace_rate(
+            &admin,
+            &String::from_str(&env, "ws-upd"),
+            &10_000_000_000_001u128
+        ),
+        Err(Ok(Error::InvalidRate))
+    );
+
+    // Original rate unchanged.
+    assert_eq!(
+        client
+            .get_workspace(&String::from_str(&env, "ws-upd"))
+            .hourly_rate,
+        1_000u128
+    );
+}

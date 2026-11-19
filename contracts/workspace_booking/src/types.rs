@@ -10,6 +10,14 @@ pub const MAX_ID_LEN: u32 = 64;
 #[allow(dead_code)]
 pub const MAX_NAME_LEN: u32 = 128;
 
+/// Maximum hourly rate (in smallest payment-token units).
+///
+/// Rates above this value are rejected so an admin typo (e.g. off-by-one on
+/// decimal places) cannot create an un-bookable workspace.
+/// Set to 10 000 000 000 000 (10^13): enough for any real-world price while
+/// catching obviously wrong values.
+pub const MAX_HOURLY_RATE: u128 = 10_000_000_000_000;
+
 /// Maximum number of history entries a single page may contain.
 #[allow(dead_code)]
 pub const MAX_PAGE_SIZE: u32 = 100;
@@ -387,5 +395,17 @@ pub struct WorkspaceBookingsPage {
 
     /// Offset to pass to fetch the next page, or `None` when the history is
     /// exhausted.
+    pub next_offset: Option<u32>,
+}
+
+/// A paginated slice of booking IDs for a workspace.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct WorkspaceBookingsPage {
+    /// Booking IDs for this page, in registration order.
+    pub booking_ids: Vec<String>,
+
+    /// Offset to pass as `offset` in the next call, or `None` when this page
+    /// covers the last entry.
     pub next_offset: Option<u32>,
 }
