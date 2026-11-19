@@ -281,3 +281,34 @@ fn test_transfer_zero_amount_rejected() {
     assert_eq!(result, Err(Ok(super::Error::InvalidAmount)));
     assert_eq!(client.balance(&from), 100u128);
 }
+
+// ── #919: atomic debit/credit on transfer ───────────────────────────────────
+
+/// If crediting the recipient would overflow, the transfer must fail and
+/// leave the sender's balance untouched rather than debiting it first and
+/// losing the credits when the recipient-side update fails.
+///
+/// Under normal bookkeeping total_supply caps every balance well below
+/// `u128::MAX`, so the recipient-side overflow guard is otherwise
+/// unreachable; the test pokes `to`'s stored balance directly to exercise it.
+#[test]
+fn test_transfer_credits_recipient_overflow_preserves_sender_balance() {
+    let (env, admin, _token, client) = setup();
+    let from = Address::generate(&env);
+    let to = Address::generate(&env);
+
+    client.mint_credits(&admin, &from, &500u128);
+    env.as_contract(&client.address, || {
+        env.storage()
+            .persistent()
+            .set(&super::DataKey::Balance(to.clone()), &u128::MAX);
+    });
+
+    let result = client.try_transfer_credits(&from, &from, &to, &100u128);
+    assert_eq!(result, Err(Ok(super::Error::Overflow)));
+
+    // Neither balance moved: the sender did not lose the credits it would
+    // otherwise have debited.
+    assert_eq!(client.balance(&from), 500u128);
+    assert_eq!(client.balance(&to), u128::MAX);
+}
