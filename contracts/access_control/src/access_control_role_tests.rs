@@ -385,5 +385,69 @@ mod role_access_control_tests {
             assert_eq!(denied.unwrap_err(), AccessControlError::AdminRequired);
         });
     }
+
+    /// C30 / #914: require_admin re-reads the caller's current role from storage.
+    #[test]
+    fn test_c30_require_admin_reads_current_role() {
+        let (env, contract_id, admin, user, other) = setup_initialized_env();
+
+        env.as_contract(&contract_id, || {
+            assert!(AccessControlModule::require_admin(&env, &admin).is_ok());
+            assert_eq!(
+                AccessControlModule::require_admin(&env, &user).unwrap_err(),
+                AccessControlError::AdminRequired
+            );
+
+            // Promote other to Admin, then demote original admin via the new admin.
+            AccessControlModule::set_role(
+                &env,
+                admin.clone(),
+                other.clone(),
+                UserRole::Admin,
+            )
+            .unwrap();
+            AccessControlModule::set_role(
+                &env,
+                other.clone(),
+                admin.clone(),
+                UserRole::Member,
+            )
+            .unwrap();
+            assert_eq!(
+                AccessControlModule::get_role(&env, admin.clone()),
+                UserRole::Member
+            );
+            assert_eq!(
+                AccessControlModule::require_admin(&env, &admin).unwrap_err(),
+                AccessControlError::AdminRequired
+            );
+        });
+    }
+
+    /// C30: check_access reflects live role changes with no cached membership.
+    #[test]
+    fn test_c30_check_access_uses_live_role_not_stale_claim() {
+        let (env, contract_id, admin, user, _) = setup_initialized_env();
+
+        env.as_contract(&contract_id, || {
+            assert_eq!(
+                AccessControlModule::check_access(&env, user.clone(), UserRole::Member).unwrap(),
+                false
+            );
+
+            AccessControlModule::set_role(&env, admin.clone(), user.clone(), UserRole::Member)
+                .unwrap();
+            assert_eq!(
+                AccessControlModule::check_access(&env, user.clone(), UserRole::Member).unwrap(),
+                true
+            );
+
+            AccessControlModule::remove_role(&env, admin.clone(), user.clone()).unwrap();
+            assert_eq!(
+                AccessControlModule::check_access(&env, user.clone(), UserRole::Member).unwrap(),
+                false
+            );
+        });
+    }
 }
-}
+
