@@ -273,6 +273,92 @@ pub struct Booking {
     pub completed_at: Option<u64>,
 }
 
+impl Booking {
+    /// Checked length of this booking's window in seconds.
+    pub fn duration(&self) -> Result<u64, Error> {
+        checked_duration(self.start_time, self.end_time)
+    }
+}
+
+// ── Checked timestamp arithmetic ─────────────────────────────────────────────
+//
+// Every booking-window calculation goes through these helpers so that a
+// timestamp that would overflow (or underflow) `u64` is rejected with an
+// error instead of silently wrapping into a bogus window.
+
+/// Seconds in one billable hour.
+pub const SECONDS_PER_HOUR: u64 = 3_600;
+
+/// Checked `timestamp + secs`.
+///
+/// Returns `Error::InvalidTimeRange` if the result would overflow `u64`.
+pub fn checked_add_secs(timestamp: u64, secs: u64) -> Result<u64, Error> {
+    timestamp.checked_add(secs).ok_or(Error::InvalidTimeRange)
+}
+
+/// Checked length of the half-open window [`start_time`, `end_time`).
+///
+/// Returns `Error::InvalidTimeRange` when `end_time <= start_time`, i.e. the
+/// subtraction would underflow or the window would be empty.
+pub fn checked_duration(start_time: u64, end_time: u64) -> Result<u64, Error> {
+    match end_time.checked_sub(start_time) {
+        Some(duration) if duration > 0 => Ok(duration),
+        _ => Err(Error::InvalidTimeRange),
+    }
+}
+
+/// Number of billable hours for a window, rounded **up** to a full hour.
+pub fn checked_billable_hours(start_time: u64, end_time: u64) -> Result<u64, Error> {
+    Ok(checked_duration(start_time, end_time)?.div_ceil(SECONDS_PER_HOUR))
+}
+
+/// Checked booking cost: `hourly_rate × ⌈duration / 3600⌉`.
+///
+/// Returns `Error::InvalidTimeRange` for an invalid window and
+/// `Error::InvalidRate` when the cost overflows or does not fit the `i128`
+/// amount used by token transfers.
+pub fn checked_booking_cost(
+    hourly_rate: u128,
+    start_time: u64,
+    end_time: u64,
+) -> Result<u128, Error> {
+    let hours = checked_billable_hours(start_time, end_time)?;
+    hourly_rate
+        .checked_mul(hours as u128)
+        .filter(|cost| *cost <= i128::MAX as u128)
+        .ok_or(Error::InvalidRate)
+}
+
+/// Pro-rata refund for a booking cancelled at `now`.
+///
+/// * `now < start_time`  → full refund.
+/// * `now >= end_time`   → no refund.
+/// * otherwise           → `amount_paid × (end_time − now) / duration`.
+///
+/// The multiplication is checked; if it would overflow, the refund is
+/// computed as `amount_paid / duration × remaining` instead, which can only
+/// round down and therefore never refunds more than was paid.
+pub fn checked_prorated_refund(
+    amount_paid: u128,
+    start_time: u64,
+    end_time: u64,
+    now: u64,
+) -> Result<u128, Error> {
+    let duration = checked_duration(start_time, end_time)? as u128;
+    if now >= end_time {
+        return Ok(0);
+    }
+    if now < start_time {
+        return Ok(amount_paid);
+    }
+    let remaining = checked_duration(now, end_time)? as u128;
+    let refund = match amount_paid.checked_mul(remaining) {
+        Some(product) => product / duration,
+        None => (amount_paid / duration).saturating_mul(remaining),
+    };
+    Ok(refund.min(amount_paid))
+}
+
 /// Request parameters for a page of booking history.
 ///
 /// Pagination is cursor-based and stable: entries are ordered by ascending

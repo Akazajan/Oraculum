@@ -2322,3 +2322,110 @@ fn test_899_owner_update_requires_signature() {
     env.set_auths(&[]);
     client.set_workspace_availability(&owner, &ws_id, &false);
 }
+
+// -- #900: Checked booking timestamp arithmetic ------------------------------
+
+#[test]
+fn test_900_checked_timestamp_helpers() {
+    use types::{
+        checked_add_secs, checked_billable_hours, checked_booking_cost, checked_duration,
+        checked_prorated_refund,
+    };
+    assert_eq!(checked_add_secs(u64::MAX - 1, 1), Ok(u64::MAX));
+    assert_eq!(checked_add_secs(u64::MAX, 1), Err(Error::InvalidTimeRange));
+    assert_eq!(checked_duration(10, 20), Ok(10));
+    assert_eq!(checked_duration(20, 20), Err(Error::InvalidTimeRange));
+    assert_eq!(checked_duration(u64::MAX, 0), Err(Error::InvalidTimeRange));
+    assert_eq!(checked_billable_hours(0, 3_601), Ok(2));
+    assert_eq!(
+        checked_billable_hours(0, u64::MAX),
+        Ok(u64::MAX.div_ceil(3_600))
+    );
+    assert_eq!(checked_booking_cost(1_000, 0, 7_200), Ok(2_000));
+    assert_eq!(
+        checked_booking_cost(u128::MAX, 0, 7_200),
+        Err(Error::InvalidRate)
+    );
+    assert_eq!(
+        checked_booking_cost(i128::MAX as u128, 0, 3_600),
+        Ok(i128::MAX as u128)
+    );
+    assert_eq!(
+        checked_booking_cost(i128::MAX as u128, 0, 3_601),
+        Err(Error::InvalidRate)
+    );
+    assert_eq!(checked_prorated_refund(1_000, 100, 200, 50), Ok(1_000));
+    assert_eq!(checked_prorated_refund(1_000, 100, 200, 150), Ok(500));
+    assert_eq!(checked_prorated_refund(1_000, 100, 200, 200), Ok(0));
+    // Product overflow falls back to a rounded-down, never-larger refund.
+    let big = i128::MAX as u128;
+    let refund = checked_prorated_refund(big, 0, u64::MAX, 1).unwrap();
+    assert!(refund <= big);
+    assert!(refund > 0);
+}
+
+#[test]
+fn test_900_booking_near_u64_max_is_rejected_not_wrapped() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = setup_contract(&env);
+    let client = WorkspaceBookingContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let member = Address::generate(&env);
+    let token_address = setup_token(&env, &admin, &member, 10_000i128);
+    client.initialize(&admin, &token_address);
+    let ws_id = String::from_str(&env, "ws-900");
+    client.register_workspace(
+        &admin,
+        &ws_id,
+        &String::from_str(&env, "Overflow Room"),
+        &WorkspaceType::MeetingRoom,
+        &1u32,
+        &u128::MAX,
+    );
+    // end < start would underflow the duration calculation.
+    assert_eq!(
+        client.try_book_workspace(
+            &member,
+            &String::from_str(&env, "bk-900-a"),
+            &ws_id,
+            &u64::MAX,
+            &1u64,
+            &1u32,
+        ),
+        Err(Ok(Error::InvalidTimeRange))
+    );
+    // A huge rate × window overflows the cost and is rejected before payment.
+    assert_eq!(
+        client.try_book_workspace(
+            &member,
+            &String::from_str(&env, "bk-900-b"),
+            &ws_id,
+            &60u64,
+            &(u64::MAX),
+            &1u32,
+        ),
+        Err(Ok(Error::InvalidRate))
+    );
+    assert_eq!(
+        TokenClient::new(&env, &token_address).balance(&member),
+        10_000i128
+    );
+}
+
+#[test]
+fn test_900_admin_transfer_expiry_overflow_rejected() {
+    let env = Env::default();
+    let contract_id = setup_contract(&env);
+    let client = WorkspaceBookingContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let new_admin = Address::generate(&env);
+    env.mock_all_auths();
+    client.initialize(&admin, &Address::generate(&env));
+    env.ledger().with_mut(|l| l.timestamp = u64::MAX - 1);
+    assert_eq!(
+        client.try_propose_admin_transfer(&admin, &new_admin),
+        Err(Ok(Error::InvalidAdminTransfer))
+    );
+    assert!(client.get_pending_admin_transfer().is_none());
+}

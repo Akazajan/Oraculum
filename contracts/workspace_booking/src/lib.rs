@@ -247,7 +247,8 @@ impl WorkspaceBookingContract {
         let pending_transfer = PendingAdminTransfer {
             proposed_admin: new_admin.clone(),
             proposer: current_admin.clone(),
-            expiry: env.ledger().timestamp() + ADMIN_TRANSFER_TTL,
+            expiry: types::checked_add_secs(env.ledger().timestamp(), ADMIN_TRANSFER_TTL)
+                .map_err(|_| Error::InvalidAdminTransfer)?,
         };
 
         env.storage()
@@ -577,7 +578,9 @@ impl WorkspaceBookingContract {
 
         let now = env.ledger().timestamp();
 
-        if start_time >= end_time || end_time <= now {
+        // Checked window length: rejects end <= start without underflowing.
+        types::checked_duration(start_time, end_time)?;
+        if end_time <= now {
             return Err(Error::InvalidTimeRange);
         }
 
@@ -611,10 +614,10 @@ impl WorkspaceBookingContract {
         workspace.validate_capacity(seats_requested, already_booked)?;
 
         // ── 4. Calculate payment ──────────────────────────────────────────────
-        // Cost = hourly_rate × ⌈duration_seconds / 3600⌉
-        let duration_secs = end_time - start_time;
-        let duration_hours = duration_secs.div_ceil(3600);
-        let amount: u128 = workspace.hourly_rate * duration_hours as u128;
+        // Cost = hourly_rate × ⌈duration_seconds / 3600⌉, with checked
+        // arithmetic so an oversized rate/window is rejected, not wrapped.
+        let amount: u128 =
+            types::checked_booking_cost(workspace.hourly_rate, start_time, end_time)?;
 
         // ── 5. Collect payment (only after all validations pass) ──────────────
         let payment_token = Self::get_payment_token(&env)?;
@@ -722,19 +725,14 @@ impl WorkspaceBookingContract {
 
         let now = env.ledger().timestamp();
 
-        let duration = booking.end_time - booking.start_time;
-
-        let refund: u128 = if now >= booking.end_time {
-            // Booking period has fully elapsed — no refund.
-            0
-        } else if now >= booking.start_time {
-            // Cancelled mid-booking: refund only the unused portion.
-            let remaining = (booking.end_time - now) as u128;
-            booking.amount_paid * remaining / duration as u128
-        } else {
-            // Cancelled before the booking starts — full refund.
-            booking.amount_paid
-        };
+        // Full refund before start, pro-rata refund mid-booking, nothing
+        // after the window has elapsed — all with checked arithmetic.
+        let refund: u128 = types::checked_prorated_refund(
+            booking.amount_paid,
+            booking.start_time,
+            booking.end_time,
+            now,
+        )?;
 
         // Effects first: record the terminal state before any funds move so
         // the refund can only ever be paid out once.
