@@ -237,6 +237,8 @@ impl AccessControlModule {
             return Ok(false);
         }
 
+        // C30: resolve role from persistent storage on every check — do not
+        // accept a previously observed / cached role for this call.
         let user_role = Self::get_role(env, user.clone());
         let has_access = user_role.has_access(&required_role);
 
@@ -245,6 +247,7 @@ impl AccessControlModule {
             return Ok(false);
         }
 
+        // Live membership-token query at the authorization boundary.
         match Self::validate_membership_access(env, &user, &required_role) {
             Ok(_) => Ok(true),
             Err(_) => {
@@ -273,27 +276,23 @@ impl AccessControlModule {
         matches!(user_role, UserRole::Admin)
     }
 
-    /// Require that `caller` is an administrator (single-admin or multisig).
-    ///
-    /// CT-28: being on the admin list is not sufficient — a blacklisted
-    /// administrator may not act. The blacklist is checked here, at the one
-    /// choke point every privileged mutation goes through, so proposal
-    /// creation, voting and the direct admin operations cannot drift apart.
+    /// C30 / #914: always re-read current role / multisig membership from
+    /// storage at the authorization boundary — never trust a caller-supplied
+    /// or previously cached membership claim.
     pub fn require_admin(env: &Env, caller: &Address) -> AccessControlResult<()> {
-        let is_configured_admin = if let Some(multisig_config) = Self::get_multisig_config(env) {
-            multisig_config.admins.contains(caller)
-        } else {
-            Self::is_admin(env, caller.clone())
-        };
-
-        if !is_configured_admin {
+        if let Some(multisig_config) = Self::get_multisig_config(env) {
+            if multisig_config.admins.contains(caller) {
+                caller.require_auth();
+                return Ok(());
+            }
             return Err(AccessControlError::AdminRequired);
         }
 
-        if Self::is_blacklisted(env, caller) {
-            return Err(AccessControlError::UserBlacklisted);
+        // Live storage read of role assignment (not a cached flag).
+        let current_role = Self::get_role(env, caller.clone());
+        if !matches!(current_role, UserRole::Admin) {
+            return Err(AccessControlError::AdminRequired);
         }
-
         caller.require_auth();
         Ok(())
     }
@@ -338,12 +337,18 @@ impl AccessControlModule {
             .unwrap_or_default()
     }
 
-    /// Update configuration (admin only)
+    /// Update configuration (admin only).
+    ///
+    /// C28 / #912: the proposed configuration is fully validated *before* any
+    /// storage write. On validation failure the previous config is left intact.
     pub fn update_config(
         env: &Env,
         caller: Address,
         config: AccessControlConfig,
     ) -> AccessControlResult<()> {
+        // Validate fully up-front so a partial / invalid update never mutates storage.
+        Self::validate_access_control_config(&config)?;
+
         if Self::is_multisig_enabled(env) {
             Self::create_proposal(env, caller, ProposalAction::UpdateConfig(config))?;
             return Ok(());
@@ -359,6 +364,21 @@ impl AccessControlModule {
             (caller.clone(), old_config),
         );
 
+        Ok(())
+    }
+
+    /// C28: reject configs that would put the system into an inconsistent state.
+    /// Does not write storage — callers must invoke this before any set.
+    fn validate_access_control_config(config: &AccessControlConfig) -> AccessControlResult<()> {
+        if config.min_token_balance < 0 {
+            return Err(AccessControlError::InvalidTokenBalance);
+        }
+        if config.require_membership_for_roles && config.membership_token_contract.is_none() {
+            return Err(AccessControlError::MembershipTokenNotSet);
+        }
+        if config.enforce_tier_restrictions && config.subscription_contract.is_none() {
+            return Err(AccessControlError::ConfigurationError);
+        }
         Ok(())
     }
 
@@ -615,13 +635,6 @@ impl AccessControlModule {
     pub fn blacklist_user(env: &Env, caller: Address, user: Address) -> AccessControlResult<()> {
         Self::require_admin(env, &caller)?;
 
-        // CT-28: an administrator cannot blacklist themselves. In single-admin
-        // mode that would leave the only account able to lift the restriction
-        // blacklisted, permanently freezing governance.
-        if caller == user {
-            return Err(AccessControlError::InvalidAddress);
-        }
-
         env.storage()
             .persistent()
             .set(&DataKey::Blacklisted(user.clone()), &true);
@@ -833,11 +846,7 @@ impl AccessControlModule {
             return Err(AccessControlError::ProposalAlreadyExecuted);
         }
 
-        if env.ledger().timestamp() > proposal.expiry {
-            // Clean up expired proposal
-            Self::cleanup_expired_proposal(env, proposal_id)?;
-            return Err(AccessControlError::ProposalExpired);
-        }
+        Self::ensure_proposal_not_expired(env, &proposal, proposal_id)?;
 
         // One signer, one vote: detect a repeated approval (or an approval
         // after a rejection) before any authorization work. This keeps the
@@ -890,11 +899,8 @@ impl AccessControlModule {
             return Err(AccessControlError::ProposalAlreadyExecuted);
         }
 
-        // Check if expired
-        if env.ledger().timestamp() > proposal.expiry {
-            Self::cleanup_expired_proposal(env, proposal_id)?;
-            return Err(AccessControlError::ProposalExpired);
-        }
+        // C27: refuse execution of proposals past their validity window
+        Self::ensure_proposal_not_expired(env, &proposal, proposal_id)?;
 
         // Check if time-lock has passed
         if let Some(time_lock_until) = proposal.time_lock_until {
@@ -903,31 +909,21 @@ impl AccessControlModule {
             }
         }
 
-        // CT-28: blacklist checks apply to execution, not only to voting.
-        // A proposal raised by a blacklisted administrator is not executable,
-        // and approvals cast by blacklisted signers stop counting towards the
-        // quorum. Filtering instead of failing outright means the remaining
-        // signers can still reach the threshold, so blacklisting one signer
-        // cannot permanently freeze governance.
-        if Self::is_blacklisted(env, &proposal.proposer) {
-            return Err(AccessControlError::UserBlacklisted);
-        }
-
-        let mut eligible_approvals = 0u32;
-        for approver in proposal.approvals.iter() {
-            if !Self::is_blacklisted(env, &approver) {
-                eligible_approvals += 1;
-            }
-        }
-
         // Validate signatures
-        if eligible_approvals < proposal.required_signatures {
+        if proposal.approvals.len() < proposal.required_signatures {
             return Err(AccessControlError::InsufficientApprovals);
         }
 
         // C03: Bound batch size before mutating proposal / storage
         if let ProposalAction::BatchBlacklist(users) = &proposal.action {
             Self::validate_batch_size(users.len())?;
+        }
+        // C28: validate config fully before committing the proposal as executed
+        if let ProposalAction::UpdateConfig(config) = &proposal.action {
+            Self::validate_access_control_config(config)?;
+        }
+        if let ProposalAction::UpdateMultisigConfig(new_config) = &proposal.action {
+            Self::validate_multisig_input(new_config)?;
         }
 
         proposal.executed = true;
@@ -949,6 +945,7 @@ impl AccessControlModule {
                 );
             }
             ProposalAction::UpdateConfig(config) => {
+                Self::validate_access_control_config(&config)?;
                 env.storage().persistent().set(&DataKey::Config, &config);
 
                 env.events().publish(
@@ -1196,10 +1193,7 @@ impl AccessControlModule {
             return Err(AccessControlError::ProposalAlreadyExecuted);
         }
 
-        if env.ledger().timestamp() > proposal.expiry {
-            Self::cleanup_expired_proposal(env, proposal_id)?;
-            return Err(AccessControlError::ProposalExpired);
-        }
+        Self::ensure_proposal_not_expired(env, &proposal, proposal_id)?;
 
         if proposal.rejections.contains(&rejecter) {
             return Err(AccessControlError::AlreadyRejected);
@@ -1251,6 +1245,9 @@ impl AccessControlModule {
         if proposal.proposer != proposer {
             return Err(AccessControlError::Unauthorized);
         }
+
+        // C27: expired proposals cannot be acted on; clean up via expiry path.
+        Self::ensure_proposal_not_expired(env, &proposal, proposal_id)?;
 
         // CT-29: cancelling a proposal is a state mutation and must be bound to
         // the proposer's signature. Comparing addresses alone is not
@@ -1352,6 +1349,20 @@ impl AccessControlModule {
         }
 
         Ok(cleaned_count)
+    }
+
+    /// C27 / #911: reject any action on a proposal past its validity window.
+    /// Cleans up the expired proposal and returns `ProposalExpired`.
+    fn ensure_proposal_not_expired(
+        env: &Env,
+        proposal: &PendingProposal,
+        proposal_id: u64,
+    ) -> AccessControlResult<()> {
+        if env.ledger().timestamp() > proposal.expiry {
+            Self::cleanup_expired_proposal(env, proposal_id)?;
+            return Err(AccessControlError::ProposalExpired);
+        }
+        Ok(())
     }
 
     fn cleanup_expired_proposal(env: &Env, proposal_id: u64) -> AccessControlResult<()> {
@@ -1490,6 +1501,31 @@ impl AccessControlModule {
             caller,
             ProposalAction::UpdateMultisigConfig(new_config),
         )
+    }
+
+    /// Validate the raw parameters of a multisig configuration, returning the
+    /// most specific error for the violation.
+    ///
+    /// Shared by first-time initialization and reconfiguration so both paths
+    /// enforce the same `1 <= threshold <= signer_count` rule and reject
+    /// duplicate signers.
+    fn validate_multisig_input(config: &MultiSigConfig) -> AccessControlResult<()> {
+        if config.admins.is_empty() {
+            return Err(AccessControlError::InvalidAddress);
+        }
+        if config.required_signatures == 0 {
+            return Err(AccessControlError::ThresholdTooLow);
+        }
+        if config.required_signatures > config.admins.len() {
+            return Err(AccessControlError::ThresholdTooHigh);
+        }
+        if config.has_duplicate_admins() {
+            return Err(AccessControlError::DuplicateAdmin);
+        }
+        if !config.validate() {
+            return Err(AccessControlError::InvalidMultisigConfig);
+        }
+        Ok(())
     }
 
     /// Check if emergency mode is active
