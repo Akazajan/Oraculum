@@ -493,3 +493,39 @@ fn test_set_fee_bps_accepts_valid_value() {
     client.set_fee_bps(&admin, &500u32);
     assert_eq!(client.fee_bps(), 500u32);
 }
+
+#[test]
+fn test_set_fee_recipient_rejects_unauthorized_caller() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = setup_contract(&env);
+    let admin = Address::generate(&env);
+    let unauthorized = Address::generate(&env);
+    let token = Address::generate(&env);
+    let original_recipient = Address::generate(&env);
+    let new_recipient = Address::generate(&env);
+    let client = init(&env, &contract_id, &admin, &token);
+
+    client.set_fee_recipient(&admin, &original_recipient);
+    let result = client.try_set_fee_recipient(&unauthorized, &new_recipient);
+
+    assert_eq!(result, Err(Ok(Error::Unauthorized)));
+    assert_eq!(client.fee_recipient(), Ok(original_recipient));
+}
+
+#[test]
+fn test_set_fee_recipient_accepts_admin() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = setup_contract(&env);
+    let admin = Address::generate(&env);
+    let token = Address::generate(&env);
+    let original_recipient = Address::generate(&env);
+    let new_recipient = Address::generate(&env);
+    let client = init(&env, &contract_id, &admin, &token);
+
+    client.set_fee_recipient(&admin, &original_recipient);
+    client.set_fee_recipient(&admin, &new_recipient);
+
+    assert_eq!(client.fee_recipient(), Ok(new_recipient));
+}
