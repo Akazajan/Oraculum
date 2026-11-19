@@ -12,8 +12,8 @@ mod test;
 
 pub use errors::Error;
 pub use types::{
-    Booking, BookingStatus, MAX_ID_LEN, UnavailabilityReason, Workspace, WorkspaceAvailability,
-    WorkspaceType,
+    Booking, BookingStatus, MAX_HOURLY_RATE, MAX_ID_LEN, UnavailabilityReason, Workspace,
+    WorkspaceAvailability, WorkspaceType,
 };
 pub use types::WorkspaceBookingsPage;
 
@@ -313,7 +313,7 @@ impl WorkspaceBookingContract {
         if capacity == 0 {
             return Err(Error::InvalidCapacity);
         }
-        if hourly_rate == 0 {
+        if hourly_rate == 0 || hourly_rate > MAX_HOURLY_RATE {
             return Err(Error::InvalidRate);
         }
         if env
@@ -431,7 +431,7 @@ impl WorkspaceBookingContract {
     ) -> Result<(), Error> {
         Self::require_admin(&env, &caller)?;
 
-        if hourly_rate == 0 {
+        if hourly_rate == 0 || hourly_rate > MAX_HOURLY_RATE {
             return Err(Error::InvalidRate);
         }
 
