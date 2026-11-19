@@ -188,6 +188,12 @@ impl WorkspaceBookingContract {
         if env.storage().instance().has(&DataKey::Admin) {
             return Err(Error::AlreadyInitialized);
         }
+        // The payment token must not be the same address as the admin; accepting
+        // a wallet as a "token" would let the contract attempt to call transfer
+        // on a non-token contract, failing silently or corrupting state.
+        if payment_token == admin {
+            return Err(Error::InvalidPaymentToken);
+        }
         admin.require_auth();
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage()
