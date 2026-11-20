@@ -1,5 +1,7 @@
 use soroban_sdk::contracterror;
 
+use crate::types::UserRole;
+
 /// Access control specific errors
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
@@ -79,6 +81,8 @@ pub enum AccessControlError {
     UserBlacklisted = 134,
     /// C03: Batch blacklist/role operation exceeds maximum allowed size
     BatchSizeExceeded = 135,
+    /// C29: Role value is not one of the supported roles (Guest, Member, Admin)
+    UnknownRole = 136,
 }
 
 impl AccessControlError {
@@ -131,6 +135,7 @@ impl AccessControlError {
             AccessControlError::BatchSizeExceeded => {
                 "Batch size exceeds the maximum allowed for access-control operations"
             }
+            AccessControlError::UnknownRole => "Unsupported role value",
         }
     }
 
@@ -171,6 +176,34 @@ impl AccessControlError {
 /// Result type for access control operations
 pub type AccessControlResult<T> = Result<T, AccessControlError>;
 
+/// C29: Strictly convert a raw role discriminant into a [`UserRole`].
+///
+/// Only the supported values (0 = Guest, 1 = Member, 2 = Admin) are accepted.
+/// Any other value returns [`AccessControlError::UnknownRole`] instead of
+/// silently falling back to an implicit default role such as `Guest`.
+pub fn role_from_u32(value: u32) -> AccessControlResult<UserRole> {
+    match value {
+        0 => Ok(UserRole::Guest),
+        1 => Ok(UserRole::Member),
+        2 => Ok(UserRole::Admin),
+        _ => Err(AccessControlError::UnknownRole),
+    }
+}
+
+/// C29: Strictly parse a role name (case-insensitive) into a [`UserRole`].
+///
+/// Unsupported names, including the empty string, return
+/// [`AccessControlError::UnknownRole`] rather than an implicit default role.
+pub fn role_from_str(role: &str) -> AccessControlResult<UserRole> {
+    UserRole::parse_from_str(role).ok_or(AccessControlError::UnknownRole)
+}
+
+// Role-handling tests (including C29 unknown-role rejection). Declared here so
+// they are compiled and run as part of the crate's test suite.
+#[cfg(test)]
+#[path = "access_control_role_tests.rs"]
+mod access_control_role_tests;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -204,5 +237,6 @@ mod tests {
         assert_eq!(AccessControlError::AdminRequired as u32, 101);
         assert_eq!(AccessControlError::ContractPaused as u32, 115);
         assert_eq!(AccessControlError::BatchSizeExceeded as u32, 135);
+        assert_eq!(AccessControlError::UnknownRole as u32, 136);
     }
 }
