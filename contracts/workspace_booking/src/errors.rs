@@ -24,6 +24,9 @@ pub enum Error {
     /// Payment token not configured.
     PaymentTokenNotSet = 4,
 
+    /// Payment token address is invalid (e.g., same as admin, or zero-like).
+    InvalidPaymentToken = 11,
+
     /// Provided string exceeds allowed length.
     StringTooLong = 5,
 

@@ -135,3 +135,47 @@ describe("forgotPasswordSchema", () => {
     );
   });
 });
+// F19 — Validate auth fields with consistent normalization ───────────────────
+
+import { normalizeAuthInput, normalizeEmail } from "./auth";
+
+describe("normalizeEmail (F19)", () => {
+  it("lowercases the entire address", () => {
+    expect(normalizeEmail("Ada@Example.COM")).toBe("ada@example.com");
+  });
+
+  it("trims leading and trailing whitespace", () => {
+    expect(normalizeEmail("  ada@example.com  ")).toBe("ada@example.com");
+  });
+
+  it("both lowercases and trims in one pass", () => {
+    expect(normalizeEmail("  Ada@EXAMPLE.com  ")).toBe("ada@example.com");
+  });
+
+  it("leaves an already-normalized address unchanged", () => {
+    expect(normalizeEmail("ada@example.com")).toBe("ada@example.com");
+  });
+});
+
+describe("normalizeAuthInput (F19)", () => {
+  it("normalizes the email field and passes other fields through unchanged", () => {
+    const input = {
+      email: "  ADA@EXAMPLE.COM  ",
+      password: "Sup3r$ecret!",
+      fullName: "Ada Lovelace",
+    };
+    const result = normalizeAuthInput(input);
+
+    expect(result.email).toBe("ada@example.com");
+    // Password must be preserved exactly — no lowercasing or trimming.
+    expect(result.password).toBe("Sup3r$ecret!");
+    expect(result.fullName).toBe("Ada Lovelace");
+  });
+
+  it("produces a value that passes schema validation after normalization", () => {
+    const raw = { email: "  Ada@Example.COM  " };
+    const normalized = normalizeAuthInput(raw);
+    // The normalized email is a valid address and can be accepted by the schema.
+    expect(forgotPasswordSchema.safeParse(normalized).success).toBe(true);
+  });
+});

@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { canRetryPanel, queryPanelState, type QueryPanelState } from "./queryPanel";
+import { canRetryPanel, createQueryResultStore, queryPanelState, type QueryPanelState } from "./queryPanel";
+import { describe, expect, it } from "vitest";
+import { canRetryPanel, queryPanelState, sanitizeQuery, type QueryPanelState } from "./queryPanel";
 
 describe("queryPanelState (FE-13 / FE-14)", () => {
   it("names all four outcomes distinctly", () => {
@@ -39,5 +41,99 @@ describe("canRetryPanel", () => {
     expect(canRetryPanel("loading")).toBe(false);
     expect(canRetryPanel("empty")).toBe(false);
     expect(canRetryPanel("ready")).toBe(false);
+  });
+});
+
+// F18 — Preserve query results when a later query fails ───────────────────────
+
+describe("createQueryResultStore (F18)", () => {
+  it("starts with no data, no error, and not loading", () => {
+    const store = createQueryResultStore<string[]>();
+    const state = store.get();
+
+    expect(state.lastSuccess).toBeNull();
+    expect(state.lastError).toBeNull();
+    expect(state.isLoading).toBe(false);
+  });
+
+  it("stores the successful result", () => {
+    const store = createQueryResultStore<string[]>();
+    store.onLoading();
+    store.onSuccess(["agent-a", "agent-b"]);
+
+    expect(store.get().lastSuccess).toEqual(["agent-a", "agent-b"]);
+    expect(store.get().lastError).toBeNull();
+    expect(store.get().isLoading).toBe(false);
+  });
+
+  it("keeps the last successful result visible after a follow-up failure", () => {
+    const store = createQueryResultStore<string[]>();
+
+    // First query succeeds.
+    store.onLoading();
+    store.onSuccess(["agent-a"]);
+
+    // Second query fails.
+    store.onLoading();
+    store.onError(new Error("network error"));
+
+    const state = store.get();
+    // The previous result must still be visible.
+    expect(state.lastSuccess).toEqual(["agent-a"]);
+    // The error from the failed follow-up is exposed.
+    expect(state.lastError).toBeInstanceOf(Error);
+    expect(state.isLoading).toBe(false);
+  });
+
+  it("clears the error after a subsequent successful query", () => {
+    const store = createQueryResultStore<string[]>();
+
+    store.onLoading();
+    store.onSuccess(["first"]);
+    store.onLoading();
+    store.onError("oops");
+    store.onLoading();
+    store.onSuccess(["second"]);
+
+    expect(store.get().lastSuccess).toEqual(["second"]);
+    expect(store.get().lastError).toBeNull();
+  });
+
+  it("reset returns the store to its initial state", () => {
+    const store = createQueryResultStore<number[]>();
+    store.onSuccess([1, 2, 3]);
+    store.reset();
+
+    expect(store.get().lastSuccess).toBeNull();
+    expect(store.get().lastError).toBeNull();
+    expect(store.get().isLoading).toBe(false);
+// F17 — Sanitize query panel input before submit ──────────────────────────────
+
+describe("sanitizeQuery (F17)", () => {
+  it("accepts a non-empty string as valid after trimming", () => {
+    const result = sanitizeQuery("What is Stellar?");
+    expect(result.valid).toBe(true);
+    expect(result.query).toBe("What is Stellar?");
+  });
+
+  it("trims surrounding whitespace and marks non-empty trimmed input as valid", () => {
+    const result = sanitizeQuery("  find me  ");
+    expect(result.valid).toBe(true);
+    expect(result.query).toBe("find me");
+  });
+
+  it("marks a whitespace-only string as invalid", () => {
+    expect(sanitizeQuery("   ").valid).toBe(false);
+    expect(sanitizeQuery("   ").query).toBe("");
+  });
+
+  it("marks an empty string as invalid", () => {
+    expect(sanitizeQuery("").valid).toBe(false);
+  });
+
+  it("preserves internal whitespace while trimming the edges", () => {
+    const result = sanitizeQuery("  hello world  ");
+    expect(result.query).toBe("hello world");
+    expect(result.valid).toBe(true);
   });
 });

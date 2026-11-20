@@ -1,9 +1,13 @@
 #[cfg(test)]
 mod role_access_control_tests {
-    use crate::access_control::AccessControlModule;
+    use crate::access_control::{AccessControlModule, DataKey};
     use crate::errors::{role_from_str, role_from_u32, AccessControlError};
     use crate::types::{AccessControlConfig, UserRole};
-    use soroban_sdk::{testutils::Address as _, Address, Env};
+    use soroban_sdk::{
+        symbol_short,
+        testutils::{Address as _, Events, MockAuth, MockAuthInvoke},
+        Address, Env, IntoVal, Symbol, TryFromVal, Vec,
+    };
 
     fn setup_initialized_env() -> (Env, Address, Address, Address, Address) {
         let env = Env::default();
@@ -18,13 +22,17 @@ mod role_access_control_tests {
         (env, contract_id, admin, user1, user2)
     }
 
-    /// Run `f` in its own contract frame.
-    ///
-    /// Each privileged call does a `require_auth`, and an address can only be
-    /// authorized once per frame, so every operation gets a fresh frame, just
-    /// as separate contract invocations would.
-    fn call<T>(env: &Env, contract_id: &Address, f: impl FnOnce() -> T) -> T {
+    /// Run `f` in its own contract frame. Each successful admin action calls
+    /// `require_auth` on the caller, and the host only allows that once per
+    /// frame, so consecutive authorized actions need separate frames.
+    fn ac<T>(env: &Env, contract_id: &Address, f: impl FnOnce() -> T) -> T {
         env.as_contract(contract_id, f)
+    }
+
+    fn role_of(env: &Env, contract_id: &Address, user: &Address) -> UserRole {
+        ac(env, contract_id, || {
+            AccessControlModule::get_role(env, user.clone())
+        })
     }
 
     /// Admin should be able to perform all admin-only operations.
@@ -33,32 +41,26 @@ mod role_access_control_tests {
         let (env, id, admin, user1, _) = setup_initialized_env();
 
         // Admin can set roles
-        let result = call(&env, &id, || {
+        let result = ac(&env, &id, || {
             AccessControlModule::set_role(&env, admin.clone(), user1.clone(), UserRole::Member)
         });
         assert!(result.is_ok(), "Admin should be able to set roles");
-        assert_eq!(
-            call(&env, &id, || AccessControlModule::get_role(
-                &env,
-                user1.clone()
-            )),
-            UserRole::Member
-        );
+        assert_eq!(role_of(&env, &id, &user1), UserRole::Member);
 
         // Admin can blacklist users
-        let result = call(&env, &id, || {
+        let result = ac(&env, &id, || {
             AccessControlModule::blacklist_user(&env, admin.clone(), user1.clone())
         });
         assert!(result.is_ok(), "Admin should be able to blacklist users");
 
         // Admin can pause/unpause
-        let result = call(&env, &id, || {
+        let result = ac(&env, &id, || {
             AccessControlModule::pause(&env, admin.clone())
         });
         assert!(result.is_ok(), "Admin should be able to pause the contract");
-        assert!(call(&env, &id, || AccessControlModule::is_paused(&env)));
+        assert!(ac(&env, &id, || AccessControlModule::is_paused(&env)));
 
-        let result = call(&env, &id, || {
+        let result = ac(&env, &id, || {
             AccessControlModule::unpause(&env, admin.clone())
         });
         assert!(
@@ -67,13 +69,13 @@ mod role_access_control_tests {
         );
 
         // Admin can update config
-        let result = call(&env, &id, || {
+        let result = ac(&env, &id, || {
             AccessControlModule::update_config(&env, admin.clone(), AccessControlConfig::default())
         });
         assert!(result.is_ok(), "Admin should be able to update config");
 
         // Admin can remove roles
-        let result = call(&env, &id, || {
+        let result = ac(&env, &id, || {
             AccessControlModule::remove_role(&env, admin.clone(), user1.clone())
         });
         assert!(result.is_ok(), "Admin should be able to remove roles");
@@ -85,70 +87,64 @@ mod role_access_control_tests {
     fn test_user_cannot_create_resource() {
         let (env, id, admin, user1, user2) = setup_initialized_env();
 
-        // Guest cannot set roles
-        let result = call(&env, &id, || {
-            AccessControlModule::set_role(&env, user1.clone(), user2.clone(), UserRole::Member)
-        });
-        assert_eq!(
-            result.unwrap_err(),
-            AccessControlError::AdminRequired,
-            "Non-admin should get AdminRequired error when setting roles"
-        );
+        ac(&env, &id, || {
+            // Guest cannot set roles
+            let result =
+                AccessControlModule::set_role(&env, user1.clone(), user2.clone(), UserRole::Member);
+            assert_eq!(
+                result.unwrap_err(),
+                AccessControlError::AdminRequired,
+                "Non-admin should get AdminRequired error when setting roles"
+            );
 
-        // Guest cannot blacklist
-        let result = call(&env, &id, || {
-            AccessControlModule::blacklist_user(&env, user1.clone(), user2.clone())
-        });
-        assert_eq!(
-            result.unwrap_err(),
-            AccessControlError::AdminRequired,
-            "Non-admin should get AdminRequired error when blacklisting"
-        );
+            // Guest cannot blacklist
+            let result = AccessControlModule::blacklist_user(&env, user1.clone(), user2.clone());
+            assert_eq!(
+                result.unwrap_err(),
+                AccessControlError::AdminRequired,
+                "Non-admin should get AdminRequired error when blacklisting"
+            );
 
-        // Guest cannot pause
-        let result = call(&env, &id, || {
-            AccessControlModule::pause(&env, user1.clone())
-        });
-        assert_eq!(
-            result.unwrap_err(),
-            AccessControlError::AdminRequired,
-            "Non-admin should get AdminRequired error when pausing"
-        );
+            // Guest cannot pause
+            let result = AccessControlModule::pause(&env, user1.clone());
+            assert_eq!(
+                result.unwrap_err(),
+                AccessControlError::AdminRequired,
+                "Non-admin should get AdminRequired error when pausing"
+            );
 
-        // Guest cannot remove roles
-        let result = call(&env, &id, || {
-            AccessControlModule::remove_role(&env, user1.clone(), user2.clone())
+            // Guest cannot remove roles
+            let result = AccessControlModule::remove_role(&env, user1.clone(), user2.clone());
+            assert_eq!(
+                result.unwrap_err(),
+                AccessControlError::AdminRequired,
+                "Non-admin should get AdminRequired error when removing roles"
+            );
         });
-        assert_eq!(
-            result.unwrap_err(),
-            AccessControlError::AdminRequired,
-            "Non-admin should get AdminRequired error when removing roles"
-        );
 
         // Member also cannot perform admin operations
-        call(&env, &id, || {
+        ac(&env, &id, || {
             AccessControlModule::set_role(&env, admin.clone(), user1.clone(), UserRole::Member)
-        })
-        .unwrap();
-
-        let result = call(&env, &id, || {
-            AccessControlModule::pause(&env, user1.clone())
+                .unwrap()
         });
-        assert_eq!(
-            result.unwrap_err(),
-            AccessControlError::AdminRequired,
-            "Members should not be able to pause"
-        );
 
-        // Member cannot set other users' roles
-        let result = call(&env, &id, || {
-            AccessControlModule::set_role(&env, user1.clone(), user2.clone(), UserRole::Member)
+        ac(&env, &id, || {
+            let result = AccessControlModule::pause(&env, user1.clone());
+            assert_eq!(
+                result.unwrap_err(),
+                AccessControlError::AdminRequired,
+                "Members should not be able to pause"
+            );
+
+            // Member cannot set other users' roles
+            let result =
+                AccessControlModule::set_role(&env, user1.clone(), user2.clone(), UserRole::Member);
+            assert_eq!(
+                result.unwrap_err(),
+                AccessControlError::AdminRequired,
+                "Members should not be able to assign roles"
+            );
         });
-        assert_eq!(
-            result.unwrap_err(),
-            AccessControlError::AdminRequired,
-            "Members should not be able to assign roles"
-        );
     }
 
     /// Unauthorized access attempts must produce clear, specific error messages.
@@ -157,11 +153,10 @@ mod role_access_control_tests {
         let (env, id, admin, user1, _) = setup_initialized_env();
 
         // Blacklisted users should get Unauthorized error
-        call(&env, &id, || {
-            AccessControlModule::blacklist_user(&env, admin.clone(), user1.clone())
-        })
-        .unwrap();
-        let result = call(&env, &id, || {
+        ac(&env, &id, || {
+            AccessControlModule::blacklist_user(&env, admin.clone(), user1.clone()).unwrap()
+        });
+        let result = ac(&env, &id, || {
             AccessControlModule::set_role(&env, admin.clone(), user1.clone(), UserRole::Member)
         });
         assert_eq!(
@@ -171,11 +166,10 @@ mod role_access_control_tests {
         );
 
         // Insufficient role access should produce InsufficientRole error
-        call(&env, &id, || {
-            AccessControlModule::unblacklist_user(&env, admin.clone(), user1.clone())
-        })
-        .unwrap();
-        let result = call(&env, &id, || {
+        ac(&env, &id, || {
+            AccessControlModule::unblacklist_user(&env, admin.clone(), user1.clone()).unwrap()
+        });
+        let result = ac(&env, &id, || {
             AccessControlModule::require_access(&env, user1.clone(), UserRole::Admin)
         });
         assert_eq!(
@@ -187,28 +181,31 @@ mod role_access_control_tests {
         // Operations on uninitialized system should produce NotInitialized error
         let env2 = Env::default();
         let contract_id2 = env2.register(crate::AccessControl, ());
-        let result = env2.as_contract(&contract_id2, || {
-            AccessControlModule::set_role(
+        env2.as_contract(&contract_id2, || {
+            let result = AccessControlModule::set_role(
                 &env2,
                 Address::generate(&env2),
                 Address::generate(&env2),
                 UserRole::Member,
-            )
+            );
+            assert_eq!(
+                result.unwrap_err(),
+                AccessControlError::NotInitialized,
+                "Uninitialized system should get NotInitialized error"
+            );
         });
-        assert_eq!(
-            result.unwrap_err(),
-            AccessControlError::NotInitialized,
-            "Uninitialized system should get NotInitialized error"
-        );
 
         // Paused contract should produce ContractPaused error
-        call(&env, &id, || {
-            AccessControlModule::pause(&env, admin.clone())
-        })
-        .unwrap();
-        let target = Address::generate(&env);
-        let result = call(&env, &id, || {
-            AccessControlModule::set_role(&env, admin.clone(), target.clone(), UserRole::Member)
+        ac(&env, &id, || {
+            AccessControlModule::pause(&env, admin.clone()).unwrap()
+        });
+        let result = ac(&env, &id, || {
+            AccessControlModule::set_role(
+                &env,
+                admin.clone(),
+                Address::generate(&env),
+                UserRole::Member,
+            )
         });
         assert_eq!(
             result.unwrap_err(),
@@ -223,51 +220,45 @@ mod role_access_control_tests {
         let (env, id, admin, user1, user2) = setup_initialized_env();
 
         // Set user1 as Member
-        call(&env, &id, || {
+        ac(&env, &id, || {
             AccessControlModule::set_role(&env, admin.clone(), user1.clone(), UserRole::Member)
-        })
-        .unwrap();
-        assert_eq!(
-            call(&env, &id, || AccessControlModule::get_role(
+                .unwrap()
+        });
+        assert_eq!(role_of(&env, &id, &user1), UserRole::Member);
+
+        ac(&env, &id, || {
+            // Member cannot assign Admin role to anyone
+            let result = AccessControlModule::set_role(
                 &env,
-                user1.clone()
-            )),
-            UserRole::Member
-        );
+                user1.clone(),
+                Address::generate(&env),
+                UserRole::Admin,
+            );
+            assert_eq!(
+                result.unwrap_err(),
+                AccessControlError::AdminRequired,
+                "Members should not be able to assign Admin role"
+            );
 
-        // Member cannot assign Admin role to anyone
-        let other = Address::generate(&env);
-        let result = call(&env, &id, || {
-            AccessControlModule::set_role(&env, user1.clone(), other.clone(), UserRole::Admin)
+            // Member cannot promote themselves
+            let result =
+                AccessControlModule::set_role(&env, user1.clone(), user1.clone(), UserRole::Admin);
+            assert_eq!(
+                result.unwrap_err(),
+                AccessControlError::AdminRequired,
+                "Members should not be able to self-promote to Admin"
+            );
         });
-        assert_eq!(
-            result.unwrap_err(),
-            AccessControlError::AdminRequired,
-            "Members should not be able to assign Admin role"
-        );
-
-        // Member cannot promote themselves
-        let result = call(&env, &id, || {
-            AccessControlModule::set_role(&env, user1.clone(), user1.clone(), UserRole::Admin)
-        });
-        assert_eq!(
-            result.unwrap_err(),
-            AccessControlError::AdminRequired,
-            "Members should not be able to self-promote to Admin"
-        );
 
         // Verify user1 is still Member after failed escalation attempts
         assert_eq!(
-            call(&env, &id, || AccessControlModule::get_role(
-                &env,
-                user1.clone()
-            )),
+            role_of(&env, &id, &user1),
             UserRole::Member,
             "Target role should remain unchanged after failed escalation"
         );
 
         // Admin cannot remove the main admin's role
-        let result = call(&env, &id, || {
+        let result = ac(&env, &id, || {
             AccessControlModule::remove_role(&env, admin.clone(), admin.clone())
         });
         assert_eq!(
@@ -277,18 +268,20 @@ mod role_access_control_tests {
         );
 
         // Old admin cannot re-assign roles after transfer
-        call(&env, &id, || {
-            AccessControlModule::propose_admin_transfer(&env, admin.clone(), user1.clone())
-        })
-        .unwrap();
-        call(&env, &id, || {
-            AccessControlModule::accept_admin_transfer(&env, user1.clone())
-        })
-        .unwrap();
+        ac(&env, &id, || {
+            AccessControlModule::propose_admin_transfer(&env, admin.clone(), user1.clone()).unwrap()
+        });
+        ac(&env, &id, || {
+            AccessControlModule::accept_admin_transfer(&env, user1.clone()).unwrap()
+        });
 
-        let target = Address::generate(&env);
-        let result = call(&env, &id, || {
-            AccessControlModule::set_role(&env, admin.clone(), target.clone(), UserRole::Member)
+        let result = ac(&env, &id, || {
+            AccessControlModule::set_role(
+                &env,
+                admin.clone(),
+                Address::generate(&env),
+                UserRole::Member,
+            )
         });
         assert_eq!(
             result.unwrap_err(),
@@ -297,7 +290,7 @@ mod role_access_control_tests {
         );
 
         // Authorized escalation still succeeds: New admin (user1) can assign roles
-        let result = call(&env, &id, || {
+        let result = ac(&env, &id, || {
             AccessControlModule::set_role(&env, user1.clone(), user2.clone(), UserRole::Member)
         });
         assert!(
@@ -305,10 +298,7 @@ mod role_access_control_tests {
             "Authorized admin should be able to assign roles after transfer"
         );
         assert_eq!(
-            call(&env, &id, || AccessControlModule::get_role(
-                &env,
-                user2.clone()
-            )),
+            role_of(&env, &id, &user2),
             UserRole::Member,
             "Target role should be updated after successful authorized escalation"
         );
@@ -319,27 +309,30 @@ mod role_access_control_tests {
     fn test_permission_inheritance() {
         let (env, id, admin, user1, _) = setup_initialized_env();
 
-        call(&env, &id, || {
+        ac(&env, &id, || {
             AccessControlModule::set_role(&env, admin.clone(), user1.clone(), UserRole::Member)
-        })
-        .unwrap();
+                .unwrap()
+        });
 
-        call(&env, &id, || {
+        ac(&env, &id, || {
             // Member inherits Guest permissions
             assert!(
                 AccessControlModule::check_access(&env, user1.clone(), UserRole::Guest).unwrap(),
                 "Member should inherit Guest access"
             );
+
             // Member has Member-level access
             assert!(
                 AccessControlModule::check_access(&env, user1.clone(), UserRole::Member).unwrap(),
                 "Member should have Member access"
             );
+
             // Member does NOT have Admin-level access
             assert!(
                 !AccessControlModule::check_access(&env, user1.clone(), UserRole::Admin).unwrap(),
                 "Member should not have Admin access"
             );
+
             // Admin inherits both Guest and Member
             assert!(
                 AccessControlModule::check_access(&env, admin.clone(), UserRole::Guest).unwrap(),
@@ -357,46 +350,434 @@ mod role_access_control_tests {
     fn test_remove_role_requires_admin_auth_binding() {
         let (env, id, admin, user1, _) = setup_initialized_env();
 
-        call(&env, &id, || {
+        ac(&env, &id, || {
             AccessControlModule::set_role(&env, admin.clone(), user1.clone(), UserRole::Member)
-        })
-        .unwrap();
+                .unwrap()
+        });
 
-        let first = call(&env, &id, || {
+        let first = ac(&env, &id, || {
             AccessControlModule::remove_role(&env, admin.clone(), user1.clone())
         });
         assert!(first.is_ok(), "authorized admin can remove role");
-        assert_eq!(
-            call(&env, &id, || AccessControlModule::get_role(
-                &env,
-                user1.clone()
-            )),
-            UserRole::Guest,
-        );
+        assert_eq!(role_of(&env, &id, &user1), UserRole::Guest);
 
-        let second = call(&env, &id, || {
+        let second = ac(&env, &id, || {
             AccessControlModule::remove_role(&env, admin.clone(), user1.clone())
         });
         assert!(second.is_ok(), "repeated removal stays deterministic");
-        assert_eq!(
-            call(&env, &id, || AccessControlModule::get_role(
-                &env,
-                user1.clone()
-            )),
-            UserRole::Guest,
-        );
+        assert_eq!(role_of(&env, &id, &user1), UserRole::Guest);
 
-        let denied = call(&env, &id, || {
+        let denied = ac(&env, &id, || {
             AccessControlModule::remove_role(&env, user1.clone(), admin.clone())
         });
         assert_eq!(denied.unwrap_err(), AccessControlError::AdminRequired);
     }
 
-    // ── C29 / issue #913: unknown roles return a consistent error ───────────
+    /// C30 / #914: require_admin re-reads the caller's current role from storage.
+    #[test]
+    fn test_c30_require_admin_reads_current_role() {
+        let (env, id, admin, user, other) = setup_initialized_env();
+
+        assert!(ac(&env, &id, || AccessControlModule::require_admin(
+            &env, &admin
+        ))
+        .is_ok());
+        assert_eq!(
+            ac(&env, &id, || AccessControlModule::require_admin(
+                &env, &user
+            ))
+            .unwrap_err(),
+            AccessControlError::AdminRequired
+        );
+
+        // Promote other to Admin, then demote original admin via the new admin.
+        ac(&env, &id, || {
+            AccessControlModule::set_role(&env, admin.clone(), other.clone(), UserRole::Admin)
+                .unwrap()
+        });
+        ac(&env, &id, || {
+            AccessControlModule::set_role(&env, other.clone(), admin.clone(), UserRole::Member)
+                .unwrap()
+        });
+        assert_eq!(role_of(&env, &id, &admin), UserRole::Member);
+        assert_eq!(
+            ac(&env, &id, || AccessControlModule::require_admin(
+                &env, &admin
+            ))
+            .unwrap_err(),
+            AccessControlError::AdminRequired
+        );
+    }
+
+    /// C30: check_access reflects live role changes with no cached membership.
+    #[test]
+    fn test_c30_check_access_uses_live_role_not_stale_claim() {
+        let (env, id, admin, user, _) = setup_initialized_env();
+
+        assert!(!ac(&env, &id, || {
+            AccessControlModule::check_access(&env, user.clone(), UserRole::Member).unwrap()
+        }));
+
+        ac(&env, &id, || {
+            AccessControlModule::set_role(&env, admin.clone(), user.clone(), UserRole::Member)
+                .unwrap()
+        });
+        assert!(ac(&env, &id, || {
+            AccessControlModule::check_access(&env, user.clone(), UserRole::Member).unwrap()
+        }));
+
+        ac(&env, &id, || {
+            AccessControlModule::remove_role(&env, admin.clone(), user.clone()).unwrap()
+        });
+        assert!(!ac(&env, &id, || {
+            AccessControlModule::check_access(&env, user.clone(), UserRole::Member).unwrap()
+        }));
+    }
+
+    // ── #905 / C21: unauthorized role changes ────────────────────────────────
+
+    fn setup_multisig_env() -> (Env, Address, Address, Address, Address) {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(crate::AccessControl, ());
+        let admin1 = Address::generate(&env);
+        let admin2 = Address::generate(&env);
+        let user = Address::generate(&env);
+        env.as_contract(&contract_id, || {
+            let admins = Vec::from_array(&env, [admin1.clone(), admin2.clone()]);
+            AccessControlModule::initialize_multisig(&env, admins, 2, None).unwrap();
+        });
+        (env, contract_id, admin1, admin2, user)
+    }
+
+    /// A non-admin caller is rejected before the target is inspected, so the
+    /// result is the same permission error whatever the target's state is,
+    /// and no role is written.
+    #[test]
+    fn test_c21_non_admin_rejected_before_target_checks() {
+        let (env, id, admin, user1, user2) = setup_initialized_env();
+        ac(&env, &id, || {
+            AccessControlModule::blacklist_user(&env, admin.clone(), user2.clone()).unwrap()
+        });
+
+        ac(&env, &id, || {
+            for role in [UserRole::Guest, UserRole::Member, UserRole::Admin] {
+                assert_eq!(
+                    AccessControlModule::set_role(&env, user1.clone(), user2.clone(), role)
+                        .unwrap_err(),
+                    AccessControlError::AdminRequired
+                );
+            }
+            assert_eq!(
+                AccessControlModule::remove_role(&env, user1.clone(), user2.clone()).unwrap_err(),
+                AccessControlError::AdminRequired
+            );
+            assert!(!env
+                .storage()
+                .persistent()
+                .has(&DataKey::UserRole(user2.clone())));
+        });
+    }
+
+    /// Role changes must be signed by the administrator: without the admin's
+    /// authorization the host rejects the call and nothing is written.
+    #[test]
+    fn test_c21_role_grant_requires_admin_signature() {
+        let (env, id, admin, user1, _) = setup_initialized_env();
+        let client = crate::AccessControlClient::new(&env, &id);
+
+        // Only the target user signs — not the admin named as caller.
+        env.set_auths(&[]);
+        let result = client
+            .mock_auths(&[MockAuth {
+                address: &user1,
+                invoke: &MockAuthInvoke {
+                    contract: &id,
+                    fn_name: "set_role",
+                    args: (admin.clone(), user1.clone(), UserRole::Admin).into_val(&env),
+                    sub_invokes: &[],
+                },
+            }])
+            .try_set_role(&admin, &user1, &UserRole::Admin);
+        assert!(result.is_err());
+        assert_eq!(client.get_role(&user1), UserRole::Guest);
+
+        let result = client
+            .mock_auths(&[MockAuth {
+                address: &user1,
+                invoke: &MockAuthInvoke {
+                    contract: &id,
+                    fn_name: "remove_role",
+                    args: (admin.clone(), user1.clone()).into_val(&env),
+                    sub_invokes: &[],
+                },
+            }])
+            .try_remove_role(&admin, &user1);
+        assert!(result.is_err());
+
+        // With the admin's signature the same grant succeeds.
+        client
+            .mock_auths(&[MockAuth {
+                address: &admin,
+                invoke: &MockAuthInvoke {
+                    contract: &id,
+                    fn_name: "set_role",
+                    args: (admin.clone(), user1.clone(), UserRole::Member).into_val(&env),
+                    sub_invokes: &[],
+                },
+            }])
+            .set_role(&admin, &user1, &UserRole::Member);
+        assert_eq!(client.get_role(&user1), UserRole::Member);
+    }
+
+    /// A blacklisted administrator can no longer grant or revoke roles.
+    #[test]
+    fn test_c21_blacklisted_admin_cannot_change_roles() {
+        let (env, id, admin, second_admin, user) = setup_initialized_env();
+        ac(&env, &id, || {
+            AccessControlModule::set_role(
+                &env,
+                admin.clone(),
+                second_admin.clone(),
+                UserRole::Admin,
+            )
+            .unwrap()
+        });
+        ac(&env, &id, || {
+            AccessControlModule::set_role(&env, admin.clone(), user.clone(), UserRole::Member)
+                .unwrap()
+        });
+        ac(&env, &id, || {
+            AccessControlModule::blacklist_user(&env, admin.clone(), second_admin.clone()).unwrap()
+        });
+
+        ac(&env, &id, || {
+            assert_eq!(
+                AccessControlModule::set_role(
+                    &env,
+                    second_admin.clone(),
+                    user.clone(),
+                    UserRole::Admin
+                )
+                .unwrap_err(),
+                AccessControlError::UserBlacklisted
+            );
+        });
+        ac(&env, &id, || {
+            assert_eq!(
+                AccessControlModule::remove_role(&env, second_admin.clone(), user.clone())
+                    .unwrap_err(),
+                AccessControlError::UserBlacklisted
+            );
+        });
+        assert_eq!(role_of(&env, &id, &user), UserRole::Member);
+    }
+
+    /// Revocations honour the pause switch just like grants do.
+    #[test]
+    fn test_c21_remove_role_blocked_while_paused() {
+        let (env, id, admin, user, _) = setup_initialized_env();
+        ac(&env, &id, || {
+            AccessControlModule::set_role(&env, admin.clone(), user.clone(), UserRole::Member)
+                .unwrap()
+        });
+        ac(&env, &id, || {
+            AccessControlModule::pause(&env, admin.clone()).unwrap()
+        });
+
+        let result = ac(&env, &id, || {
+            AccessControlModule::remove_role(&env, admin.clone(), user.clone())
+        });
+        assert_eq!(result.unwrap_err(), AccessControlError::ContractPaused);
+        assert_eq!(role_of(&env, &id, &user), UserRole::Member);
+    }
+
+    /// An administrator cannot demote themselves through `set_role`
+    /// (the same guard `remove_role` already enforces).
+    #[test]
+    fn test_c21_admin_cannot_self_demote_via_set_role() {
+        let (env, id, admin, _, _) = setup_initialized_env();
+        for role in [UserRole::Member, UserRole::Guest] {
+            let result = ac(&env, &id, || {
+                AccessControlModule::set_role(&env, admin.clone(), admin.clone(), role)
+            });
+            assert_eq!(
+                result.unwrap_err(),
+                AccessControlError::RoleHierarchyViolation
+            );
+        }
+        assert_eq!(role_of(&env, &id, &admin), UserRole::Admin);
+    }
+
+    /// In multisig mode a single signer cannot mint new admins or strip a
+    /// co-signer's role directly — that must go through a proposal.
+    #[test]
+    fn test_c21_multisig_signer_cannot_bypass_quorum() {
+        let (env, id, admin1, admin2, user) = setup_multisig_env();
+
+        // Each attempt runs in its own frame: the signer's authorization is
+        // checked (and consumed) before the quorum guard rejects the change.
+        let grant_admin = ac(&env, &id, || {
+            AccessControlModule::set_role(&env, admin1.clone(), user.clone(), UserRole::Admin)
+        });
+        assert_eq!(
+            grant_admin.unwrap_err(),
+            AccessControlError::RoleHierarchyViolation
+        );
+        let demote_cosigner = ac(&env, &id, || {
+            AccessControlModule::set_role(&env, admin1.clone(), admin2.clone(), UserRole::Guest)
+        });
+        assert_eq!(
+            demote_cosigner.unwrap_err(),
+            AccessControlError::RoleHierarchyViolation
+        );
+        let revoke_cosigner = ac(&env, &id, || {
+            AccessControlModule::remove_role(&env, admin1.clone(), admin2.clone())
+        });
+        assert_eq!(
+            revoke_cosigner.unwrap_err(),
+            AccessControlError::RoleHierarchyViolation
+        );
+        assert_eq!(role_of(&env, &id, &user), UserRole::Guest);
+        assert_eq!(role_of(&env, &id, &admin2), UserRole::Admin);
+        assert!(!ac(&env, &id, || AccessControlModule::is_admin(
+            &env,
+            user.clone()
+        )));
+
+        // Non-admin roles can still be managed directly by a signer.
+        ac(&env, &id, || {
+            AccessControlModule::set_role(&env, admin1.clone(), user.clone(), UserRole::Member)
+                .unwrap()
+        });
+        assert_eq!(role_of(&env, &id, &user), UserRole::Member);
+    }
+
+    // ── #906 / C22: idempotent role revocation ───────────────────────────────
+
+    fn role_rm_events(env: &Env) -> u32 {
+        let target = symbol_short!("role_rm");
+        let mut count = 0;
+        for (_, topics, _) in env.events().all().iter() {
+            if let Some(first) = topics.get(0) {
+                if Symbol::try_from_val(env, &first).ok() == Some(target.clone()) {
+                    count += 1;
+                }
+            }
+        }
+        count
+    }
+
+    fn has_role_entry(env: &Env, contract_id: &Address, user: &Address) -> bool {
+        ac(env, contract_id, || {
+            env.storage()
+                .persistent()
+                .has(&DataKey::UserRole(user.clone()))
+        })
+    }
+
+    /// Removing the same role repeatedly always succeeds, leaves the user as
+    /// Guest with no stored role entry, and only the first call emits an event.
+    #[test]
+    fn test_c22_repeated_revocation_is_stable() {
+        let (env, id, admin, user, _) = setup_initialized_env();
+        let client = crate::AccessControlClient::new(&env, &id);
+
+        client.set_role(&admin, &user, &UserRole::Member);
+        assert!(has_role_entry(&env, &id, &user));
+
+        client.remove_role(&admin, &user);
+        assert_eq!(role_rm_events(&env), 1);
+        assert_eq!(client.get_role(&user), UserRole::Guest);
+        assert!(!has_role_entry(&env, &id, &user));
+
+        for _ in 0..3 {
+            client.remove_role(&admin, &user);
+            assert_eq!(role_rm_events(&env), 0, "repeat removal must be a no-op");
+            assert_eq!(client.get_role(&user), UserRole::Guest);
+            assert!(!has_role_entry(&env, &id, &user));
+        }
+
+        // The user can be re-granted a role afterwards as normal.
+        client.set_role(&admin, &user, &UserRole::Member);
+        assert_eq!(client.get_role(&user), UserRole::Member);
+    }
+
+    /// Revoking a role from a user that never had one is a no-op that does
+    /// not create a storage entry.
+    #[test]
+    fn test_c22_revoking_unassigned_user_writes_nothing() {
+        let (env, id, admin, user, _) = setup_initialized_env();
+        let client = crate::AccessControlClient::new(&env, &id);
+
+        client.remove_role(&admin, &user);
+        assert_eq!(role_rm_events(&env), 0);
+        assert!(!has_role_entry(&env, &id, &user));
+        assert_eq!(client.get_role(&user), UserRole::Guest);
+    }
+
+    /// An explicit Guest entry is cleaned up, but since the effective role
+    /// does not change no revocation event is emitted.
+    #[test]
+    fn test_c22_explicit_guest_entry_is_cleared_silently() {
+        let (env, id, admin, user, _) = setup_initialized_env();
+        let client = crate::AccessControlClient::new(&env, &id);
+
+        client.set_role(&admin, &user, &UserRole::Guest);
+        assert!(has_role_entry(&env, &id, &user));
+
+        client.remove_role(&admin, &user);
+        assert_eq!(role_rm_events(&env), 0);
+        assert!(!has_role_entry(&env, &id, &user));
+        assert_eq!(client.get_role(&user), UserRole::Guest);
+    }
+
+    /// Idempotence never weakens authorization: a repeated (no-op) removal
+    /// by a non-admin, or of the primary admin, is still rejected.
+    #[test]
+    fn test_c22_noop_revocation_still_requires_authorization() {
+        let (env, id, admin, user, stranger) = setup_initialized_env();
+
+        ac(&env, &id, || {
+            assert_eq!(
+                AccessControlModule::remove_role(&env, stranger.clone(), user.clone()).unwrap_err(),
+                AccessControlError::AdminRequired
+            );
+        });
+        for _ in 0..2 {
+            let result = ac(&env, &id, || {
+                AccessControlModule::remove_role(&env, admin.clone(), admin.clone())
+            });
+            assert_eq!(
+                result.unwrap_err(),
+                AccessControlError::RoleHierarchyViolation
+            );
+        }
+        assert_eq!(role_of(&env, &id, &admin), UserRole::Admin);
+    }
+
+    /// Revoking one user's role repeatedly does not disturb anyone else's.
+    #[test]
+    fn test_c22_repeated_revocation_does_not_touch_other_roles() {
+        let (env, id, admin, user1, user2) = setup_initialized_env();
+        let client = crate::AccessControlClient::new(&env, &id);
+
+        client.set_role(&admin, &user1, &UserRole::Member);
+        client.set_role(&admin, &user2, &UserRole::Admin);
+
+        client.remove_role(&admin, &user1);
+        client.remove_role(&admin, &user1);
+
+        assert_eq!(client.get_role(&user1), UserRole::Guest);
+        assert_eq!(client.get_role(&user2), UserRole::Admin);
+        assert_eq!(client.get_role(&admin), UserRole::Admin);
+    }
+
+    // ── #913 / C29: unknown roles return a consistent error ──────────────────
 
     /// Supported role discriminants map to their roles.
     #[test]
-    fn test_role_from_u32_accepts_supported_values() {
+    fn test_c29_role_from_u32_accepts_supported_values() {
         assert_eq!(role_from_u32(0), Ok(UserRole::Guest));
         assert_eq!(role_from_u32(1), Ok(UserRole::Member));
         assert_eq!(role_from_u32(2), Ok(UserRole::Admin));
@@ -405,7 +786,7 @@ mod role_access_control_tests {
     /// Unsupported role discriminants are rejected with `UnknownRole` and
     /// never default to Guest.
     #[test]
-    fn test_role_from_u32_rejects_unknown_values() {
+    fn test_c29_role_from_u32_rejects_unknown_values() {
         for value in [3u32, 4, 42, u32::MAX] {
             assert_eq!(
                 role_from_u32(value),
@@ -418,7 +799,7 @@ mod role_access_control_tests {
 
     /// Role names parse case-insensitively.
     #[test]
-    fn test_role_from_str_accepts_supported_names() {
+    fn test_c29_role_from_str_accepts_supported_names() {
         assert_eq!(role_from_str("guest"), Ok(UserRole::Guest));
         assert_eq!(role_from_str("Member"), Ok(UserRole::Member));
         assert_eq!(role_from_str("ADMIN"), Ok(UserRole::Admin));
@@ -427,7 +808,7 @@ mod role_access_control_tests {
     /// Unsupported role names return `UnknownRole` rather than an implicit
     /// default role.
     #[test]
-    fn test_role_from_str_rejects_unknown_names() {
+    fn test_c29_role_from_str_rejects_unknown_names() {
         for name in ["", "owner", "superadmin", "guest ", "0"] {
             assert_eq!(
                 role_from_str(name),
@@ -441,7 +822,7 @@ mod role_access_control_tests {
     /// The unknown-role error has a stable code and description, and every
     /// unsupported value yields the same error.
     #[test]
-    fn test_unknown_role_error_is_consistent() {
+    fn test_c29_unknown_role_error_is_consistent() {
         let err = AccessControlError::UnknownRole;
         assert_eq!(err as u32, 136);
         assert!(!err.description().is_empty());
@@ -455,25 +836,22 @@ mod role_access_control_tests {
     /// An unknown role cannot be used to grant access, and a rejected parse
     /// leaves the user's stored role unchanged.
     #[test]
-    fn test_unknown_role_does_not_grant_implicit_role() {
+    fn test_c29_unknown_role_does_not_grant_implicit_role() {
         let (env, id, admin, user1, _) = setup_initialized_env();
 
-        call(&env, &id, || {
+        ac(&env, &id, || {
             AccessControlModule::set_role(&env, admin.clone(), user1.clone(), UserRole::Member)
-        })
-        .unwrap();
+                .unwrap()
+        });
 
-        let result = call(&env, &id, || {
+        let result = ac(&env, &id, || {
             role_from_u32(9).and_then(|role| {
                 AccessControlModule::set_role(&env, admin.clone(), user1.clone(), role)
             })
         });
         assert_eq!(result, Err(AccessControlError::UnknownRole));
         assert_eq!(
-            call(&env, &id, || AccessControlModule::get_role(
-                &env,
-                user1.clone()
-            )),
+            role_of(&env, &id, &user1),
             UserRole::Member,
             "rejected role value must not change the stored role"
         );

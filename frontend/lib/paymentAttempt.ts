@@ -121,3 +121,68 @@ export function isPaymentInFlight(state: PaymentAttemptState): boolean {
     state.status === "pending"
   );
 }
+
+// ── F15 — Prevent duplicate payment initialization ───────────────────────────
+//
+// A payment manager tracks one in-flight attempt per request key.  If a second
+// `start` is called for the same key while the first is still in-flight it
+// returns the existing attempt rather than creating a duplicate.
+
+export interface PaymentAttemptEntry {
+  state: PaymentAttemptState;
+  dispatch: (event: PaymentAttemptEvent) => PaymentAttemptState;
+}
+
+/**
+ * Creates a manager that keeps at most one in-flight attempt per request key.
+ *
+ * Calling `start(key)` while an in-flight attempt for `key` already exists
+ * returns the existing entry unchanged; the second caller reuses the same
+ * state rather than starting a duplicate payment flow.
+ */
+export function createPaymentAttemptManager() {
+  const attempts = new Map<string, PaymentAttemptEntry>();
+
+  return {
+    /**
+     * Start a new attempt for `key`, or return the existing in-flight one.
+     * Returns `true` as the second element when the entry is freshly created,
+     * `false` when an existing in-flight attempt was reused.
+     */
+    start(key: string): [PaymentAttemptEntry, boolean] {
+      const existing = attempts.get(key);
+      if (existing && isPaymentInFlight(existing.state)) {
+        return [existing, false];
+      }
+
+      let current = initialPaymentAttemptState;
+      const entry: PaymentAttemptEntry = {
+        get state() {
+          return current;
+        },
+        dispatch(event: PaymentAttemptEvent) {
+          current = paymentAttemptReducer(current, event);
+          return current;
+        },
+      };
+
+      attempts.set(key, entry);
+      return [entry, true];
+    },
+
+    /** Returns the current entry for `key`, if any. */
+    get(key: string): PaymentAttemptEntry | undefined {
+      return attempts.get(key);
+    },
+
+    /** Remove a finished or abandoned attempt. */
+    remove(key: string): void {
+      attempts.delete(key);
+    },
+
+    /** Number of tracked attempts (for diagnostics). */
+    size(): number {
+      return attempts.size;
+    },
+  };
+}

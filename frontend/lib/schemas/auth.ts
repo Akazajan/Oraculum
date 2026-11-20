@@ -97,3 +97,33 @@ export const forgotPasswordSchema = z.object({
 });
 
 export type ForgotPasswordForm = z.infer<typeof forgotPasswordSchema>;
+
+// ── F19 — Validate auth fields with consistent normalization ─────────────────
+//
+// Email addresses are case-insensitive by convention (RFC 5321) and users
+// often include accidental leading/trailing spaces.  Normalizing before
+// validation ensures the schema sees the canonical form and that the same
+// address is not treated as two distinct accounts depending on casing.
+// Passwords are intentionally left untouched: character class and length
+// requirements make case-sensitive comparison meaningful.
+
+/**
+ * Normalize a raw email string before passing it to Zod:
+ * - trims surrounding whitespace
+ * - lowercases the entire address
+ *
+ * The normalized value is what should be sent to the API and stored.
+ */
+export function normalizeEmail(raw: string): string {
+  return raw.trim().toLowerCase();
+}
+
+/**
+ * Normalize auth form data before schema validation.
+ *
+ * Email is lowercased and trimmed; all other fields are returned unchanged so
+ * password constraints (which are case-sensitive) are preserved exactly.
+ */
+export function normalizeAuthInput<T extends { email: string }>(input: T): T {
+  return { ...input, email: normalizeEmail(input.email) };
+}

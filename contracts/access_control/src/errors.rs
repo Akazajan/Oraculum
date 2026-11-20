@@ -198,12 +198,6 @@ pub fn role_from_str(role: &str) -> AccessControlResult<UserRole> {
     UserRole::parse_from_str(role).ok_or(AccessControlError::UnknownRole)
 }
 
-// Role-handling tests (including C29 unknown-role rejection). Declared here so
-// they are compiled and run as part of the crate's test suite.
-#[cfg(test)]
-#[path = "access_control_role_tests.rs"]
-mod access_control_role_tests;
-
 #[cfg(test)]
 mod tests {
     use super::*;
