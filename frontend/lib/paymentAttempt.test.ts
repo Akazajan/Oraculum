@@ -106,6 +106,66 @@ describe("paymentAttemptReducer (FE-09)", () => {
   });
 });
 
+// F16 — Keep payment status pending until confirmation ───────────────────────
+//
+// The state machine must never reach `paid` without an explicit `confirmed`
+// event from the backend.  Every earlier lifecycle event (initialize,
+// initialized, submitted, provider-closed) must leave the attempt in a
+// non-paid state.
+
+describe("F16 — payment pending until confirmation", () => {
+  it("is not confirmed after initialize", () => {
+    const state = paymentAttemptReducer(initialPaymentAttemptState, {
+      type: "initialize",
+    });
+    expect(isPaymentConfirmed(state)).toBe(false);
+    expect(state.status).toBe("initializing");
+  });
+
+  it("is not confirmed after initialized", () => {
+    const state = go(initialPaymentAttemptState, { type: "initialize" }, { type: "initialized" });
+    expect(isPaymentConfirmed(state)).toBe(false);
+    expect(state.status).toBe("initialized");
+  });
+
+  it("is not confirmed after submitted", () => {
+    const state = paymentAttemptReducer(initialPaymentAttemptState, { type: "submitted" });
+    expect(isPaymentConfirmed(state)).toBe(false);
+    expect(state.status).toBe("pending");
+  });
+
+  it("is not confirmed after provider-closed on a pending attempt", () => {
+    const pending = paymentAttemptReducer(initialPaymentAttemptState, { type: "submitted" });
+    const closed = paymentAttemptReducer(pending, { type: "provider-closed" });
+
+    expect(isPaymentConfirmed(closed)).toBe(false);
+    expect(closed.status).toBe("pending");
+  });
+
+  it("becomes confirmed only after a confirmed event", () => {
+    const paid = go(
+      initialPaymentAttemptState,
+      { type: "initialize" },
+      { type: "initialized" },
+      { type: "submitted" },
+      { type: "confirmed" }
+    );
+
+    expect(isPaymentConfirmed(paid)).toBe(true);
+    expect(paid.status).toBe("paid");
+  });
+
+  it("status message never claims success before the confirmed event", () => {
+    const statuses: ReturnType<typeof paymentAttemptReducer>[] = [
+      paymentAttemptReducer(initialPaymentAttemptState, { type: "initialize" }),
+      go(initialPaymentAttemptState, { type: "initialize" }, { type: "initialized" }),
+      paymentAttemptReducer(initialPaymentAttemptState, { type: "submitted" }),
+    ];
+
+    for (const state of statuses) {
+      const msg = paymentStatusMessage(state);
+      expect(msg).not.toMatch(/confirmed/i);
+    }
 // F15 — Prevent duplicate payment initialization ──────────────────────────────
 
 describe("createPaymentAttemptManager (F15)", () => {

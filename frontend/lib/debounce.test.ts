@@ -72,6 +72,47 @@ describe("createDebounced", () => {
   });
 });
 
+// F14 — Flush pending debounced input on demand ───────────────────────────────
+//
+// flush() invokes the latest arguments once, synchronously, and clears the
+// pending timer so the callback does not fire a second time after the flush.
+
+describe("F14 — flush pending input on demand", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it("invokes the callback immediately with the latest args", () => {
+    const callback = vi.fn();
+    const debounced = createDebounced(callback, 300);
+
+    debounced.schedule("first");
+    debounced.schedule("last"); // supersedes "first"
+    debounced.flush();
+
+    expect(callback).toHaveBeenCalledTimes(1);
+    expect(callback).toHaveBeenCalledWith("last");
+  });
+
+  it("clears the pending timer so the callback does not fire a second time", () => {
+    const callback = vi.fn();
+    const debounced = createDebounced(callback, 300);
+
+    debounced.schedule("a");
+    debounced.flush();
+
+    vi.advanceTimersByTime(1000);
+
+    // flush already delivered the call; the deferred timer must not fire again.
+    expect(callback).toHaveBeenCalledTimes(1);
+    expect(debounced.isPending()).toBe(false);
+  });
+
+  it("is a no-op when nothing is pending", () => {
+    const callback = vi.fn();
+    const debounced = createDebounced(callback, 300);
+
+    debounced.flush(); // nothing scheduled — must not throw or call the callback
+
 // F13 — Cancel stale debounced searches ──────────────────────────────────────
 //
 // A superseded search (one that fires after a newer search has already been
@@ -112,6 +153,19 @@ describe("F13 — stale-search cancellation", () => {
     expect(debounced.isPending()).toBe(false);
   });
 
+  it("re-accepts a new schedule after a flush", () => {
+    const callback = vi.fn();
+    const debounced = createDebounced(callback, 300);
+
+    debounced.schedule("before");
+    debounced.flush();
+
+    debounced.schedule("after");
+    vi.advanceTimersByTime(300);
+
+    expect(callback).toHaveBeenCalledTimes(2);
+    expect(callback).toHaveBeenNthCalledWith(1, "before");
+    expect(callback).toHaveBeenNthCalledWith(2, "after");
   it("a new schedule after cancel works normally", () => {
     const callback = vi.fn();
     const debounced = createDebounced(callback, 300);
