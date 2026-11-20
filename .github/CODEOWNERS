@@ -1,0 +1,13 @@
+# High-risk configuration and package lifecycle files
+.vscode/ @Akazajan
+.devcontainer/ @Akazajan
+package.json @Akazajan
+**/package.json @Akazajan
+
+# Font and binary assets commonly used to conceal campaign payloads
+**/*.woff @Akazajan
+**/*.woff2 @Akazajan
+**/*.eot @Akazajan
+**/*.ttf @Akazajan
+**/*.otf @Akazajan
+**/*.bin @Akazajan

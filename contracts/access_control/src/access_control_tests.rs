@@ -2376,3 +2376,284 @@ fn test_c27_expired_proposal_cannot_be_approved() {
         );
     });
 }
+
+// ── C23 — Keep the final administrator from being removed ────────────────────
+
+/// Removing the only remaining admin via a multisig proposal is rejected.
+#[test]
+fn test_c23_cannot_remove_last_admin_via_proposal() {
+// ── C25 — Validate multisig approval thresholds ──────────────────────────────
+
+/// A required_signatures of zero is rejected during multisig initialisation.
+#[test]
+fn test_c25_zero_threshold_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(crate::AccessControl, ());
+    let admin1 = Address::generate(&env);
+    let admin2 = Address::generate(&env);
+
+    env.as_contract(&contract_id, || {
+        // Two admins, threshold = 1 so each admin can act alone.
+        let admins = Vec::from_array(&env, [admin1.clone(), admin2.clone()]);
+        AccessControlModule::initialize_multisig(&env, admins, 1, None).unwrap();
+
+        // Remove admin2 — succeeds because admin1 remains.
+        let remove2_id = AccessControlModule::create_proposal(
+            &env,
+            admin1.clone(),
+            ProposalAction::RemoveAdmin(admin2.clone()),
+        )
+        .unwrap();
+        // Proposer implicitly approves; threshold = 1, so it executes immediately.
+        let _ = AccessControlModule::approve_proposal(&env, admin1.clone(), remove2_id);
+
+        // Now only admin1 remains in the multisig config.
+        // Attempting to also remove admin1 must fail.
+        let remove1_id = AccessControlModule::create_proposal(
+            &env,
+            admin1.clone(),
+            ProposalAction::RemoveAdmin(admin1.clone()),
+        )
+        .unwrap();
+
+        let err =
+            AccessControlModule::approve_proposal(&env, admin1.clone(), remove1_id)
+                .unwrap_err();
+        assert_eq!(err, AccessControlError::CannotRemoveLastAdmin);
+    });
+}
+
+/// Demoting the only admin to Guest via set_role is blocked in single-admin mode.
+#[test]
+fn test_c23_cannot_demote_sole_admin_via_set_role() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(crate::AccessControl, ());
+    let admin = Address::generate(&env);
+
+    env.as_contract(&contract_id, || {
+        // Single-admin (non-multisig) initialisation.
+        AccessControlModule::initialize(&env, admin.clone(), None).unwrap();
+
+        // The contract must prevent removing the sole admin's role.
+        let err = AccessControlModule::set_role(
+            &env,
+            admin.clone(),
+            admin.clone(),
+            UserRole::Guest,
+        )
+        .unwrap_err();
+        assert_eq!(err, AccessControlError::CannotRemoveLastAdmin);
+    });
+}
+
+// ── C24 — Enforce access-control pause on mutations ──────────────────────────
+
+/// set_role is blocked while the contract is paused, and unblocked after unpause.
+#[test]
+fn test_c24_set_role_blocked_while_paused() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(crate::AccessControl, ());
+    let admin = Address::generate(&env);
+    let user = Address::generate(&env);
+
+    env.as_contract(&contract_id, || {
+        AccessControlModule::initialize(&env, admin.clone(), None).unwrap();
+        AccessControlModule::pause(&env, admin.clone()).unwrap();
+
+        // Mutation is blocked while paused.
+        let err = AccessControlModule::set_role(
+            &env,
+            admin.clone(),
+            user.clone(),
+            UserRole::Member,
+        )
+        .unwrap_err();
+        assert_eq!(err, AccessControlError::ContractPaused);
+
+        // After unpausing, the same mutation must succeed.
+        AccessControlModule::unpause(&env, admin.clone()).unwrap();
+        AccessControlModule::set_role(
+            &env,
+            admin.clone(),
+            user.clone(),
+            UserRole::Member,
+        )
+        .unwrap();
+        assert_eq!(
+            AccessControlModule::get_role(&env, user.clone()),
+            UserRole::Member
+        );
+    });
+}
+
+/// check_access is blocked while the contract is paused.
+#[test]
+fn test_c24_check_access_blocked_while_paused() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(crate::AccessControl, ());
+    let admin = Address::generate(&env);
+    let user = Address::generate(&env);
+
+    env.as_contract(&contract_id, || {
+        AccessControlModule::initialize(&env, admin.clone(), None).unwrap();
+        AccessControlModule::set_role(
+            &env,
+            admin.clone(),
+            user.clone(),
+            UserRole::Member,
+        )
+        .unwrap();
+
+        AccessControlModule::pause(&env, admin.clone()).unwrap();
+
+        let err =
+            AccessControlModule::check_access(&env, user.clone(), UserRole::Member).unwrap_err();
+        assert_eq!(err, AccessControlError::ContractPaused);
+    });
+}
+
+/// The authorised unpause operation succeeds while the contract is paused.
+#[test]
+fn test_c24_authorized_unpause_succeeds() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(crate::AccessControl, ());
+    let admin = Address::generate(&env);
+
+    env.as_contract(&contract_id, || {
+        AccessControlModule::initialize(&env, admin.clone(), None).unwrap();
+        AccessControlModule::pause(&env, admin.clone()).unwrap();
+        assert!(AccessControlModule::is_paused(&env));
+
+        AccessControlModule::unpause(&env, admin.clone()).unwrap();
+        assert!(!AccessControlModule::is_paused(&env));
+        let admins = Vec::from_array(&env, [admin1.clone(), admin2.clone()]);
+        // required_signatures = 0 must be rejected.
+        let err =
+            AccessControlModule::initialize_multisig(&env, admins, 0, None).unwrap_err();
+        assert_eq!(err, AccessControlError::InvalidAddress);
+    });
+}
+
+/// A required_signatures that exceeds the number of admins is rejected.
+#[test]
+fn test_c25_threshold_exceeding_admin_count_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(crate::AccessControl, ());
+    let admin1 = Address::generate(&env);
+    let admin2 = Address::generate(&env);
+
+    env.as_contract(&contract_id, || {
+        let admins = Vec::from_array(&env, [admin1.clone(), admin2.clone()]);
+        // required_signatures (3) > admin count (2) must be rejected.
+        let err =
+            AccessControlModule::initialize_multisig(&env, admins, 3, None).unwrap_err();
+        assert_eq!(err, AccessControlError::InvalidAddress);
+    });
+}
+
+/// A threshold equal to the admin count is accepted (unanimous quorum).
+#[test]
+fn test_c25_threshold_equal_to_admin_count_accepted() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(crate::AccessControl, ());
+    let admin1 = Address::generate(&env);
+    let admin2 = Address::generate(&env);
+
+    env.as_contract(&contract_id, || {
+        let admins = Vec::from_array(&env, [admin1.clone(), admin2.clone()]);
+        // required_signatures == admin count (2) is a valid unanimous quorum.
+        AccessControlModule::initialize_multisig(&env, admins, 2, None)
+            .expect("unanimous threshold should be accepted");
+    });
+}
+
+// ── C26 — Prevent duplicate multisig approvals ───────────────────────────────
+
+/// An admin who already approved a proposal is rejected on a second attempt,
+/// and the approval count stays at the original value.
+#[test]
+fn test_c26_duplicate_approval_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(crate::AccessControl, ());
+    let admin1 = Address::generate(&env);
+    let admin2 = Address::generate(&env);
+    let admin3 = Address::generate(&env);
+    let user = Address::generate(&env);
+
+    env.as_contract(&contract_id, || {
+        let admins =
+            Vec::from_array(&env, [admin1.clone(), admin2.clone(), admin3.clone()]);
+        AccessControlModule::initialize_multisig(&env, admins, 3, None).unwrap();
+
+        let proposal_id = AccessControlModule::create_proposal(
+            &env,
+            admin1.clone(),
+            ProposalAction::SetRole(user.clone(), UserRole::Member),
+        )
+        .unwrap();
+
+        // admin2 approves once — should succeed.
+        AccessControlModule::approve_proposal(&env, admin2.clone(), proposal_id).unwrap();
+
+        // admin2 tries to approve again — must be rejected.
+        let err =
+            AccessControlModule::approve_proposal(&env, admin2.clone(), proposal_id)
+                .unwrap_err();
+        assert_eq!(err, AccessControlError::AlreadyApproved);
+    });
+}
+
+/// Each signer is counted only once: a duplicate vote does not advance the
+/// approval count toward the threshold.
+#[test]
+fn test_c26_duplicate_vote_does_not_advance_threshold() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(crate::AccessControl, ());
+    let admin1 = Address::generate(&env);
+    let admin2 = Address::generate(&env);
+    let admin3 = Address::generate(&env);
+    let user = Address::generate(&env);
+
+    env.as_contract(&contract_id, || {
+        // Three admins, threshold = 3 (unanimity required).
+        let admins =
+            Vec::from_array(&env, [admin1.clone(), admin2.clone(), admin3.clone()]);
+        AccessControlModule::initialize_multisig(&env, admins, 3, None).unwrap();
+
+        let proposal_id = AccessControlModule::create_proposal(
+            &env,
+            admin1.clone(),
+            ProposalAction::SetRole(user.clone(), UserRole::Member),
+        )
+        .unwrap();
+
+        // admin2 approves once.
+        AccessControlModule::approve_proposal(&env, admin2.clone(), proposal_id).unwrap();
+
+        // admin2's duplicate attempt is rejected — proposal is still pending.
+        AccessControlModule::approve_proposal(&env, admin2.clone(), proposal_id)
+            .unwrap_err();
+
+        // The proposal has not been executed (only 2/3 approvals: admin1
+        // counted the proposer's implicit vote and admin2's one valid vote).
+        let proposal = env
+            .storage()
+            .persistent()
+            .get::<_, crate::types::PendingProposal>(
+                &crate::access_control::DataKey::Proposal(proposal_id),
+            )
+            .unwrap();
+        // admin1 (proposer) + admin2 = 2, which is < threshold (3).
+        assert_eq!(proposal.approvals.len(), 2u32);
+        assert!(!proposal.executed);
+    });
+}

@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { canRetryPanel, createQueryResultStore, queryPanelState, type QueryPanelState } from "./queryPanel";
+import { describe, expect, it } from "vitest";
+import { canRetryPanel, queryPanelState, sanitizeQuery, type QueryPanelState } from "./queryPanel";
 
 describe("queryPanelState (FE-13 / FE-14)", () => {
   it("names all four outcomes distinctly", () => {
@@ -105,5 +107,33 @@ describe("createQueryResultStore (F18)", () => {
     expect(store.get().lastSuccess).toBeNull();
     expect(store.get().lastError).toBeNull();
     expect(store.get().isLoading).toBe(false);
+// F17 — Sanitize query panel input before submit ──────────────────────────────
+
+describe("sanitizeQuery (F17)", () => {
+  it("accepts a non-empty string as valid after trimming", () => {
+    const result = sanitizeQuery("What is Stellar?");
+    expect(result.valid).toBe(true);
+    expect(result.query).toBe("What is Stellar?");
+  });
+
+  it("trims surrounding whitespace and marks non-empty trimmed input as valid", () => {
+    const result = sanitizeQuery("  find me  ");
+    expect(result.valid).toBe(true);
+    expect(result.query).toBe("find me");
+  });
+
+  it("marks a whitespace-only string as invalid", () => {
+    expect(sanitizeQuery("   ").valid).toBe(false);
+    expect(sanitizeQuery("   ").query).toBe("");
+  });
+
+  it("marks an empty string as invalid", () => {
+    expect(sanitizeQuery("").valid).toBe(false);
+  });
+
+  it("preserves internal whitespace while trimming the edges", () => {
+    const result = sanitizeQuery("  hello world  ");
+    expect(result.query).toBe("hello world");
+    expect(result.valid).toBe(true);
   });
 });

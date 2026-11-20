@@ -1,3 +1,8 @@
+// Declared at file level so the path resolves relative to `contracts/tests/`.
+#[cfg(test)]
+#[path = "../payment_requests.rs"]
+mod payment_requests;
+
 #[cfg(test)]
 mod fuzz_arithmetic_tests {
     /// Mirror of manage_hub rewards formula constants / shape so overflow
@@ -66,10 +71,7 @@ mod fuzz_arithmetic_tests {
         assert_eq!(per_share.unwrap(), 10_000_000);
     }
 
-        #[path = "../payment_requests.rs"]
-        mod payment_requests;
-
-        use payment_requests::validate_expiry;
+        use super::payment_requests::validate_expiry;
 
         #[test]
         fn test_payment_request_rejects_expired_timestamp() {
@@ -158,7 +160,6 @@ mod fuzz_arithmetic_tests {
             calculate_pending_rewards_checked(1_000, 500, YEAR_SECS, 10_000, 20).expect("claimed");
         assert_eq!(pending, 30);
     }
-}
 
     // ── FIX #268: Payment escrow arithmetic fuzz tests ──────────────────────
 
@@ -242,3 +243,138 @@ mod fuzz_arithmetic_tests {
         assert_eq!(fee, 10_000);
         assert_eq!(beneficiary, 0);
     }
+
+    // -----------------------------------------------------------------------
+    // #900 — Workspace booking timestamp arithmetic (workspace_booking/types.rs)
+    // -----------------------------------------------------------------------
+    //
+    // Mirrors of the checked helpers in `workspace_booking::types` so the
+    // overflow edges stay covered without pulling the Soroban contract into
+    // this file. `Err(())` stands in for `InvalidTimeRange` / `InvalidRate`.
+
+    const SECONDS_PER_HOUR: u64 = 3_600;
+
+    fn booking_add_secs(timestamp: u64, secs: u64) -> Result<u64, ()> {
+        timestamp.checked_add(secs).ok_or(())
+    }
+
+    fn booking_duration(start_time: u64, end_time: u64) -> Result<u64, ()> {
+        match end_time.checked_sub(start_time) {
+            Some(duration) if duration > 0 => Ok(duration),
+            _ => Err(()),
+        }
+    }
+
+    fn booking_cost(hourly_rate: u128, start_time: u64, end_time: u64) -> Result<u128, ()> {
+        let hours = booking_duration(start_time, end_time)?.div_ceil(SECONDS_PER_HOUR);
+        hourly_rate
+            .checked_mul(hours as u128)
+            .filter(|cost| *cost <= i128::MAX as u128)
+            .ok_or(())
+    }
+
+    fn booking_refund(
+        amount_paid: u128,
+        start_time: u64,
+        end_time: u64,
+        now: u64,
+    ) -> Result<u128, ()> {
+        let duration = booking_duration(start_time, end_time)? as u128;
+        if now >= end_time {
+            return Ok(0);
+        }
+        if now < start_time {
+            return Ok(amount_paid);
+        }
+        let remaining = booking_duration(now, end_time)? as u128;
+        let refund = match amount_paid.checked_mul(remaining) {
+            Some(product) => product / duration,
+            None => (amount_paid / duration).saturating_mul(remaining),
+        };
+        Ok(refund.min(amount_paid))
+    }
+
+    /// Small deterministic xorshift so the sweep is reproducible without a
+    /// fuzzing dependency.
+    fn next_rand(state: &mut u64) -> u64 {
+        *state ^= *state << 13;
+        *state ^= *state >> 7;
+        *state ^= *state << 17;
+        *state
+    }
+
+    #[test]
+    fn test_booking_add_secs_rejects_overflow() {
+        assert_eq!(booking_add_secs(0, 86_400), Ok(86_400));
+        assert_eq!(booking_add_secs(u64::MAX - 86_400, 86_400), Ok(u64::MAX));
+        assert_eq!(booking_add_secs(u64::MAX - 86_399, 86_400), Err(()));
+        assert_eq!(booking_add_secs(u64::MAX, 1), Err(()));
+    }
+
+    #[test]
+    fn test_booking_duration_rejects_inverted_and_empty_windows() {
+        assert_eq!(booking_duration(100, 101), Ok(1));
+        assert_eq!(booking_duration(0, u64::MAX), Ok(u64::MAX));
+        assert_eq!(booking_duration(100, 100), Err(()));
+        // Would wrap to u64::MAX with unchecked subtraction.
+        assert_eq!(booking_duration(1, 0), Err(()));
+        assert_eq!(booking_duration(u64::MAX, 0), Err(()));
+    }
+
+    #[test]
+    fn test_booking_cost_rounds_up_and_rejects_overflow() {
+        assert_eq!(booking_cost(1_000, 0, 1), Ok(1_000));
+        assert_eq!(booking_cost(1_000, 0, 3_600), Ok(1_000));
+        assert_eq!(booking_cost(1_000, 0, 3_601), Ok(2_000));
+        assert_eq!(booking_cost(u128::MAX, 0, 3_600), Err(()));
+        assert_eq!(booking_cost(i128::MAX as u128, 0, 3_600), Ok(i128::MAX as u128));
+        assert_eq!(booking_cost(i128::MAX as u128, 0, 3_601), Err(()));
+        assert_eq!(booking_cost(1, 10, 5), Err(()));
+    }
+
+    #[test]
+    fn test_booking_refund_never_exceeds_payment() {
+        assert_eq!(booking_refund(1_000, 100, 200, 0), Ok(1_000));
+        assert_eq!(booking_refund(1_000, 100, 200, 150), Ok(500));
+        assert_eq!(booking_refund(1_000, 100, 200, 200), Ok(0));
+        assert_eq!(booking_refund(1_000, 100, 200, u64::MAX), Ok(0));
+        // amount × remaining overflows u128 → rounded-down fallback.
+        let big = i128::MAX as u128;
+        let refund = booking_refund(big, 0, u64::MAX, 1).unwrap();
+        assert!(refund > 0 && refund <= big);
+    }
+
+    #[test]
+    fn test_booking_timestamp_sweep_never_wraps() {
+        let mut state = 0x9E37_79B9_7F4A_7C15u64;
+        for _ in 0..10_000 {
+            let a = next_rand(&mut state);
+            let b = next_rand(&mut state);
+            let now = next_rand(&mut state);
+            let rate = (next_rand(&mut state) as u128) << (next_rand(&mut state) % 64);
+            let paid = (next_rand(&mut state) as u128) << (next_rand(&mut state) % 64);
+
+            match booking_duration(a, b) {
+                Ok(d) => {
+                    assert!(b > a);
+                    assert_eq!(a + d, b);
+                }
+                Err(()) => assert!(b <= a),
+            }
+
+            match booking_add_secs(a, b) {
+                Ok(sum) => assert!(sum >= a && sum >= b),
+                Err(()) => assert!(a.checked_add(b).is_none()),
+            }
+
+            if let Ok(cost) = booking_cost(rate, a, b) {
+                assert!(cost <= i128::MAX as u128);
+                assert!(rate == 0 || cost >= rate);
+            }
+
+            if let Ok(refund) = booking_refund(paid, a, b, now) {
+                assert!(refund <= paid);
+            }
+        }
+    }
+}
