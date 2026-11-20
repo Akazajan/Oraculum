@@ -1,13 +1,12 @@
 #![no_std]
-
 // The env.events().publish() API is deprecated in favour of #[contractevent],
 // kept here for consistency with the rest of the Oraculum contracts.
 #![allow(deprecated)]
 
 mod errors;
-mod types;
 #[cfg(test)]
 mod test;
+mod types;
 
 use errors::Error;
 use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, Env};
@@ -19,6 +18,8 @@ pub enum DataKey {
     PaymentToken,
     Balance(Address),
     TotalSupply,
+    /// C32: marks an issuance reference as consumed so it cannot be replayed.
+    Issued(u64),
 }
 
 #[contract]
@@ -48,18 +49,30 @@ impl ResourceCreditsContract {
             .unwrap_or(0u128)
     }
 
-    /// Authorize `caller` as the owner of `owner`'s credits.
+    /// C33: authorize `caller` as the owner of `owner`'s credits.
     ///
     /// Credits are only ever moved by the account that holds them, so the
     /// caller and the owner must be the same address. The mismatch is
     /// rejected before `require_auth`, so an unrelated caller gets
-    /// `Unauthorized` rather than a signature prompt.
+    /// `Unauthorized` rather than a signature prompt; the owner's signature
+    /// is then required, so a call without it aborts.
     fn require_owner(caller: &Address, owner: &Address) -> Result<(), Error> {
         if caller != owner {
             return Err(Error::Unauthorized);
         }
         owner.require_auth();
         Ok(())
+    }
+
+    /// C31: debit `amount` from `balance` with checked arithmetic.
+    ///
+    /// A debit larger than the balance is rejected with
+    /// `InsufficientBalance` instead of underflowing into a huge (effectively
+    /// negative) balance.
+    fn checked_debit(balance: u128, amount: u128) -> Result<u128, Error> {
+        balance
+            .checked_sub(amount)
+            .ok_or(Error::InsufficientBalance)
     }
 
     /// Reject a zero-value credit operation.
@@ -118,11 +131,17 @@ impl ResourceCreditsContract {
     /// Mint credits to a recipient (admin only).
     ///
     /// CT-02: increases recipient balance and TotalSupply.
+    ///
+    /// C32: every issuance carries a unique `issuance_reference`. Once a
+    /// reference has been used it is recorded, and any later mint with the
+    /// same reference fails with `DuplicateIssuance`, so a replayed issuance
+    /// cannot credit the recipient twice.
     pub fn mint_credits(
         env: Env,
         caller: Address,
         recipient: Address,
         amount: u128,
+        issuance_reference: u64,
     ) -> Result<(), Error> {
         // Authorize the caller first so unauthenticated callers receive
         // `Unauthorized` rather than a descriptive validation error.
@@ -138,21 +157,39 @@ impl ResourceCreditsContract {
 
         Self::require_nonzero(amount)?;
 
+        let issued_key = DataKey::Issued(issuance_reference);
+        if env.storage().persistent().has(&issued_key) {
+            return Err(Error::DuplicateIssuance);
+        }
+
         // Both sums are resolved before either is stored, so an overflow on
-        // the supply cannot leave a credited balance behind.
+        // the supply cannot leave a credited balance behind (and does not
+        // consume the issuance reference).
         let new_bal = Self::balance_of(&env, &recipient)
             .checked_add(amount)
             .ok_or(Error::Overflow)?;
-        let new_supply = Self::supply(&env).checked_add(amount).ok_or(Error::Overflow)?;
+        let new_supply = Self::supply(&env)
+            .checked_add(amount)
+            .ok_or(Error::Overflow)?;
 
         Self::set_balance(&env, &recipient, new_bal);
         env.storage()
             .instance()
             .set(&DataKey::TotalSupply, &new_supply);
+        env.storage().persistent().set(&issued_key, &true);
 
-        env.events()
-            .publish((symbol_short!("mint"), recipient), amount);
+        env.events().publish(
+            (symbol_short!("mint"), recipient, issuance_reference),
+            amount,
+        );
         Ok(())
+    }
+
+    /// Whether an issuance reference has already been consumed (C32).
+    pub fn is_issued(env: Env, issuance_reference: u64) -> bool {
+        env.storage()
+            .persistent()
+            .has(&DataKey::Issued(issuance_reference))
     }
 
     /// Transfer credits from one member to another.
@@ -185,18 +222,14 @@ impl ResourceCreditsContract {
         // Confirm the payment token is configured before touching any state.
         Self::require_payment_token(&env)?;
 
-        let from_bal = Self::balance_of(&env, &from);
-        if from_bal < amount {
-            return Err(Error::InsufficientBalance);
-        }
-
-        let to_bal = Self::balance_of(&env, &to);
-
         // Resolve both sides before writing either, so a failure here leaves
-        // both balances exactly as they were. The recipient's addition is
-        // checked: unchecked, a large balance could wrap to a smaller one.
-        let new_from = from_bal.checked_sub(amount).ok_or(Error::Overflow)?;
-        let new_to = to_bal.checked_add(amount).ok_or(Error::Overflow)?;
+        // both balances exactly as they were. C31: the sender's debit is
+        // checked and cannot underflow; the recipient's addition is checked
+        // so a large balance cannot wrap to a smaller one.
+        let new_from = Self::checked_debit(Self::balance_of(&env, &from), amount)?;
+        let new_to = Self::balance_of(&env, &to)
+            .checked_add(amount)
+            .ok_or(Error::Overflow)?;
 
         Self::set_balance(&env, &from, new_from);
         Self::set_balance(&env, &to, new_to);
@@ -221,15 +254,13 @@ impl ResourceCreditsContract {
         Self::require_nonzero(amount)?;
         Self::require_owner(&caller, &member)?;
 
-        let bal = Self::balance_of(&env, &member);
-        if bal < amount {
-            return Err(Error::InsufficientBalance);
-        }
-
-        // Checked on both sides: an unchecked `supply - amount` would wrap to
-        // a huge total supply if the two ever drifted apart.
-        let new_bal = bal.checked_sub(amount).ok_or(Error::Overflow)?;
-        let new_supply = Self::supply(&env).checked_sub(amount).ok_or(Error::Overflow)?;
+        // C31: checked on both sides. The member's debit cannot underflow,
+        // and an unchecked `supply - amount` would wrap to a huge total
+        // supply if the two ever drifted apart.
+        let new_bal = Self::checked_debit(Self::balance_of(&env, &member), amount)?;
+        let new_supply = Self::supply(&env)
+            .checked_sub(amount)
+            .ok_or(Error::Overflow)?;
 
         Self::set_balance(&env, &member, new_bal);
         env.storage()

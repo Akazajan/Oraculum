@@ -24,4 +24,6 @@ pub enum Error {
     InvalidAddress = 9,
     /// Source and destination addresses are the same.
     SelfTransfer = 10,
+    /// An issuance reference has already been used.
+    DuplicateIssuance = 11,
 }

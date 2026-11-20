@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod role_access_control_tests {
     use crate::access_control::{AccessControlModule, DataKey};
-    use crate::errors::AccessControlError;
+    use crate::errors::{role_from_str, role_from_u32, AccessControlError};
     use crate::types::{AccessControlConfig, UserRole};
     use soroban_sdk::{
         symbol_short,
@@ -771,5 +771,89 @@ mod role_access_control_tests {
         assert_eq!(client.get_role(&user1), UserRole::Guest);
         assert_eq!(client.get_role(&user2), UserRole::Admin);
         assert_eq!(client.get_role(&admin), UserRole::Admin);
+    }
+
+    // ── #913 / C29: unknown roles return a consistent error ──────────────────
+
+    /// Supported role discriminants map to their roles.
+    #[test]
+    fn test_c29_role_from_u32_accepts_supported_values() {
+        assert_eq!(role_from_u32(0), Ok(UserRole::Guest));
+        assert_eq!(role_from_u32(1), Ok(UserRole::Member));
+        assert_eq!(role_from_u32(2), Ok(UserRole::Admin));
+    }
+
+    /// Unsupported role discriminants are rejected with `UnknownRole` and
+    /// never default to Guest.
+    #[test]
+    fn test_c29_role_from_u32_rejects_unknown_values() {
+        for value in [3u32, 4, 42, u32::MAX] {
+            assert_eq!(
+                role_from_u32(value),
+                Err(AccessControlError::UnknownRole),
+                "role value {} must be rejected",
+                value
+            );
+        }
+    }
+
+    /// Role names parse case-insensitively.
+    #[test]
+    fn test_c29_role_from_str_accepts_supported_names() {
+        assert_eq!(role_from_str("guest"), Ok(UserRole::Guest));
+        assert_eq!(role_from_str("Member"), Ok(UserRole::Member));
+        assert_eq!(role_from_str("ADMIN"), Ok(UserRole::Admin));
+    }
+
+    /// Unsupported role names return `UnknownRole` rather than an implicit
+    /// default role.
+    #[test]
+    fn test_c29_role_from_str_rejects_unknown_names() {
+        for name in ["", "owner", "superadmin", "guest ", "0"] {
+            assert_eq!(
+                role_from_str(name),
+                Err(AccessControlError::UnknownRole),
+                "role name {:?} must be rejected",
+                name
+            );
+        }
+    }
+
+    /// The unknown-role error has a stable code and description, and every
+    /// unsupported value yields the same error.
+    #[test]
+    fn test_c29_unknown_role_error_is_consistent() {
+        let err = AccessControlError::UnknownRole;
+        assert_eq!(err as u32, 136);
+        assert!(!err.description().is_empty());
+        assert_ne!(err, AccessControlError::InvalidRole);
+        assert!(!err.is_critical());
+        assert!(!err.is_permission_error());
+        assert_eq!(role_from_u32(7), role_from_u32(99));
+        assert_eq!(role_from_u32(7), role_from_str("unknown"));
+    }
+
+    /// An unknown role cannot be used to grant access, and a rejected parse
+    /// leaves the user's stored role unchanged.
+    #[test]
+    fn test_c29_unknown_role_does_not_grant_implicit_role() {
+        let (env, id, admin, user1, _) = setup_initialized_env();
+
+        ac(&env, &id, || {
+            AccessControlModule::set_role(&env, admin.clone(), user1.clone(), UserRole::Member)
+                .unwrap()
+        });
+
+        let result = ac(&env, &id, || {
+            role_from_u32(9).and_then(|role| {
+                AccessControlModule::set_role(&env, admin.clone(), user1.clone(), role)
+            })
+        });
+        assert_eq!(result, Err(AccessControlError::UnknownRole));
+        assert_eq!(
+            role_of(&env, &id, &user1),
+            UserRole::Member,
+            "rejected role value must not change the stored role"
+        );
     }
 }
