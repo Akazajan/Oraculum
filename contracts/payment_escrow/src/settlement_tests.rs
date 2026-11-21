@@ -85,6 +85,55 @@ fn test_full_settlement_lifecycle() {
 }
 
 #[test]
+fn test_release_is_one_time_transition() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let depositor = Address::generate(&env);
+    let beneficiary = Address::generate(&env);
+    let token = setup_token(&env, &admin, &depositor, 20_000);
+
+    let contract_id = setup_contract(&env);
+    let client = init(&env, &contract_id, &admin, &token);
+
+    let id = esc_id(&env, "once-001");
+    client.create_escrow(
+        &depositor,
+        &id,
+        &beneficiary,
+        &10_000i128,
+        &String::from_str(&env, "Booking deposit"),
+        &0u64,
+    );
+
+    client.release(&admin, &id);
+
+    let token_client = TokenClient::new(&env, &token);
+    let beneficiary_bal = token_client.balance(&beneficiary);
+    let contract_bal = token_client.balance(&contract_id);
+
+    // A second release must fail without moving funds (a failed call also rolls back any event).
+    assert_eq!(
+        client.try_release(&admin, &id),
+        Err(Ok(Error::EscrowNotPending))
+    );
+    assert_eq!(token_client.balance(&beneficiary), beneficiary_bal);
+    assert_eq!(token_client.balance(&contract_id), contract_bal);
+
+    // Other settlement paths are rejected too.
+    assert_eq!(
+        client.try_refund(&admin, &id),
+        Err(Ok(Error::EscrowNotPending))
+    );
+    assert_eq!(
+        client.try_resolve_dispute(&admin, &id, &true),
+        Err(Ok(Error::EscrowNotPending))
+    );
+    assert_eq!(client.get_escrow(&id).status, EscrowStatus::Released);
+}
+
+#[test]
 fn test_disputed_escrow_resolution() {
     let env = Env::default();
     env.mock_all_auths();
