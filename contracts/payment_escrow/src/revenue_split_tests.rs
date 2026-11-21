@@ -1,4 +1,7 @@
 // contracts/payment_escrow/src/revenue_split_tests.rs
+#[path = "treasury.rs"]
+mod treasury;
+
 #![cfg(test)]
 
 use soroban_sdk::{contracttype, testutils::Address as _, Address, Env, Vec};
