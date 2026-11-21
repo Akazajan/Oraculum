@@ -88,4 +88,55 @@ describe('WebhookService', () => {
     await service.deleteWebhook('uuid-1');
     expect(repo.delete).toHaveBeenCalledWith('uuid-1');
   });
+
+  it('verifySignature returns false for mismatched-length signature without throwing', () => {
+    expect(service.verifySignature('{}', 'abcd', 'secret')).toBe(false);
+  });
+
+  describe('signature verification failure during delivery', () => {
+    const webhook = {
+      id: 'wh-1',
+      webhookUrl: 'https://example.com/hook',
+      secret: 'secret',
+      events: ['booking_confirmed'],
+      active: true,
+      retryEnabled: true,
+      failureCount: 5,
+    } as unknown as Webhook;
+
+    const payload = {
+      event: 'booking_confirmed',
+      data: { id: 'b-1' },
+      timestamp: new Date().toISOString(),
+      webhookId: 'wh-1',
+    };
+
+    let post: jest.Mock;
+
+    beforeEach(() => {
+      post = axios.default.post as unknown as jest.Mock;
+      post.mockReset();
+      post.mockResolvedValue({ status: 200 });
+      jest.spyOn(service, 'verifySignature').mockReturnValue(false);
+    });
+
+    it('stops processing and causes no delivery side effects', async () => {
+      await (service as any).deliverWebhook(webhook, payload);
+
+      expect(service.verifySignature).toHaveBeenCalled();
+      expect(post).not.toHaveBeenCalled();
+      expect(repo.update).not.toHaveBeenCalled();
+      expect(repo.save).not.toHaveBeenCalled();
+    });
+
+    it('triggerWebhooks does not send or update when verification fails', async () => {
+      repo.find.mockResolvedValue([webhook]);
+
+      await service.triggerWebhooks('booking_confirmed', { id: 'b-1' });
+      await new Promise((resolve) => setImmediate(resolve));
+
+      expect(post).not.toHaveBeenCalled();
+      expect(repo.update).not.toHaveBeenCalled();
+    });
+  });
 });

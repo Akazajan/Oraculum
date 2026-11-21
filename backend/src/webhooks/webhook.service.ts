@@ -35,11 +35,15 @@ export class WebhookService {
     signature: string,
     secret: string,
   ): boolean {
-    const expected = this.generateSignature(payload, secret);
-    return crypto.timingSafeEqual(
-      Buffer.from(signature, 'hex'),
-      Buffer.from(expected, 'hex'),
-    );
+    if (typeof signature !== 'string' || !/^[a-f0-9]+$/i.test(signature)) {
+      return false;
+    }
+    const expected = Buffer.from(this.generateSignature(payload, secret), 'hex');
+    const provided = Buffer.from(signature, 'hex');
+    if (provided.length !== expected.length) {
+      return false;
+    }
+    return crypto.timingSafeEqual(provided, expected);
   }
 
   async createWebhook(dto: CreateWebhookDto): Promise<Webhook> {
@@ -116,6 +120,13 @@ export class WebhookService {
   ): Promise<void> {
     const body = JSON.stringify(payload);
     const signature = this.generateSignature(body, webhook.secret);
+
+    if (!this.verifySignature(body, signature, webhook.secret)) {
+      this.logger.error(
+        `Webhook ${webhook.id} delivery aborted: signature verification failed`,
+      );
+      return;
+    }
 
     const isRetryable = (error: unknown): boolean => {
       if (!error || typeof error !== 'object') return false;
